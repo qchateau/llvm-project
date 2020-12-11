@@ -65,10 +65,7 @@ llvm::Optional<HighlightingKind> kindForDecl(const NamedDecl *D) {
   // We highlight class decls, constructor decls and destructor decls as
   // `Class` type. The destructor decls are handled in `VisitTagTypeLoc` (we
   // will visit a TypeLoc where the underlying Type is a CXXRecordDecl).
-  if (auto *RD = llvm::dyn_cast<RecordDecl>(D)) {
-    // We don't want to highlight lambdas like classes.
-    if (RD->isLambda())
-      return llvm::None;
+  if (isa<RecordDecl>(D)) {
     return HighlightingKind::Class;
   }
   if (isa<ClassTemplateDecl>(D) || isa<RecordDecl>(D) ||
@@ -129,6 +126,23 @@ llvm::Optional<HighlightingKind> kindForReference(const ReferenceLoc &R) {
     Result = Kind;
   }
   return Result;
+}
+
+llvm::Optional<HighlightingKind> kindForQualType(QualType QT) {
+  if (QT.isNull()) {
+    return llvm::None;
+  }
+
+  if (auto *AT = QT->getContainedAutoType()) {
+    // Color auto types as their underlying type
+    auto Deduced = AT->getDeducedType();
+    if (!Deduced.isNull())
+      QT = Deduced;
+  }
+
+  // Color reference, pointers and arrays as their referred/pointee type
+  QT = QT.getNonReferenceType();
+  return kindForType(QT->getPointeeOrArrayElementType());
 }
 
 // For a macro usage `DUMP(foo)`, we want:
@@ -286,17 +300,27 @@ class CollectExtraHighlightings
 public:
   CollectExtraHighlightings(HighlightingsBuilder &H) : H(H) {}
 
+  bool VisitTypeLoc(TypeLoc TL) {
+    // Builtin types are not captured by findExplicitReferences
+    // Note that we only want the "last" TypeLoc
+    if (TL.getType()->isBuiltinType() && !TL.getNextTypeLoc())
+      H.addToken(TL.getBeginLoc(), HighlightingKind::Primitive);
+    return true;
+  }
+
   bool VisitDecltypeTypeLoc(DecltypeTypeLoc L) {
-    if (auto K = kindForType(L.getTypePtr()))
+    if (auto K = kindForQualType(L.getTypePtr()->getUnderlyingType()))
       H.addToken(L.getBeginLoc(), *K);
     return true;
   }
 
   bool VisitDeclaratorDecl(DeclaratorDecl *D) {
+    // Only add token for "auto" declarations
     auto *AT = D->getType()->getContainedAutoType();
     if (!AT)
       return true;
-    if (auto K = kindForType(AT->getDeducedType().getTypePtrOrNull()))
+
+    if (auto K = kindForQualType(D->getType()))
       H.addToken(D->getTypeSpecStartLoc(), *K);
     return true;
   }
