@@ -111,6 +111,7 @@ ClangdServer::Options ClangdServer::optsForTest() {
   Opts.UpdateDebounce = DebouncePolicy::fixed(/*zero*/ {});
   Opts.StorePreamblesInMemory = true;
   Opts.AsyncThreadsCount = 4; // Consistent!
+  Opts.KeepPreambles = 0;
   return Opts;
 }
 
@@ -121,6 +122,7 @@ ClangdServer::Options::operator TUScheduler::Options() const {
   Opts.StorePreamblesInMemory = StorePreamblesInMemory;
   Opts.UpdateDebounce = UpdateDebounce;
   Opts.ContextProvider = ContextProvider;
+  Opts.KeepPreambles = KeepPreambles;
   return Opts;
 }
 

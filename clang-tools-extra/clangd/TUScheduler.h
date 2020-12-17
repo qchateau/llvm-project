@@ -196,6 +196,10 @@ public:
     /// Determines when to keep idle ASTs in memory for future use.
     ASTRetentionPolicy RetentionPolicy;
 
+    // The number of preambles that will be retained even after the file is
+    // closed
+    size_t KeepPreambles = 0;
+
     /// Used to create a context that wraps each single operation.
     /// Typically to inject per-file configuration.
     /// If the path is empty, context sholud be "generic".
@@ -311,6 +315,9 @@ public:
   /// an LRU cache.
   class ASTCache;
 
+  /// Responsible for retaining preambles.
+  class PreambleCache;
+
   // The file being built/processed in the current thread. This is a hack in
   // order to get the file name into the index implementations. Do not depend on
   // this inside clangd.
@@ -331,6 +338,7 @@ private:
   Semaphore Barrier;
   Semaphore QuickRunBarrier;
   llvm::StringMap<std::unique_ptr<FileData>> Files;
+  std::unique_ptr<PreambleCache> CachedPreambles;
   std::unique_ptr<ASTCache> IdleASTs;
   // None when running tasks synchronously and non-None when running tasks
   // asynchronously.

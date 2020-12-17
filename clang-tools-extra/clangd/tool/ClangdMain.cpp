@@ -313,6 +313,16 @@ opt<unsigned> WorkerThreadsCount{
     init(getDefaultAsyncThreadsCount()),
 };
 
+// Magic value to know when the user does not specify a value
+constexpr size_t DefaultKeepPreambleValue = std::numeric_limits<size_t>::max();
+constexpr size_t DefaultKeepPreambleMemory = 10;
+constexpr size_t DefaultKeepPreambleDisk = 100;
+opt<size_t> KeepPreambles{
+    "keep-preambles", cat(Misc),
+    desc("Number of preambles of closed files that clangd will keep in cache.\n"
+         "Note that preambles may be stored in memory or in disk."),
+    init(DefaultKeepPreambleValue)};
+
 opt<Path> IndexFile{
     "index-file",
     cat(Misc),
@@ -770,6 +780,13 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
     Opts.StaticIndex = PAI.get();
   }
   Opts.AsyncThreadsCount = WorkerThreadsCount;
+
+  if (KeepPreambles == DefaultKeepPreambleValue) // User did not specify a value
+    Opts.KeepPreambles = Opts.StorePreamblesInMemory ? DefaultKeepPreambleMemory
+                                                     : DefaultKeepPreambleDisk;
+  else
+    Opts.KeepPreambles = KeepPreambles;
+
   Opts.FoldingRanges = FoldingRanges;
   Opts.MemoryCleanup = getMemoryCleanupFunction();
 

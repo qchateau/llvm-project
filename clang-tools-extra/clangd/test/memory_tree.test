@@ -57,20 +57,32 @@
 # CHECK-NEXT:         }
 # CHECK-NEXT:       },
 # CHECK-NEXT:       "tuscheduler": {
-# CHECK-NEXT:         "{{.*}}main.cpp": {
+# CHECK-NEXT:         "_self": {{[0-9]+}},
+# CHECK-NEXT:         "_total": {{[0-9]+}},
+# CHECK-NEXT:         "cache": {
 # CHECK-NEXT:           "_self": {{[0-9]+}},
 # CHECK-NEXT:           "_total": {{[0-9]+}},
-# CHECK-NEXT:           "ast": {
-# CHECK-NEXT:             "_self": {{[0-9]+}},
-# CHECK-NEXT:             "_total": {{[0-9]+}}
-# CHECK-NEXT:           },
-# CHECK-NEXT:           "preamble": {
+# CHECK-NEXT:           "containers": {
 # CHECK-NEXT:             "_self": {{[0-9]+}},
 # CHECK-NEXT:             "_total": {{[0-9]+}}
 # CHECK-NEXT:           }
 # CHECK-NEXT:         },
-# CHECK-NEXT:         "_self": {{[0-9]+}},
-# CHECK-NEXT:         "_total": {{[0-9]+}}
+# CHECK-NEXT:         "files": {
+# CHECK-NEXT:           "{{.*}}main.cpp": {
+# CHECK-NEXT:             "_self": {{[0-9]+}},
+# CHECK-NEXT:             "_total": {{[0-9]+}},
+# CHECK-NEXT:             "ast": {
+# CHECK-NEXT:               "_self": {{[0-9]+}},
+# CHECK-NEXT:               "_total": {{[0-9]+}}
+# CHECK-NEXT:             },
+# CHECK-NEXT:             "preamble": {
+# CHECK-NEXT:               "_self": {{[0-9]+}},
+# CHECK-NEXT:               "_total": {{[0-9]+}}
+# CHECK-NEXT:             }
+# CHECK-NEXT:           },
+# CHECK-NEXT:           "_self": {{[0-9]+}},
+# CHECK-NEXT:           "_total": {{[0-9]+}}
+# CHECK-NEXT:         }
 # CHECK-NEXT:       }
 # CHECK-NEXT:     }
 # CHECK-NEXT:   }

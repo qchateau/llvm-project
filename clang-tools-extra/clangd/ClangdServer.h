@@ -118,6 +118,10 @@ public:
     /// checks will be disabled.
     TidyProviderRef ClangTidyProvider;
 
+    // The number of preambles that will be retained even after the file is
+    // closed
+    size_t KeepPreambles = 0;
+
     /// Clangd's workspace root. Relevant for "workspace" operations not bound
     /// to a particular file.
     /// FIXME: If not set, should use the current working directory.

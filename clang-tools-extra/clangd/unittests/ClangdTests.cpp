@@ -1257,7 +1257,7 @@ TEST(ClangdServer, MemoryUsageTest) {
   MemoryTree MT(&Alloc);
   Server.profile(MT);
   ASSERT_TRUE(MT.children().count("tuscheduler"));
-  EXPECT_TRUE(MT.child("tuscheduler").children().count(FooCpp));
+  EXPECT_TRUE(MT.child("tuscheduler").child("files").children().count(FooCpp));
 }
 } // namespace
 } // namespace clangd

@@ -179,6 +179,91 @@ private:
   std::vector<KVPair> LRU; /* GUARDED_BY(Mut) */
 };
 
+/// LRU cache with amortized O(1) put and take
+/// Preambles can be stored on disk so we may want to store a high
+/// number of entries
+class TUScheduler::PreambleCache {
+public:
+  PreambleCache(size_t MaxSize, bool StorePreamblesInMemory)
+      : MaxSize(MaxSize), StorePreamblesInMemory(StorePreamblesInMemory) {
+    vlog("TUScheduler will cache {0} preambles", MaxSize);
+  }
+
+  /// Get the preamble associated with a \p Key, removing
+  /// it from the cache
+  std::shared_ptr<const PreambleData> take(llvm::StringRef Key) {
+    auto It = Data.find(Key);
+    if (It == Data.end())
+      return nullptr;
+    auto Result = std::move(It->second);
+
+    // Remove the key from all internal data structures
+    auto KeyToLRUIt = KeyToLRU.find(Key);
+    assert(KeyToLRUIt != KeyToLRU.end() && "Key is missing");
+    auto LRUIt = KeyToLRUIt->second;
+    Data.erase(It);
+    KeyToLRU.erase(KeyToLRUIt);
+    LRU.erase(LRUIt);
+
+    return Result;
+  }
+
+  /// Add a \p Preamble associated with a \p Key, the preamble must
+  /// not be in the cache when this function is called
+  void put(llvm::StringRef Key, std::shared_ptr<const PreambleData> Preamble) {
+    assert(KeyToLRU.find(Key) == KeyToLRU.end());
+    if (MaxSize == 0)
+      return;
+
+    LRU.emplace_front(Key.str());
+    // Use the newly created string as the storage
+    Key = LRU.front();
+
+    Data[Key] = std::move(Preamble);
+    KeyToLRU[Key] = LRU.begin();
+    vlog("Added {0} to preamble cache", Key);
+
+    // Trim the LRU to the max size
+    while (LRU.size() > MaxSize) {
+      const auto &OldestKey = LRU.back();
+      KeyToLRU.erase(OldestKey);
+      Data.erase(OldestKey);
+      vlog("Removed {0} from preamble cache", OldestKey);
+      LRU.pop_back();
+    }
+  }
+
+  void profile(MemoryTree &MT) const {
+    auto &ContainersMT = MT.child("containers");
+    ContainersMT.addUsage(LRU.size() * sizeof(void *) * 2);
+    ContainersMT.addUsage(KeyToLRU.getMemorySize());
+    ContainersMT.addUsage(Data.getMemorySize());
+
+    if (!StorePreamblesInMemory)
+      return;
+
+    auto &PreamblesMT = MT.child("preambles");
+    for (const auto &Entry : Data) {
+      auto &EntryMT = PreamblesMT.detail(Entry.first).child("cached_preamble");
+      EntryMT.child("key").addUsage(Entry.first.size());
+      EntryMT.child("preamble").addUsage(Entry.second->Preamble.getSize());
+    }
+  }
+
+private:
+  using LRUType = std::list<std::string>;
+
+  // LRU holds the keys, most recent first
+  // The maps below use references as keys, they reference
+  // string in this LRU list
+  LRUType LRU;
+  llvm::DenseMap<StringRef, LRUType::iterator> KeyToLRU;
+  llvm::DenseMap<StringRef, std::shared_ptr<const PreambleData>> Data;
+
+  size_t MaxSize;
+  bool StorePreamblesInMemory;
+};
+
 namespace {
 /// Threadsafe manager for updating a TUStatus and emitting it after each
 /// update.
@@ -221,10 +306,11 @@ class PreambleThread {
 public:
   PreambleThread(llvm::StringRef FileName, ParsingCallbacks &Callbacks,
                  bool StorePreambleInMemory, bool RunSync,
-                 SynchronizedTUStatus &Status, ASTWorker &AW)
-      : FileName(FileName), Callbacks(Callbacks),
-        StoreInMemory(StorePreambleInMemory), RunSync(RunSync), Status(Status),
-        ASTPeer(AW) {}
+                 SynchronizedTUStatus &Status, ASTWorker &AW,
+                 std::shared_ptr<const PreambleData> InitialPreamble)
+      : LatestBuild(std::move(InitialPreamble)), FileName(FileName),
+        Callbacks(Callbacks), StoreInMemory(StorePreambleInMemory),
+        RunSync(RunSync), Status(Status), ASTPeer(AW) {}
 
   /// It isn't guaranteed that each requested version will be built. If there
   /// are multiple update requests while building a preamble, only the last one
@@ -369,7 +455,8 @@ class ASTWorker {
   friend class ASTWorkerHandle;
   ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
             TUScheduler::ASTCache &LRUCache, Semaphore &Barrier, bool RunSync,
-            const TUScheduler::Options &Opts, ParsingCallbacks &Callbacks);
+            const TUScheduler::Options &Opts, ParsingCallbacks &Callbacks,
+            std::shared_ptr<const PreambleData> InitialPreamble);
 
 public:
   /// Create a new ASTWorker and return a handle to it.
@@ -377,12 +464,12 @@ public:
   /// is null, all requests will be processed on the calling thread
   /// synchronously instead. \p Barrier is acquired when processing each
   /// request, it is used to limit the number of actively running threads.
-  static ASTWorkerHandle create(PathRef FileName,
-                                const GlobalCompilationDatabase &CDB,
-                                TUScheduler::ASTCache &IdleASTs,
-                                AsyncTaskRunner *Tasks, Semaphore &Barrier,
-                                const TUScheduler::Options &Opts,
-                                ParsingCallbacks &Callbacks);
+  static ASTWorkerHandle
+  create(PathRef FileName, const GlobalCompilationDatabase &CDB,
+         TUScheduler::ASTCache &IdleASTs, AsyncTaskRunner *Tasks,
+         Semaphore &Barrier, const TUScheduler::Options &Opts,
+         ParsingCallbacks &Callbacks,
+         std::shared_ptr<const PreambleData> InitialPreamble);
   ~ASTWorker();
 
   void update(ParseInputs Inputs, WantDiagnostics, bool ContentChanged);
@@ -571,14 +658,15 @@ private:
   std::shared_ptr<ASTWorker> Worker;
 };
 
-ASTWorkerHandle ASTWorker::create(PathRef FileName,
-                                  const GlobalCompilationDatabase &CDB,
-                                  TUScheduler::ASTCache &IdleASTs,
-                                  AsyncTaskRunner *Tasks, Semaphore &Barrier,
-                                  const TUScheduler::Options &Opts,
-                                  ParsingCallbacks &Callbacks) {
-  std::shared_ptr<ASTWorker> Worker(new ASTWorker(
-      FileName, CDB, IdleASTs, Barrier, /*RunSync=*/!Tasks, Opts, Callbacks));
+ASTWorkerHandle
+ASTWorker::create(PathRef FileName, const GlobalCompilationDatabase &CDB,
+                  TUScheduler::ASTCache &IdleASTs, AsyncTaskRunner *Tasks,
+                  Semaphore &Barrier, const TUScheduler::Options &Opts,
+                  ParsingCallbacks &Callbacks,
+                  std::shared_ptr<const PreambleData> InitialPreamble) {
+  std::shared_ptr<ASTWorker> Worker(
+      new ASTWorker(FileName, CDB, IdleASTs, Barrier, /*RunSync=*/!Tasks, Opts,
+                    Callbacks, std::move(InitialPreamble)));
   if (Tasks) {
     Tasks->runAsync("ASTWorker:" + llvm::sys::path::filename(FileName),
                     [Worker]() { Worker->run(); });
@@ -592,17 +680,23 @@ ASTWorkerHandle ASTWorker::create(PathRef FileName,
 ASTWorker::ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
                      TUScheduler::ASTCache &LRUCache, Semaphore &Barrier,
                      bool RunSync, const TUScheduler::Options &Opts,
-                     ParsingCallbacks &Callbacks)
+                     ParsingCallbacks &Callbacks,
+                     std::shared_ptr<const PreambleData> InitialPreamble)
     : IdleASTs(LRUCache), RunSync(RunSync), UpdateDebounce(Opts.UpdateDebounce),
       FileName(FileName), ContextProvider(Opts.ContextProvider), CDB(CDB),
       Callbacks(Callbacks), Barrier(Barrier), Done(false),
       Status(FileName, Callbacks),
       PreamblePeer(FileName, Callbacks, Opts.StorePreamblesInMemory, RunSync,
-                   Status, *this) {
+                   Status, *this, InitialPreamble) {
   // Set a fallback command because compile command can be accessed before
   // `Inputs` is initialized. Other fields are only used after initialization
   // from client inputs.
   FileInputs.CompileCommand = CDB.getFallbackCommand(FileName);
+  if (InitialPreamble) {
+    vlog("ASTWorker for {0} using an initial preamble ({1})", FileName,
+         InitialPreamble->Version);
+    LatestPreamble = std::move(InitialPreamble);
+  }
 }
 
 ASTWorker::~ASTWorker() {
@@ -1295,7 +1389,9 @@ TUScheduler::TUScheduler(const GlobalCompilationDatabase &CDB,
     : CDB(CDB), Opts(Opts),
       Callbacks(Callbacks ? move(Callbacks)
                           : std::make_unique<ParsingCallbacks>()),
-      Barrier(Opts.AsyncThreadsCount), QuickRunBarrier(Opts.AsyncThreadsCount),
+      Barrier(Opts.AsyncThreadsCount),QuickRunBarrier(Opts.AsyncThreadsCount),
+      CachedPreambles(std::make_unique<PreambleCache>(
+          Opts.KeepPreambles, Opts.StorePreamblesInMemory)),
       IdleASTs(
           std::make_unique<ASTCache>(Opts.RetentionPolicy.MaxRetainedASTs)) {
   // Avoid null checks everywhere.
@@ -1338,10 +1434,10 @@ bool TUScheduler::update(PathRef File, ParseInputs Inputs,
   bool ContentChanged = false;
   if (!FD) {
     // Create a new worker to process the AST-related tasks.
-    ASTWorkerHandle Worker =
-        ASTWorker::create(File, CDB, *IdleASTs,
-                          WorkerThreads ? WorkerThreads.getPointer() : nullptr,
-                          Barrier, Opts, *Callbacks);
+    ASTWorkerHandle Worker = ASTWorker::create(
+        File, CDB, *IdleASTs,
+        WorkerThreads ? WorkerThreads.getPointer() : nullptr, Barrier, Opts,
+        *Callbacks, CachedPreambles->take(File));
     FD = std::unique_ptr<FileData>(
         new FileData{Inputs.Contents, std::move(Worker)});
     ContentChanged = true;
@@ -1354,10 +1450,17 @@ bool TUScheduler::update(PathRef File, ParseInputs Inputs,
 }
 
 void TUScheduler::remove(PathRef File) {
-  bool Removed = Files.erase(File);
-  if (!Removed)
+  auto It = Files.find(File);
+  if (It == Files.end()) {
     elog("Trying to remove file from TUScheduler that is not tracked: {0}",
          File);
+    return;
+  }
+
+  assert(It->second && "FileData not allocated");
+  if (auto Preamble = It->second->Worker->getPossiblyStalePreamble())
+    CachedPreambles->put(File, std::move(Preamble));
+  Files.erase(It);
 }
 
 llvm::StringMap<std::string> TUScheduler::getAllFileContents() const {
@@ -1510,13 +1613,17 @@ DebouncePolicy DebouncePolicy::fixed(clock::duration T) {
 }
 
 void TUScheduler::profile(MemoryTree &MT) const {
+  auto &FilesMT = MT.child("files");
   for (const auto &Elem : fileStats()) {
-    MT.detail(Elem.first())
+    FilesMT.detail(Elem.first())
         .child("preamble")
         .addUsage(Opts.StorePreamblesInMemory ? Elem.second.UsedBytesPreamble
                                               : 0);
-    MT.detail(Elem.first()).child("ast").addUsage(Elem.second.UsedBytesAST);
+    FilesMT.detail(Elem.first())
+        .child("ast")
+        .addUsage(Elem.second.UsedBytesAST);
   }
+  CachedPreambles->profile(MT.child("cache"));
 }
 } // namespace clangd
 } // namespace clang
