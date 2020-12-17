@@ -347,6 +347,15 @@ opt<unsigned> WorkerThreadsCount{
     init(getDefaultAsyncThreadsCount()),
 };
 
+constexpr size_t DefaultKeepPreambleMemory = 10;
+constexpr size_t DefaultKeepPreambleDisk = 1000;
+opt<llvm::Optional<size_t>> KeepPreambles{
+    "keep-preambles",
+    cat(Misc),
+    desc("Number of preambles of closed files that clangd will keep in cache.\n"
+         "Note that preambles may be stored in memory or in disk.")
+};
+
 opt<Path> IndexFile{
     "index-file",
     cat(Misc),
@@ -821,6 +830,10 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
     Opts.StaticIndex = PAI.get();
   }
   Opts.AsyncThreadsCount = WorkerThreadsCount;
+  Opts.KeepPreambles = KeepPreambles.getValueOr(
+    Opts.StorePreamblesInMemory ? DefaultKeepPreambleMemory :
+    DefaultKeepPreambleDisk
+  );
   Opts.BuildRecoveryAST = RecoveryAST;
   Opts.PreserveRecoveryASTType = RecoveryASTType;
   Opts.FoldingRanges = FoldingRanges;

@@ -123,6 +123,7 @@ ClangdServer::Options ClangdServer::optsForTest() {
   Opts.AsyncThreadsCount = 4; // Consistent!
   Opts.TheiaSemanticHighlighting = true;
   Opts.AsyncPreambleBuilds = true;
+  Opts.KeepPreambles = 0;
   return Opts;
 }
 
@@ -133,6 +134,7 @@ ClangdServer::Options::operator TUScheduler::Options() const {
   Opts.StorePreamblesInMemory = StorePreamblesInMemory;
   Opts.UpdateDebounce = UpdateDebounce;
   Opts.AsyncPreambleBuilds = AsyncPreambleBuilds;
+  Opts.KeepPreambles = KeepPreambles;
   return Opts;
 }
 
