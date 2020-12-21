@@ -464,7 +464,6 @@ private:
     Context Ctx;
     llvm::Optional<UpdateType> Update;
     TUScheduler::ASTActionInvalidation InvalidationPolicy;
-    Canceler Invalidate;
   };
 
   /// Handles retention of ASTs.
@@ -824,7 +823,7 @@ void ASTWorker::updatePreamble(std::unique_ptr<CompilerInvocation> CI,
     std::lock_guard<std::mutex> Lock(Mutex);
     PreambleRequests.push({std::move(Task), std::move(TaskName),
                            steady_clock::now(), Context::current().clone(),
-                           llvm::None, TUScheduler::NoInvalidation, nullptr});
+                           llvm::None, TUScheduler::NoInvalidation});
   }
   PreambleCV.notify_all();
   RequestsCV.notify_all();
@@ -988,27 +987,31 @@ void ASTWorker::startTask(llvm::StringRef Name,
   {
     std::lock_guard<std::mutex> Lock(Mutex);
     assert(!Done && "running a task after stop()");
-    // Cancel any requests invalidated by this request.
+    // Delay affected requests.
+    std::vector<Request> Delayed;
     if (Update && Update->ContentChanged) {
-      for (auto &R : llvm::reverse(Requests)) {
-        if (R.InvalidationPolicy == TUScheduler::InvalidateOnUpdate)
-          R.Invalidate();
-        if (R.Update && R.Update->ContentChanged)
-          break; // Older requests were already invalidated by the older update.
+      // Stop at the previous Update, requests before that
+      // have already been delayed.
+      auto It = std::find_if(Requests.rbegin(), Requests.rend(),
+                             [](const Request &Req) { return Req.Update; })
+                    .base();
+      while (It != Requests.end()) {
+        if (It->InvalidationPolicy == TUScheduler::DelayOnUpdate) {
+          Delayed.push_back(std::move(*It));
+          It = Requests.erase(It);
+        } else {
+          ++It;
+        }
       }
     }
 
     // Allow this request to be cancelled if invalidated.
     Context Ctx = Context::current().derive(kFileBeingProcessed, FileName);
-    Canceler Invalidate = nullptr;
-    if (Invalidation) {
-      WithContext WC(std::move(Ctx));
-      std::tie(Ctx, Invalidate) = cancelableTask(
-          /*Reason=*/static_cast<int>(ErrorCode::ContentModified));
-    }
     Requests.push_back({std::move(Task), std::string(Name), steady_clock::now(),
-                        std::move(Ctx), Update, Invalidation,
-                        std::move(Invalidate)});
+                        std::move(Ctx), Update, Invalidation});
+
+    // Re-add delayed requests at the end.
+    std::move(Delayed.begin(), Delayed.end(), std::back_inserter(Requests));
   }
   RequestsCV.notify_all();
 }
