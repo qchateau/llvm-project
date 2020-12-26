@@ -10,6 +10,7 @@
 # CHECK-NEXT:    "children": [
 # CHECK-NEXT:      {
 # CHECK-NEXT:        "data": "A6576FE083F2949A",
+# CHECK-NEXT:        "detail": "Child3",
 # CHECK-NEXT:        "kind": 23,
 # CHECK-NEXT:        "name": "Child3",
 # CHECK-NEXT:        "range": {
@@ -125,6 +126,7 @@
 # CHECK-NEXT:    "children": [
 # CHECK-NEXT:      {
 # CHECK-NEXT:        "data": "5705B382DFC77CBC",
+# CHECK-NEXT:        "detail": "Child4",
 # CHECK-NEXT:        "kind": 23,
 # CHECK-NEXT:        "name": "Child4",
 # CHECK-NEXT:        "range": {

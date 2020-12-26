@@ -1225,8 +1225,7 @@ void ClangdLSPServer::onCallHierarchyIncomingCalls(
 void ClangdLSPServer::onCallHierarchyOutgoingCalls(
     const CallHierarchyOutgoingCallsParams &Params,
     Callback<std::vector<CallHierarchyOutgoingCall>> Reply) {
-  // FIXME: To be implemented.
-  Reply(std::vector<CallHierarchyOutgoingCall>{});
+  Server->outgoingCalls(Params.item, std::move(Reply));
 }
 
 void ClangdLSPServer::applyConfiguration(

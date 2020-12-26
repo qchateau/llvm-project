@@ -237,6 +237,10 @@ public:
   void incomingCalls(const CallHierarchyItem &Item,
                      Callback<std::vector<CallHierarchyIncomingCall>>);
 
+  /// Resolve outgoing calls for a given call hierarchy item.
+  void outgoingCalls(const CallHierarchyItem &Item,
+                     Callback<std::vector<CallHierarchyOutgoingCall>>);
+
   /// Retrieve the top symbols from the workspace matching a query.
   void workspaceSymbols(StringRef Query, int Limit,
                         Callback<std::vector<SymbolInformation>> CB);
