@@ -144,6 +144,7 @@ BackgroundQueue::Task BackgroundIndex::changedFilesTask(
     Queue.append(std::move(Tasks));
   });
 
+  T.Message = "enqueuing changed files";
   T.QueuePri = LoadShards;
   T.ThreadPri = llvm::ThreadPriority::Default;
   return T;
@@ -166,6 +167,7 @@ BackgroundQueue::Task BackgroundIndex::indexFileTask(std::string Path) {
     if (auto Error = index(std::move(*Cmd)))
       elog("Indexing {0} failed: {1}", Path, std::move(Error));
   });
+  T.Message = "file";
   T.QueuePri = IndexFile;
   T.Tag = std::move(Tag);
   return T;

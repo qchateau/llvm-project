@@ -1644,9 +1644,11 @@ void ClangdLSPServer::onBackgroundIndexProgress(
       WorkDoneProgressReport Report;
       Report.percentage = 100.0 * (Stats.Completed - Stats.LastIdle) /
                           (Stats.Enqueued - Stats.LastIdle);
-      Report.message =
-          llvm::formatv("{0}/{1}", Stats.Completed - Stats.LastIdle,
-                        Stats.Enqueued - Stats.LastIdle);
+      Report.message = Stats.LatestTaskMessage;
+      auto Current = Stats.Completed - Stats.LastIdle;
+      auto Total = Stats.Enqueued - Stats.LastIdle;
+      if (Total > 1)
+        *Report.message += llvm::formatv(" {0}/{1}", Current, Total);
       progress(ProgressToken, std::move(Report));
     } else {
       assert(Stats.Completed == Stats.Enqueued);
