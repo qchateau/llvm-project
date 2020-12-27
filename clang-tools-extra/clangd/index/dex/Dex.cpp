@@ -356,6 +356,8 @@ size_t Dex::estimateMemoryUsage() const {
     Bytes += TokenToPostingList.second.bytes();
   Bytes += Refs.getMemorySize();
   Bytes += RevRefs.getMemorySize();
+  for (const auto &Entry : RevRefs)
+    Bytes += Entry.second.size() * sizeof(Entry.second.front());
   Bytes += Relations.getMemorySize();
   return Bytes + BackingDataSize;
 }
