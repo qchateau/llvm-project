@@ -104,6 +104,19 @@ public:
   size_t estimateMemoryUsage() const override;
 
 private:
+  class RevRef {
+    const Ref &Reference;
+    SymbolID Target;
+
+  public:
+    RevRef(const Ref &Reference, SymbolID Target)
+        : Reference(Reference), Target(Target) {}
+    const Ref &ref() const { return Reference; }
+    RefersToResult refersToResult() const {
+      return {Reference.Location, Reference.Kind, Target};
+    }
+  };
+
   void buildIndex();
   std::unique_ptr<Iterator> iterator(const Token &Tok) const;
   std::unique_ptr<Iterator>
@@ -125,7 +138,7 @@ private:
   llvm::DenseMap<Token, PostingList> InvertedIndex;
   dex::Corpus Corpus;
   llvm::DenseMap<SymbolID, llvm::ArrayRef<Ref>> Refs;
-  llvm::DenseMap<SymbolID, std::vector<RefersToResult>> RevRefs;
+  llvm::DenseMap<SymbolID, std::vector<RevRef>> RevRefs;
   static_assert(sizeof(RelationKind) == sizeof(uint8_t),
                 "RelationKind should be of same size as a uint8_t");
   llvm::DenseMap<std::pair<SymbolID, uint8_t>, std::vector<SymbolID>> Relations;

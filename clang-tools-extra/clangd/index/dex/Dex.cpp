@@ -125,15 +125,9 @@ void Dex::buildIndex() {
   InvertedIndex = Builder.build();
 
   // Build RevRefs
-  for (const auto &Pair : Refs) {
-    for (const auto &R : Pair.second) {
-      auto It = RevRefs.try_emplace(R.Container).first;
-      It->second.push_back({
-          R.Location, R.Kind,
-          Pair.first, // FIXME: this is teh referee, not the container
-      });
-    }
-  }
+  for (const auto &Pair : Refs)
+    for (const auto &R : Pair.second)
+      RevRefs[R.Container].emplace_back(R, Pair.first);
 }
 
 std::unique_ptr<Iterator> Dex::iterator(const Token &Tok) const {
@@ -309,13 +303,13 @@ bool Dex::refersTo(
   uint32_t Remaining =
       Req.Limit.getValueOr(std::numeric_limits<uint32_t>::max());
   for (const auto &ID : Req.IDs)
-    for (const auto &Ref : RevRefs.lookup(ID)) {
-      if (!static_cast<int>(Req.Filter & Ref.Kind))
+    for (const auto &Rev : RevRefs.lookup(ID)) {
+      if (!static_cast<int>(Req.Filter & Rev.ref().Kind))
         continue;
       if (Remaining == 0)
         return true; // More refs were available.
       --Remaining;
-      Callback(Ref);
+      Callback(Rev.refersToResult());
     }
   return false; // We reported all refs.
 }
