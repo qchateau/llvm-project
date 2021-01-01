@@ -1,0 +1,67 @@
+name: Build latest clangd
+
+on:
+  push:
+    branches:
+      - 'clangd-*'
+
+jobs:
+  build_clangd:
+    strategy:
+      fail-fast: false
+      matrix:
+        docker-image: ["ubuntu-1804", "centos-7"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          path: llvm-project
+          fetch-depth: 1
+
+      - name: Build docker image
+        run: |
+          cd $GITHUB_WORKSPACE/llvm-project/.github/images/
+          docker build --file ${{ matrix.docker-image }}.dockerfile --tag clangd-image .
+
+      - name: Build clangd
+        run: |
+          mkdir out
+          docker run \
+            -v $GITHUB_WORKSPACE/llvm-project:/tmp/llvm-project/ \
+            -v $GITHUB_WORKSPACE/out:/tmp/out/ \
+            clangd-image /build.sh /tmp/llvm-project/ /tmp/out/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: clangd-${{ matrix.docker-image }}
+          path: out/clangd
+
+  release_clangd:
+    if: github.ref == 'refs/heads/clangd-release'
+    runs-on: ubuntu-latest
+    needs: build_clangd
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+
+      - name: Prepare artifacts
+        run: |
+          mkdir artifacts
+          for name in $(ls); do
+            if [ -e ./$name/clangd ]; then
+              mv ./$name/clangd artifacts/$name
+            fi
+          done
+
+      - name: Set date
+        run: echo "NOW=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: artifacts/*
+          commit: ${{ github.ref }}
+          tag: clangd-${{ env.NOW }}
+          token: ${{ secrets.GITHUB_TOKEN }}
