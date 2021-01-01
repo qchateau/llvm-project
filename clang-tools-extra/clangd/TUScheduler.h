@@ -248,6 +248,13 @@ public:
   void run(llvm::StringRef Name, llvm::StringRef Path,
            llvm::unique_function<void()> Action);
 
+  /// Similar to run, except the task is expected to be quick.
+  /// This function will not honor AsyncThreadsCount (except
+  /// if threading is disabled with AsyncThreadsCount=0)
+  /// It is intended to run quick tasks that need to run ASAP
+  void quickRun(llvm::StringRef Name, llvm::StringRef Path,
+                llvm::unique_function<void()> Action);
+
   /// Defines how a runWithAST action is implicitly cancelled by other actions.
   enum ASTActionInvalidation {
     /// The request will run unless explicitly cancelled.
@@ -323,10 +330,14 @@ public:
   void profile(MemoryTree &MT) const;
 
 private:
+  void runWithSemaphore(llvm::StringRef Name, llvm::StringRef Path,
+                        llvm::unique_function<void()> Action, Semaphore &Sem);
+
   const GlobalCompilationDatabase &CDB;
   Options Opts;
   std::unique_ptr<ParsingCallbacks> Callbacks; // not nullptr
   Semaphore Barrier;
+  Semaphore QuickRunBarrier;
   llvm::StringMap<std::unique_ptr<FileData>> Files;
   std::unique_ptr<PreambleCache> CachedPreambles;
   std::unique_ptr<ASTCache> IdleASTs;
