@@ -29,10 +29,11 @@ void BackgroundQueue::work(std::function<void()> OnIdle) {
         CV.notify_all();
         return;
       }
-      ++Stat.Active;
       std::pop_heap(Queue.begin(), Queue.end());
       Task = std::move(Queue.back());
       Queue.pop_back();
+      ++Stat.Active;
+      Stat.LatestTaskMessage = Task->Message;
       notifyProgress();
     }
 
@@ -124,8 +125,9 @@ bool BackgroundQueue::blockUntilIdleForTest(
 }
 
 void BackgroundQueue::notifyProgress() const {
-  dlog("Queue: {0}/{1} ({2} active). Last idle at {3}", Stat.Completed,
-       Stat.Enqueued, Stat.Active, Stat.LastIdle);
+  dlog("Queue: {0} {1}/{2} ({3} active). Last idle at {4}",
+       Stat.LatestTaskMessage, Stat.Completed, Stat.Enqueued, Stat.Active,
+       Stat.LastIdle);
   if (OnProgress)
     OnProgress(Stat);
 }

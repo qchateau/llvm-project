@@ -76,6 +76,7 @@ public:
     llvm::ThreadPriority ThreadPri = llvm::ThreadPriority::Background;
     unsigned QueuePri = 0; // Higher-priority tasks will run first.
     std::string Tag;       // Allows priority to be boosted later.
+    std::string Message;   // Message associated with this task
 
     bool operator<(const Task &O) const { return QueuePri < O.QueuePri; }
   };
@@ -86,6 +87,7 @@ public:
     unsigned Active = 0;    // Tasks being currently processed by a worker.
     unsigned Completed = 0; // Tasks that have been finished.
     unsigned LastIdle = 0;  // Number of completed tasks when last empty.
+    std::string LatestTaskMessage; // The message of the latest dequeued task
   };
 
   BackgroundQueue(std::function<void(Stats)> OnProgress = nullptr)
