@@ -351,7 +351,7 @@ TEST_F(TUSchedulerTests, InvalidationNoCrash) {
         ScheduledChange.wait();
         ASSERT_TRUE(bool(AST));
       },
-      TUScheduler::InvalidateOnUpdate);
+      TUScheduler::DelayOnUpdate);
   StartedRunning.wait();
   S.update(Path, getInputs(Path, ""), WantDiagnostics::Auto);
   ScheduledChange.notify();
@@ -379,7 +379,7 @@ TEST_F(TUSchedulerTests, Invalidation) {
           EXPECT_EQ(E.Reason, static_cast<int>(ErrorCode::ContentModified));
         });
       },
-      TUScheduler::InvalidateOnUpdate);
+      TUScheduler::DelayOnUpdate);
   S.runWithAST(
       "not-invalidatable", Path,
       [&](llvm::Expected<InputsAndAST> AST) {
@@ -400,7 +400,7 @@ TEST_F(TUSchedulerTests, Invalidation) {
         EXPECT_TRUE(E.isA<CancelledError>());
         consumeError(std::move(E));
       },
-      TUScheduler::InvalidateOnUpdate);
+      TUScheduler::DelayOnUpdate);
   updateWithDiags(S, Path, "c", WantDiagnostics::Auto,
                   [&](std::vector<Diag>) { ++Builds; });
   S.runWithAST(
@@ -409,7 +409,7 @@ TEST_F(TUSchedulerTests, Invalidation) {
         ++Actions;
         EXPECT_TRUE(bool(AST)) << "Shouldn't be invalidated, no update follows";
       },
-      TUScheduler::InvalidateOnUpdate);
+      TUScheduler::DelayOnUpdate);
   Start.notify();
   ASSERT_TRUE(S.blockUntilIdle(timeoutSeconds(10)));
 

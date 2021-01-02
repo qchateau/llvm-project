@@ -482,7 +482,7 @@ void ClangdServer::enumerateTweaks(
   };
 
   WorkScheduler.runWithAST("EnumerateTweaks", File, std::move(Action),
-                           TUScheduler::InvalidateOnUpdate);
+                           TUScheduler::DelayOnUpdate);
 }
 
 void ClangdServer::applyTweak(PathRef File, Range Sel, StringRef TweakID,
@@ -594,7 +594,7 @@ void ClangdServer::findDocumentHighlights(
       };
 
   WorkScheduler.runWithAST("Highlights", File, std::move(Action),
-                           TUScheduler::InvalidateOnUpdate);
+                           TUScheduler::DelayOnUpdate);
 }
 
 void ClangdServer::findHover(PathRef File, Position Pos,
@@ -609,7 +609,7 @@ void ClangdServer::findHover(PathRef File, Position Pos,
   };
 
   WorkScheduler.runWithAST("Hover", File, std::move(Action),
-                           TUScheduler::InvalidateOnUpdate);
+                           TUScheduler::DelayOnUpdate);
 }
 
 void ClangdServer::typeHierarchy(PathRef File, Position Pos, int Resolve,
@@ -690,7 +690,7 @@ void ClangdServer::documentSymbols(llvm::StringRef File,
         CB(clangd::getDocumentSymbols(InpAST->AST));
       };
   WorkScheduler.runWithAST("DocumentSymbols", File, std::move(Action),
-                           TUScheduler::InvalidateOnUpdate);
+                           TUScheduler::DelayOnUpdate);
 }
 
 void ClangdServer::foldingRanges(llvm::StringRef File,
@@ -702,7 +702,7 @@ void ClangdServer::foldingRanges(llvm::StringRef File,
         CB(clangd::getFoldingRanges(InpAST->AST));
       };
   WorkScheduler.runWithAST("FoldingRanges", File, std::move(Action),
-                           TUScheduler::InvalidateOnUpdate);
+                           TUScheduler::DelayOnUpdate);
 }
 
 void ClangdServer::findImplementations(
@@ -769,7 +769,7 @@ void ClangdServer::documentLinks(PathRef File,
         CB(clangd::getDocumentLinks(InpAST->AST));
       };
   WorkScheduler.runWithAST("DocumentLinks", File, std::move(Action),
-                           TUScheduler::InvalidateOnUpdate);
+                           TUScheduler::DelayOnUpdate);
 }
 
 void ClangdServer::semanticHighlights(
@@ -781,7 +781,7 @@ void ClangdServer::semanticHighlights(
         CB(clangd::getSemanticHighlightings(InpAST->AST));
       };
   WorkScheduler.runWithAST("SemanticHighlights", File, std::move(Action),
-                           TUScheduler::InvalidateOnUpdate);
+                           TUScheduler::DelayOnUpdate);
 }
 
 void ClangdServer::getAST(PathRef File, Range R,
