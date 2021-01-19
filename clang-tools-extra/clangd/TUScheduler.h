@@ -312,6 +312,8 @@ public:
   class ASTCache;
   /// Tracks headers included by open files, to get known-good compile commands.
   class HeaderIncluderCache;
+  /// Store all known preambles
+  class PreambleStore;
 
   // The file being built/processed in the current thread. This is a hack in
   // order to get the file name into the index implementations. Do not depend on
@@ -335,6 +337,7 @@ private:
   llvm::StringMap<std::unique_ptr<FileData>> Files;
   std::unique_ptr<ASTCache> IdleASTs;
   std::unique_ptr<HeaderIncluderCache> HeaderIncluders;
+  std::unique_ptr<PreambleStore> Preambles;
   // None when running tasks synchronously and non-None when running tasks
   // asynchronously.
   llvm::Optional<AsyncTaskRunner> PreambleTasks;
