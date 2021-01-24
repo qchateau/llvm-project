@@ -236,6 +236,58 @@ private:
   std::vector<syntax::Token> MainFileTokens;
 };
 
+llvm::Expected<MainFileMacros>
+scanMainFileMacros(llvm::StringRef Contents,
+                   const tooling::CompileCommand &Cmd) {
+  class EmptyFS : public ThreadsafeFS {
+  private:
+    llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> viewImpl() const override {
+      return new llvm::vfs::InMemoryFileSystem;
+    }
+  };
+  EmptyFS FS;
+  // Build and run Preprocessor over the preamble.
+  ParseInputs PI;
+  PI.Contents = Contents.str();
+  PI.TFS = &FS;
+  PI.CompileCommand = Cmd;
+  IgnoringDiagConsumer IgnoreDiags;
+  auto CI = buildCompilerInvocation(PI, IgnoreDiags);
+  if (!CI)
+    return error("failed to create compiler invocation");
+  CI->getDiagnosticOpts().IgnoreWarnings = true;
+  auto ContentsBuffer = llvm::MemoryBuffer::getMemBuffer(Contents);
+  // This means we're scanning (though not preprocessing) the preamble section
+  // twice. However, it's important to precisely follow the preamble bounds used
+  // elsewhere.
+  auto Bounds = ComputePreambleBounds(*CI->getLangOpts(), *ContentsBuffer, 0);
+  auto PreambleContents =
+      llvm::MemoryBuffer::getMemBufferCopy(Contents.substr(0, Bounds.Size));
+  auto Clang = prepareCompilerInstance(
+      std::move(CI), nullptr, std::move(PreambleContents),
+      // Provide an empty FS to prevent preprocessor from performing IO. This
+      // also implies missing resolved paths for includes.
+      FS.view(llvm::None), IgnoreDiags);
+  if (Clang->getFrontendOpts().Inputs.empty())
+    return error("compiler instance had no inputs");
+  // We are only interested in main file includes.
+  Clang->getPreprocessorOpts().SingleFileParseMode = true;
+  PreprocessOnlyAction Action;
+  if (!Action.BeginSourceFile(*Clang, Clang->getFrontendOpts().Inputs[0]))
+    return error("failed BeginSourceFile");
+
+  MainFileMacros Macros;
+  Clang->getPreprocessor().addPPCallbacks(
+      std::make_unique<CollectMainFileMacros>(Clang->getSourceManager(),
+                                              Macros));
+
+  if (llvm::Error Err = Action.Execute())
+    return std::move(Err);
+  Action.EndSourceFile();
+
+  return Macros;
+}
+
 } // namespace
 
 llvm::Optional<ParsedAST>
@@ -393,8 +445,17 @@ ParsedAST::build(llvm::StringRef Filename, const ParseInputs &Inputs,
   // Copy over the macros in the preamble region of the main file, and combine
   // with non-preamble macros below.
   MainFileMacros Macros;
-  if (Preamble)
+  if (Preamble && Preamble->CompileCommand.Filename == Filename) {
     Macros = Preamble->Macros;
+  }
+  else if (Preamble) {
+    auto EM = scanMainFileMacros(Inputs.Contents, Inputs.CompileCommand);
+    if (!EM) {
+      elog("Failed to scan macros of {0}: {1}", Filename, EM.takeError());
+    } else {
+      Macros = std::move(*EM);
+    }
+  }
   Clang->getPreprocessor().addPPCallbacks(
       std::make_unique<CollectMainFileMacros>(Clang->getSourceManager(),
                                               Macros));
