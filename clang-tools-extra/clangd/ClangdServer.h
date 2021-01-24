@@ -102,6 +102,9 @@ public:
     /// thread, and callbacks are invoked before "async" functions return.
     unsigned AsyncThreadsCount = getDefaultAsyncThreadsCount();
 
+    // Number of preambles of closed files to keep in the cache.
+    unsigned ClosedPreambleCacheSize = 1;
+
     /// AST caching policy. The default is to keep up to 3 ASTs in memory.
     ASTRetentionPolicy RetentionPolicy;
 

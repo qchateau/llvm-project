@@ -96,6 +96,62 @@ using std::chrono::steady_clock;
 
 namespace {
 class ASTWorker;
+
+bool compileCommandsAreSimilar(const tooling::CompileCommand &LHS,
+                               const tooling::CompileCommand &RHS) {
+  auto LIt = LHS.CommandLine.begin();
+  auto RIt = RHS.CommandLine.begin();
+
+  auto SkipSpecificArg = [](auto It, auto End, const std::string &Filename) {
+    while (It != End) {
+      if (*It == "-o" || *It == "-x") {
+        // Erase -o and its argument
+        // Erase -x and its argument: it would prevent using header file
+        // preamble for a source file
+        It = std::min(It + 2, End);
+      } else if (*It == "-c" || It->find("-W") == 0 || *It == "-pedantic") {
+        // We don't care about those flags
+        It++;
+      } else if (It->find(Filename) != std::string::npos) {
+        // The file we're compiling appears in this argument, drop it to make it
+        // generic
+        It++;
+      } else {
+        break;
+      }
+    }
+    return It;
+  };
+
+  // Iterate the command line, skipping arguments that are specific to the
+  // file being compiled and that would not influence the premable
+  // compatiblity. Stop when one iterate reach the or when an argument differs
+  auto LEnd = LHS.CommandLine.end();
+  auto REnd = RHS.CommandLine.end();
+  while (true) {
+    LIt = SkipSpecificArg(LIt, LEnd, LHS.Filename);
+    RIt = SkipSpecificArg(RIt, REnd, RHS.Filename);
+
+    if (LIt == LEnd || RIt == REnd) {
+      break;
+    }
+
+    if (*LIt != *RIt) {
+      break;
+    }
+
+    LIt++;
+    RIt++;
+  }
+
+  // If both iterator get to the end at the same time, the CL are compatible
+  bool Compatible = LIt == LEnd && RIt == REnd;
+  if (Compatible) {
+    vlog("{0} and {1} are compatible", LHS.Filename, RHS.Filename);
+  }
+  return Compatible;
+}
+
 } // namespace
 
 static clang::clangd::Key<std::string> kFileBeingProcessed;
@@ -301,6 +357,65 @@ public:
   }
 };
 
+class TUScheduler::PreambleStore {
+public:
+  struct Entry {
+    std::shared_ptr<const PreambleData> Preamble;
+    size_t Score;
+    Path FileName;
+
+    bool operator>(const Entry &Other) const { return Score > Other.Score; }
+  };
+
+  explicit PreambleStore(size_t ClosedPreamblesToKeep): ClosedPreamblesToKeep(ClosedPreamblesToKeep) {}
+
+  auto getAll() {
+    std::unique_lock<std::mutex> Lock(Mut);
+    return Store;
+  }
+
+  void push(PathRef FileName, std::shared_ptr<const PreambleData> Preamble) {
+    std::unique_lock<std::mutex> Lock(Mut);
+    auto It = llvm::find_if(
+        Store, [&](const auto &Item) { return Item.FileName == FileName; });
+    if (It == Store.end()) {
+      Store.push_back(Entry{std::move(Preamble), 0, FileName.str()});
+      popWorstPreambles();
+    }
+    else {
+      It->Preamble = std::move(Preamble);
+    }
+    vlog("Store contains {0} preambles", Store.size());
+  }
+
+  void hit(PathRef FileName) {
+    std::unique_lock<std::mutex> Lock(Mut);
+    auto It = llvm::find_if(
+        Store, [&](const auto &Item) { return Item.FileName == FileName; });
+    if (It == Store.end()) {
+      return;
+    }
+    It->Score++;
+  }
+
+private:
+  void popWorstPreambles() {
+    auto Begin = llvm::partition(
+        Store, [](const auto &Item) { return Item.Preamble.use_count() > 1; });
+    if (static_cast<size_t>(std::distance(Begin, Store.end())) <=
+        ClosedPreamblesToKeep) {
+      return;
+    }
+    auto Nth = Begin + ClosedPreamblesToKeep;
+    std::nth_element(Begin, Nth, Store.end(), std::greater<Entry>());
+    Store.erase(Nth, Store.end());
+  }
+
+  std::mutex Mut;
+  std::vector<Entry> Store;
+  size_t ClosedPreamblesToKeep;
+};
+
 namespace {
 
 bool isReliable(const tooling::CompileCommand &Cmd) {
@@ -500,7 +615,8 @@ class ASTWorker {
   ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
             TUScheduler::ASTCache &LRUCache,
             TUScheduler::HeaderIncluderCache &HeaderIncluders,
-            Semaphore &Barrier, bool RunSync, const TUScheduler::Options &Opts,
+            TUScheduler::PreambleStore &Preambles, Semaphore &Barrier,
+            bool RunSync, const TUScheduler::Options &Opts,
             ParsingCallbacks &Callbacks);
 
 public:
@@ -513,8 +629,9 @@ public:
   create(PathRef FileName, const GlobalCompilationDatabase &CDB,
          TUScheduler::ASTCache &IdleASTs,
          TUScheduler::HeaderIncluderCache &HeaderIncluders,
-         AsyncTaskRunner *Tasks, Semaphore &Barrier,
-         const TUScheduler::Options &Opts, ParsingCallbacks &Callbacks);
+         TUScheduler::PreambleStore &Preambles, AsyncTaskRunner *Tasks,
+         Semaphore &Barrier, const TUScheduler::Options &Opts,
+         ParsingCallbacks &Callbacks);
   ~ASTWorker();
 
   void update(ParseInputs Inputs, WantDiagnostics, bool ContentChanged);
@@ -525,6 +642,8 @@ public:
   bool blockUntilIdle(Deadline Timeout) const;
 
   std::shared_ptr<const PreambleData> getPossiblyStalePreamble(
+      std::shared_ptr<const ASTSignals> *ASTSignals = nullptr) const;
+  std::shared_ptr<const PreambleData> getBestPreamble(
       std::shared_ptr<const ASTSignals> *ASTSignals = nullptr) const;
 
   /// Used to inform ASTWorker about a new preamble build by PreambleThread.
@@ -592,6 +711,9 @@ private:
   /// Should the first task in the queue be skipped instead of run?
   bool shouldSkipHeadLocked() const;
 
+  /// Get all preambles that may be used to accelerate the AST build
+  std::vector<TUScheduler::PreambleStore::Entry> getCompatiblePreambles() const;
+
   struct Request {
     llvm::unique_function<void()> Action;
     std::string Name;
@@ -606,6 +728,7 @@ private:
   /// Handles retention of ASTs.
   TUScheduler::ASTCache &IdleASTs;
   TUScheduler::HeaderIncluderCache &HeaderIncluders;
+  TUScheduler::PreambleStore &Preambles;
   const bool RunSync;
   /// Time to wait after an update to see whether another update obsoletes it.
   const DebouncePolicy UpdateDebounce;
@@ -708,12 +831,12 @@ ASTWorkerHandle
 ASTWorker::create(PathRef FileName, const GlobalCompilationDatabase &CDB,
                   TUScheduler::ASTCache &IdleASTs,
                   TUScheduler::HeaderIncluderCache &HeaderIncluders,
-                  AsyncTaskRunner *Tasks, Semaphore &Barrier,
-                  const TUScheduler::Options &Opts,
+                  TUScheduler::PreambleStore &Preambles, AsyncTaskRunner *Tasks,
+                  Semaphore &Barrier, const TUScheduler::Options &Opts,
                   ParsingCallbacks &Callbacks) {
-  std::shared_ptr<ASTWorker> Worker(
-      new ASTWorker(FileName, CDB, IdleASTs, HeaderIncluders, Barrier,
-                    /*RunSync=*/!Tasks, Opts, Callbacks));
+  std::shared_ptr<ASTWorker> Worker(new ASTWorker(
+      FileName, CDB, IdleASTs, HeaderIncluders, Preambles, Barrier,
+      /*RunSync=*/!Tasks, Opts, Callbacks));
   if (Tasks) {
     Tasks->runAsync("ASTWorker:" + llvm::sys::path::filename(FileName),
                     [Worker]() { Worker->run(); });
@@ -727,10 +850,11 @@ ASTWorker::create(PathRef FileName, const GlobalCompilationDatabase &CDB,
 ASTWorker::ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
                      TUScheduler::ASTCache &LRUCache,
                      TUScheduler::HeaderIncluderCache &HeaderIncluders,
-                     Semaphore &Barrier, bool RunSync,
-                     const TUScheduler::Options &Opts,
+                     TUScheduler::PreambleStore &Preambles, Semaphore &Barrier,
+                     bool RunSync, const TUScheduler::Options &Opts,
                      ParsingCallbacks &Callbacks)
-    : IdleASTs(LRUCache), HeaderIncluders(HeaderIncluders), RunSync(RunSync),
+    : IdleASTs(LRUCache), HeaderIncluders(HeaderIncluders),
+      Preambles(Preambles), RunSync(RunSync),
       UpdateDebounce(Opts.UpdateDebounce), FileName(FileName),
       ContextProvider(Opts.ContextProvider), CDB(CDB), Callbacks(Callbacks),
       Barrier(Barrier), Done(false), Status(FileName, Callbacks),
@@ -839,14 +963,18 @@ void ASTWorker::update(ParseInputs Inputs, WantDiagnostics WantDiags,
 
     PreamblePeer.update(std::move(Invocation), std::move(Inputs),
                         std::move(CompilerInvocationDiags), WantDiags);
+
     std::unique_lock<std::mutex> Lock(Mutex);
     PreambleCV.wait(Lock, [this] {
       // Block until we reiceve a preamble request, unless a preamble already
       // exists, as patching an empty preamble would imply rebuilding it from
       // scratch.
+      // It is also acceptable to unblock is we have compatible preambles
+      // that may be used to accelerate the AST build.
       // We block here instead of the consumer to prevent any deadlocks. Since
       // LatestPreamble is only populated by ASTWorker thread.
-      return LatestPreamble || !PreambleRequests.empty() || Done;
+      return LatestPreamble || !PreambleRequests.empty() ||
+             !getCompatiblePreambles().empty() || Done;
     });
     return;
   };
@@ -874,13 +1002,13 @@ void ASTWorker::runWithAST(
       vlog("ASTWorker rebuilding evicted AST to run {0}: {1} version {2}", Name,
            FileName, FileInputs.Version);
       // FIXME: We might need to build a patched ast once preamble thread starts
-      // running async. Currently getPossiblyStalePreamble below will always
+      // running async. Currently getBestPreamble below will always
       // return a compatible preamble as ASTWorker::update blocks.
       llvm::Optional<ParsedAST> NewAST;
       if (Invocation) {
         NewAST = ParsedAST::build(FileName, FileInputs, std::move(Invocation),
                                   CompilerInvocationDiagConsumer.take(),
-                                  getPossiblyStalePreamble());
+                                  getBestPreamble());
         ++ASTBuildCount;
       }
       AST = NewAST ? std::make_unique<ParsedAST>(std::move(*NewAST)) : nullptr;
@@ -963,6 +1091,7 @@ void ASTWorker::updatePreamble(std::unique_ptr<CompilerInvocation> CI,
       else
         LatestPreamble = std::move(Preamble);
     }
+    Preambles.push(FileName, *LatestPreamble);
     // Notify anyone waiting for a preamble.
     PreambleCV.notify_all();
     // Give up our ownership to old preamble before starting expensive AST
@@ -1103,6 +1232,51 @@ std::shared_ptr<const PreambleData> ASTWorker::getPossiblyStalePreamble(
   if (ASTSignals)
     *ASTSignals = LatestASTSignals;
   return LatestPreamble ? *LatestPreamble : nullptr;
+}
+
+std::vector<TUScheduler::PreambleStore::Entry>
+ASTWorker::getCompatiblePreambles() const {
+  auto AllPreamblesEntries = Preambles.getAll();
+  auto End = llvm::remove_if(AllPreamblesEntries, [&](const auto &Item) {
+    return !compileCommandsAreSimilar(FileInputs.CompileCommand,
+                                      Item.Preamble->CompileCommand) ||
+           // Using the preamble of a file that include the file we're
+           // processing will only yield partial results Unless we can tackle
+           // this issue, just ignore this preamble
+           Item.Preamble->Includes.includeDepth(Item.FileName).count(FileName);
+  });
+  AllPreamblesEntries.erase(End, AllPreamblesEntries.end());
+  return AllPreamblesEntries;
+}
+
+std::shared_ptr<const PreambleData> ASTWorker::getBestPreamble(
+    std::shared_ptr<const ASTSignals> *ASTSignals) const {
+  if (auto Preamble = getPossiblyStalePreamble(ASTSignals)) {
+    vlog("Best premable is the real one");
+    return Preamble;
+  }
+
+  auto CompatiblePreambles = getCompatiblePreambles();
+  vlog("Looking for the best of {0} preambles ...", CompatiblePreambles.size());
+  if (CompatiblePreambles.empty()) {
+    vlog("No compatible preamble");
+    return nullptr;
+  }
+
+  auto Best = CompatiblePreambles.begin();
+  auto BestPatch = PreamblePatch::create(FileName, FileInputs, *Best->Preamble);
+
+  for (auto It = Best + 1; It != CompatiblePreambles.end(); ++It) {
+    auto Patch = PreamblePatch::create(FileName, FileInputs, *It->Preamble);
+    if (Patch.preambleIncludes().size() > BestPatch.preambleIncludes().size()) {
+      BestPatch = std::move(Patch);
+      Best = It;
+    }
+  }
+
+  vlog("Using preamble from: {0}", Best->FileName);
+  Preambles.hit(Best->FileName);
+  return Best->Preamble;
 }
 
 void ASTWorker::waitForFirstPreamble() const {
@@ -1455,7 +1629,8 @@ TUScheduler::TUScheduler(const GlobalCompilationDatabase &CDB,
       Barrier(Opts.AsyncThreadsCount), QuickRunBarrier(Opts.AsyncThreadsCount),
       IdleASTs(
           std::make_unique<ASTCache>(Opts.RetentionPolicy.MaxRetainedASTs)),
-      HeaderIncluders(std::make_unique<HeaderIncluderCache>()) {
+      HeaderIncluders(std::make_unique<HeaderIncluderCache>()),
+      Preambles(std::make_unique<PreambleStore>(Opts.ClosedPreambleCacheSize)) {
   // Avoid null checks everywhere.
   if (!Opts.ContextProvider) {
     this->Opts.ContextProvider = [](llvm::StringRef) {
@@ -1497,7 +1672,7 @@ bool TUScheduler::update(PathRef File, ParseInputs Inputs,
   if (!FD) {
     // Create a new worker to process the AST-related tasks.
     ASTWorkerHandle Worker =
-        ASTWorker::create(File, CDB, *IdleASTs, *HeaderIncluders,
+        ASTWorker::create(File, CDB, *IdleASTs, *HeaderIncluders, *Preambles,
                           WorkerThreads ? WorkerThreads.getPointer() : nullptr,
                           Barrier, Opts, *Callbacks);
     FD = std::unique_ptr<FileData>(
@@ -1591,7 +1766,7 @@ void TUScheduler::runWithPreamble(llvm::StringRef Name, PathRef File,
     SPAN_ATTACH(Tracer, "file", File);
     std::shared_ptr<const ASTSignals> Signals;
     std::shared_ptr<const PreambleData> Preamble =
-        It->second->Worker->getPossiblyStalePreamble(&Signals);
+        It->second->Worker->getBestPreamble(&Signals);
     WithContext WithProvidedContext(Opts.ContextProvider(File));
     Action(InputsAndPreamble{It->second->Contents,
                              It->second->Worker->getCurrentCompileCommand(),
@@ -1614,7 +1789,7 @@ void TUScheduler::runWithPreamble(llvm::StringRef Name, PathRef File,
       Worker->waitForFirstPreamble();
     }
     std::shared_ptr<const ASTSignals> Signals;
-    Preamble = Worker->getPossiblyStalePreamble(&Signals);
+    Preamble = Worker->getBestPreamble(&Signals);
 
     std::lock_guard<Semaphore> BarrierLock(Barrier);
     WithContext Guard(std::move(Ctx));
