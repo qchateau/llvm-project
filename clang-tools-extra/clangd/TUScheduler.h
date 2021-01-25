@@ -248,7 +248,7 @@ public:
   /// This function will not honor AsyncThreadsCount (except
   /// if threading is disabled with AsyncThreadsCount=0)
   /// It is intended to run quick tasks that need to run ASAP
-  void quickRun(llvm::StringRef Name, llvm::StringRef Path,
+  void runQuick(llvm::StringRef Name, llvm::StringRef Path,
                 llvm::unique_function<void()> Action);
 
   /// Defines how a runWithAST action is implicitly cancelled by other actions.

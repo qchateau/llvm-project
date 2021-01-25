@@ -1248,7 +1248,7 @@ TUScheduler::TUScheduler(const GlobalCompilationDatabase &CDB,
     : CDB(CDB), Opts(Opts),
       Callbacks(Callbacks ? move(Callbacks)
                           : std::make_unique<ParsingCallbacks>()),
-      Barrier(Opts.AsyncThreadsCount), QuickRunBarrier(1),
+      Barrier(Opts.AsyncThreadsCount), QuickRunBarrier(Opts.AsyncThreadsCount),
       IdleASTs(
           std::make_unique<ASTCache>(Opts.RetentionPolicy.MaxRetainedASTs)) {
   // Avoid null checks everywhere.
@@ -1325,7 +1325,7 @@ void TUScheduler::run(llvm::StringRef Name, llvm::StringRef Path,
   runWithSemaphore(Name, Path, std::move(Action), Barrier);
 }
 
-void TUScheduler::quickRun(llvm::StringRef Name, llvm::StringRef Path,
+void TUScheduler::runQuick(llvm::StringRef Name, llvm::StringRef Path,
                            llvm::unique_function<void()> Action) {
   // Use QuickRunBarrier to serialize quick tasks: we are ignoring
   // the parallelism level set by the user, don't abuse it
