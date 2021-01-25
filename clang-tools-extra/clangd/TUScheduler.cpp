@@ -320,25 +320,66 @@ class TUScheduler::PreambleStore {
 public:
   std::vector<std::shared_ptr<const PreambleData>> getAll() {
     std::vector<std::shared_ptr<const PreambleData>> Result;
-    Result.reserve(Cache.size());
+    Result.reserve(Store.size());
     std::unique_lock<std::mutex> Lock(Mut);
-    for (const auto &Preamble : Cache) {
+    for (const auto &Preamble : Store) {
       Result.push_back(Preamble.second);
+    }
+    for (const auto &HD : BestPreambles) {
+      if (!Store.count(HD.FileName)) {
+        Result.push_back(HD.Preamble);
+      }
     }
     return Result;
   }
-  void push(PathRef Path, std::shared_ptr<const PreambleData> Preamble) {
+  void push(PathRef FileName, std::shared_ptr<const PreambleData> Preamble) {
     std::unique_lock<std::mutex> Lock(Mut);
-    Cache[Path] = std::move(Preamble);
+    Store[FileName] = std::move(Preamble);
+
+    BestPreambles.push_back(HitData{Preamble, 0, FileName.str()});
+    trimBestPreambles();
   }
-  void pop(PathRef Path) {
+  void pop(PathRef FileName) {
     std::unique_lock<std::mutex> Lock(Mut);
-    Cache.erase(Path);
+    Store.erase(FileName);
+  }
+  void hit(PathRef FileName) {
+    std::unique_lock<std::mutex> Lock(Mut);
+    auto It = llvm::find_if(
+        BestPreambles, [&](const auto &HD) { return HD.FileName == FileName; });
+    if (It == BestPreambles.end()) {
+      return;
+    }
+    It->Hits++;
   }
 
 private:
+  struct HitData {
+    std::shared_ptr<const PreambleData> Preamble;
+    size_t Hits;
+    Path FileName;
+
+    bool operator<(const HitData &Other) const { return Hits < Other.Hits; }
+  };
+
+  void trimBestPreambles() {
+    // Always keep at least 4 preambles
+    if (BestPreambles.size() <= 4) {
+      return;
+    }
+    // Erase the worst unused preamble
+    llvm::sort(BestPreambles);
+    for (auto It = BestPreambles.begin(); It != BestPreambles.end(); ++It) {
+      if (!Store.count(It->FileName)) {
+        BestPreambles.erase(It);
+        break;
+      }
+    }
+  }
+
   std::mutex Mut;
-  llvm::StringMap<std::shared_ptr<const PreambleData>> Cache;
+  llvm::StringMap<std::shared_ptr<const PreambleData>> Store;
+  std::vector<HitData> BestPreambles;
 };
 
 namespace {
