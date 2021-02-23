@@ -104,7 +104,7 @@ bool compileCommandsAreSimilar(const tooling::CompileCommand &LHS,
   auto RHSBasename = llvm::sys::path::filename(RHS.Filename).str();
   for (auto &Arg : LHSCL) {
     for (auto Pos = Arg.find(LHSBasename); Pos != std::string::npos;
-         Pos = Arg.find(LHSBasename, Pos)) {
+         Pos = Arg.find(LHSBasename, Pos + 1)) {
       Arg.replace(Pos, LHSBasename.size(), RHSBasename);
     }
   }
@@ -318,68 +318,55 @@ public:
 
 class TUScheduler::PreambleStore {
 public:
-  std::vector<std::shared_ptr<const PreambleData>> getAll() {
-    std::vector<std::shared_ptr<const PreambleData>> Result;
-    Result.reserve(Store.size());
+  struct Entry {
+    std::shared_ptr<const PreambleData> Preamble;
+    size_t Score;
+    Path FileName;
+
+    bool operator>(const Entry &Other) const { return Score > Other.Score; }
+  };
+
+  auto getAll() {
     std::unique_lock<std::mutex> Lock(Mut);
-    for (const auto &Preamble : Store) {
-      Result.push_back(Preamble.second);
-    }
-    for (const auto &HD : BestPreambles) {
-      if (!Store.count(HD.FileName)) {
-        Result.push_back(HD.Preamble);
-      }
-    }
-    return Result;
+    return Store;
   }
+
   void push(PathRef FileName, std::shared_ptr<const PreambleData> Preamble) {
     std::unique_lock<std::mutex> Lock(Mut);
-    Store[FileName] = std::move(Preamble);
+    auto It = llvm::find_if(
+        Store, [&](const auto &Item) { return Item.FileName == FileName; });
+    if (It == Store.end()) {
+      Store.push_back(Entry{std::move(Preamble), 0, FileName.str()});
+      popWorstPreambles();
+    }
+    vlog("Store contains {0} preambles", Store.size());
+  }
 
-    BestPreambles.push_back(HitData{Preamble, 0, FileName.str()});
-    trimBestPreambles();
-  }
-  void pop(PathRef FileName) {
-    std::unique_lock<std::mutex> Lock(Mut);
-    Store.erase(FileName);
-  }
   void hit(PathRef FileName) {
     std::unique_lock<std::mutex> Lock(Mut);
     auto It = llvm::find_if(
-        BestPreambles, [&](const auto &HD) { return HD.FileName == FileName; });
-    if (It == BestPreambles.end()) {
+        Store, [&](const auto &Item) { return Item.FileName == FileName; });
+    if (It == Store.end()) {
       return;
     }
-    It->Hits++;
+    It->Score++;
   }
 
 private:
-  struct HitData {
-    std::shared_ptr<const PreambleData> Preamble;
-    size_t Hits;
-    Path FileName;
-
-    bool operator<(const HitData &Other) const { return Hits < Other.Hits; }
-  };
-
-  void trimBestPreambles() {
-    // Always keep at least 4 preambles
-    if (BestPreambles.size() <= 4) {
+  void popWorstPreambles() {
+    constexpr int ClosedPreamblesToKeep = 5;
+    auto Begin = llvm::partition(
+        Store, [](const auto &Item) { return Item.Preamble.use_count() > 1; });
+    if (std::distance(Begin, Store.end()) <= ClosedPreamblesToKeep) {
       return;
     }
-    // Erase the worst unused preamble
-    llvm::sort(BestPreambles);
-    for (auto It = BestPreambles.begin(); It != BestPreambles.end(); ++It) {
-      if (!Store.count(It->FileName)) {
-        BestPreambles.erase(It);
-        break;
-      }
-    }
+    auto Nth = Begin + ClosedPreamblesToKeep;
+    std::nth_element(Begin, Nth, Store.end(), std::greater<Entry>());
+    Store.erase(Nth, Store.end());
   }
 
   std::mutex Mut;
-  llvm::StringMap<std::shared_ptr<const PreambleData>> Store;
-  std::vector<HitData> BestPreambles;
+  std::vector<Entry> Store;
 };
 
 namespace {
@@ -678,8 +665,7 @@ private:
   bool shouldSkipHeadLocked() const;
 
   /// Get all preambles that may be used to accelerate the AST build
-  std::vector<std::shared_ptr<const PreambleData>>
-  getCompatiblePreambles() const;
+  std::vector<TUScheduler::PreambleStore::Entry> getCompatiblePreambles() const;
 
   struct Request {
     llvm::unique_function<void()> Action;
@@ -836,7 +822,6 @@ TUScheduler::PreambleStore &Preambles,
 ASTWorker::~ASTWorker() {
   // Make sure we remove the cached AST, if any.
   IdleASTs.take(this);
-  Preambles.pop(FileName);
 #ifndef NDEBUG
   std::lock_guard<std::mutex> Lock(Mutex);
   assert(Done && "handle was not destroyed");
@@ -1201,43 +1186,45 @@ std::shared_ptr<const PreambleData> ASTWorker::getPossiblyStalePreamble(
   return LatestPreamble ? *LatestPreamble : nullptr;
 }
 
-std::vector<std::shared_ptr<const PreambleData>>
+std::vector<TUScheduler::PreambleStore::Entry>
 ASTWorker::getCompatiblePreambles() const {
-  auto AllPreambles = Preambles.getAll();
-  AllPreambles.erase(llvm::remove_if(AllPreambles,
-                                     [&](const auto &Preamble) {
-                                       return !compileCommandsAreSimilar(
-                                           FileInputs.CompileCommand,
-                                           Preamble->CompileCommand);
-                                     }),
-                     AllPreambles.end());
-  return AllPreambles;
+  auto AllPreamblesEntries = Preambles.getAll();
+  auto End = llvm::remove_if(AllPreamblesEntries, [&](const auto &Item) {
+    return !compileCommandsAreSimilar(FileInputs.CompileCommand,
+                                      Item.Preamble->CompileCommand);
+  });
+  AllPreamblesEntries.erase(End, AllPreamblesEntries.end());
+  return AllPreamblesEntries;
 }
 
 std::shared_ptr<const PreambleData> ASTWorker::getBestPreamble(
-      std::shared_ptr<const ASTSignals> *ASTSignals) const {
+    std::shared_ptr<const ASTSignals> *ASTSignals) const {
   if (auto Preamble = getPossiblyStalePreamble(ASTSignals)) {
+    vlog("Best premable is the real one");
     return Preamble;
   }
 
   auto CompatiblePreambles = getCompatiblePreambles();
-  log("Looking for best of {0} preambles ...", CompatiblePreambles.size());
-  if (CompatiblePreambles.empty())
+  vlog("Looking for the best of {0} preambles ...", CompatiblePreambles.size());
+  if (CompatiblePreambles.empty()) {
+    vlog("No compatible preanble");
     return nullptr;
+  }
 
-  auto BestPreamble = std::move(CompatiblePreambles.front());
-  auto BestPatch = PreamblePatch::create(FileName, FileInputs, *BestPreamble);
+  auto Best = CompatiblePreambles.begin();
+  auto BestPatch = PreamblePatch::create(FileName, FileInputs, *Best->Preamble);
 
-  for (size_t Idx = 1; Idx < CompatiblePreambles.size(); ++Idx) {
-    auto Patch =
-        PreamblePatch::create(FileName, FileInputs, *CompatiblePreambles[Idx]);
+  for (auto It = Best + 1; It != CompatiblePreambles.end(); ++It) {
+    auto Patch = PreamblePatch::create(FileName, FileInputs, *It->Preamble);
     if (Patch.preambleIncludes().size() > BestPatch.preambleIncludes().size()) {
       BestPatch = std::move(Patch);
-      BestPreamble = std::move(CompatiblePreambles[Idx]);
+      Best = It;
     }
   }
 
-  return BestPreamble;
+  vlog("Using preamble from: {0}", Best->FileName);
+  Preambles.hit(Best->FileName);
+  return Best->Preamble;
 }
 
 void ASTWorker::waitForFirstPreamble() const {
