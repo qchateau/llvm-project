@@ -1232,7 +1232,11 @@ ASTWorker::getCompatiblePreambles() const {
   auto AllPreamblesEntries = Preambles.getAll();
   auto End = llvm::remove_if(AllPreamblesEntries, [&](const auto &Item) {
     return !compileCommandsAreSimilar(FileInputs.CompileCommand,
-                                      Item.Preamble->CompileCommand);
+                                      Item.Preamble->CompileCommand) ||
+           // Using the preamble of a file that include the file we're
+           // processing will only yield partial results Unless we can tackle
+           // this issue, just ignore this preamble
+           Item.Preamble->Includes.includeDepth(Item.FileName).count(FileName);
   });
   AllPreamblesEntries.erase(End, AllPreamblesEntries.end());
   return AllPreamblesEntries;
