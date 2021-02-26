@@ -99,16 +99,57 @@ class ASTWorker;
 
 bool compileCommandsAreSimilar(const tooling::CompileCommand &LHS,
                                const tooling::CompileCommand &RHS) {
-  std::vector<std::string> LHSCL(LHS.CommandLine);
-  auto LHSBasename = llvm::sys::path::filename(LHS.Filename).str();
-  auto RHSBasename = llvm::sys::path::filename(RHS.Filename).str();
-  for (auto &Arg : LHSCL) {
-    for (auto Pos = Arg.find(LHSBasename); Pos != std::string::npos;
-         Pos = Arg.find(LHSBasename, Pos + 1)) {
-      Arg.replace(Pos, LHSBasename.size(), RHSBasename);
+  auto LIt = LHS.CommandLine.begin();
+  auto RIt = RHS.CommandLine.begin();
+
+  auto SkipSpecificArg = [](auto It, auto End, const std::string &Filename) {
+    while (It != End) {
+      if (*It == "-o" || *It == "-x") {
+        // Erase -o and its argument
+        // Erase -x and its argument: it would prevent using header file
+        // preamble for a source file
+        It = std::min(It + 2, End);
+      } else if (*It == "-c" || It->find("-W") == 0 || *It == "-pedantic") {
+        // We don't care about those flags
+        It++;
+      } else if (It->find(Filename) != std::string::npos) {
+        // The file we're compiling appears in this argument, drop it to make it
+        // generic
+        It++;
+      } else {
+        break;
+      }
     }
+    return It;
+  };
+
+  // Iterate the command line, skipping arguments that are specific to the
+  // file being compiled and that would not influence the premable
+  // compatiblity. Stop when one iterate reach the or when an argument differs
+  auto LEnd = LHS.CommandLine.end();
+  auto REnd = RHS.CommandLine.end();
+  while (true) {
+    LIt = SkipSpecificArg(LIt, LEnd, LHS.Filename);
+    RIt = SkipSpecificArg(RIt, REnd, RHS.Filename);
+
+    if (LIt == LEnd || RIt == REnd) {
+      break;
+    }
+
+    if (*LIt != *RIt) {
+      break;
+    }
+
+    LIt++;
+    RIt++;
   }
-  return llvm::makeArrayRef(LHSCL).equals(RHS.CommandLine);
+
+  // If both iterator get to the end at the same time, the CL are compatible
+  bool Compatible = LIt == LEnd && RIt == REnd;
+  if (Compatible) {
+    vlog("{0} and {1} are compatible", LHS.Filename, RHS.Filename);
+  }
+  return Compatible;
 }
 
 } // namespace
