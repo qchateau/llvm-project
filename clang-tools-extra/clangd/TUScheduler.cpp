@@ -609,8 +609,8 @@ class ASTWorker {
   ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
             TUScheduler::ASTCache &LRUCache,
             TUScheduler::HeaderIncluderCache &HeaderIncluders,
-            TUScheduler::PreambleStore &Preambles,
-            Semaphore &Barrier, bool RunSync, const TUScheduler::Options &Opts,
+            TUScheduler::PreambleStore &Preambles, Semaphore &Barrier,
+            bool RunSync, const TUScheduler::Options &Opts,
             ParsingCallbacks &Callbacks);
 
 public:
@@ -623,9 +623,9 @@ public:
   create(PathRef FileName, const GlobalCompilationDatabase &CDB,
          TUScheduler::ASTCache &IdleASTs,
          TUScheduler::HeaderIncluderCache &HeaderIncluders,
-         TUScheduler::PreambleStore &Preambles,
-         AsyncTaskRunner *Tasks, Semaphore &Barrier,
-         const TUScheduler::Options &Opts, ParsingCallbacks &Callbacks);
+         TUScheduler::PreambleStore &Preambles, AsyncTaskRunner *Tasks,
+         Semaphore &Barrier, const TUScheduler::Options &Opts,
+         ParsingCallbacks &Callbacks);
   ~ASTWorker();
 
   void update(ParseInputs Inputs, WantDiagnostics, bool ContentChanged);
@@ -844,11 +844,11 @@ ASTWorker::create(PathRef FileName, const GlobalCompilationDatabase &CDB,
 ASTWorker::ASTWorker(PathRef FileName, const GlobalCompilationDatabase &CDB,
                      TUScheduler::ASTCache &LRUCache,
                      TUScheduler::HeaderIncluderCache &HeaderIncluders,
-TUScheduler::PreambleStore &Preambles,
-                     Semaphore &Barrier, bool RunSync,
-                     const TUScheduler::Options &Opts,
+                     TUScheduler::PreambleStore &Preambles, Semaphore &Barrier,
+                     bool RunSync, const TUScheduler::Options &Opts,
                      ParsingCallbacks &Callbacks)
-    : IdleASTs(LRUCache), HeaderIncluders(HeaderIncluders), Preambles(Preambles), RunSync(RunSync),
+    : IdleASTs(LRUCache), HeaderIncluders(HeaderIncluders),
+      Preambles(Preambles), RunSync(RunSync),
       UpdateDebounce(Opts.UpdateDebounce), FileName(FileName),
       ContextProvider(Opts.ContextProvider), CDB(CDB), Callbacks(Callbacks),
       Barrier(Barrier), Done(false), Status(FileName, Callbacks),
