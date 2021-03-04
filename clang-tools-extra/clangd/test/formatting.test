@@ -8,19 +8,6 @@
 # CHECK-NEXT:  "jsonrpc": "2.0",
 # CHECK-NEXT:  "result": [
 # CHECK-NEXT:    {
-# CHECK-NEXT:      "newText": "\n  ",
-# CHECK-NEXT:      "range": {
-# CHECK-NEXT:        "end": {
-# CHECK-NEXT:          "character": 4,
-# CHECK-NEXT:          "line": 1
-# CHECK-NEXT:        },
-# CHECK-NEXT:        "start": {
-# CHECK-NEXT:          "character": 19,
-# CHECK-NEXT:          "line": 0
-# CHECK-NEXT:        }
-# CHECK-NEXT:      }
-# CHECK-NEXT:    },
-# CHECK-NEXT:    {
 # CHECK-NEXT:      "newText": " ",
 # CHECK-NEXT:      "range": {
 # CHECK-NEXT:        "end": {
@@ -42,19 +29,6 @@
 # CHECK-NEXT:        },
 # CHECK-NEXT:        "start": {
 # CHECK-NEXT:          "character": 10,
-# CHECK-NEXT:          "line": 1
-# CHECK-NEXT:        }
-# CHECK-NEXT:      }
-# CHECK-NEXT:    },
-# CHECK-NEXT:    {
-# CHECK-NEXT:      "newText": "\n  ",
-# CHECK-NEXT:      "range": {
-# CHECK-NEXT:        "end": {
-# CHECK-NEXT:          "character": 4,
-# CHECK-NEXT:          "line": 2
-# CHECK-NEXT:        },
-# CHECK-NEXT:        "start": {
-# CHECK-NEXT:          "character": 12,
 # CHECK-NEXT:          "line": 1
 # CHECK-NEXT:        }
 # CHECK-NEXT:      }

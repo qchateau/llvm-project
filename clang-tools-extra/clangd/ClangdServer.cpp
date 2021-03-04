@@ -423,10 +423,24 @@ void ClangdServer::formatFile(PathRef File, llvm::Optional<Range> Rng,
     if (!Changed)
       return CB(Changed.takeError());
 
-    CB(IncludeReplaces.merge(format::reformat(
+    auto Replacements = IncludeReplaces.merge(format::reformat(
         Style, *Changed,
         tooling::calculateRangesAfterReplacements(IncludeReplaces, Ranges),
-        File)));
+        File));
+    clang::tooling::Replacements ReplacementsInRange;
+    for (const auto &Repl : Replacements) {
+      tooling::Range ReplRange{
+          Repl.getOffset(),
+          std::max<unsigned int>(Repl.getLength(),
+                                 Repl.getReplacementText().size()),
+      };
+      if (ReplRange.overlapsWith(Ranges.front())) {
+        if (auto Err = ReplacementsInRange.add(Repl)) {
+          CB(std::move(Err));
+        }
+      }
+    }
+    CB(ReplacementsInRange);
   };
   WorkScheduler->runQuick("Format", File, std::move(Action));
 }
