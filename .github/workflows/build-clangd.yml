@@ -3,14 +3,14 @@ name: Build latest clangd
 on:
   push:
     branches:
-      - 'clangd-*'
+      - 'release/clangd-*'
 
 jobs:
   build_clangd:
     strategy:
       fail-fast: false
       matrix:
-        docker-image: ["ubuntu-1804", "centos-7"]
+        docker-image: ["ubuntu-2004", "centos-7"]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -19,24 +19,44 @@ jobs:
           path: llvm-project
           fetch-depth: 1
 
-      - name: Build docker image
+      - name: Extract branch name
         run: |
-          cd $GITHUB_WORKSPACE/llvm-project/.github/images/
-          docker build --file ${{ matrix.docker-image }}.dockerfile --tag clangd-image .
+          echo "::set-output name=tracked_branch::(echo ${GITHUB_REF#refs/heads/release/})"
+          echo "::set-output name=this_branch::(echo ${GITHUB_REF#refs/heads/})"
+        id: branches
 
-      - name: Build clangd
-        run: |
-          mkdir out
-          docker run \
-            -v $GITHUB_WORKSPACE/llvm-project:/tmp/llvm-project/ \
-            -v $GITHUB_WORKSPACE/out:/tmp/out/ \
-            clangd-image /build.sh /tmp/llvm-project/ /tmp/out/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v2
+      - name: Merge tracked branch
+        uses: devmasx/merge-branch@v1.3.1
         with:
-          name: clangd-${{ matrix.docker-image }}
-          path: out/clangd
+          type: now
+          from_branch: ${{ steps.branches.outputs.tracked_branch }}
+          target_branch: ${{ steps.branches.outputs.this_branch }}
+          github_token: ${{ github.token }}
+
+      # - name: Build docker image
+      #   run: |
+      #     cd $GITHUB_WORKSPACE/llvm-project/.github/images/
+      #     docker build --file ${{ matrix.docker-image }}.dockerfile --tag clangd-image .
+
+      # - name: Build clangd
+      #   run: |
+      #     mkdir out
+      #     docker run \
+      #       -v $GITHUB_WORKSPACE/llvm-project:/tmp/llvm-project/ \
+      #       -v $GITHUB_WORKSPACE/out:/tmp/out/ \
+      #       clangd-image /build.sh /tmp/llvm-project/ /tmp/out/
+
+      # - name: Upload artifact
+      #   uses: actions/upload-artifact@v2
+      #   with:
+      #     name: clangd-${{ matrix.docker-image }}
+      #     path: out/clangd
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ github.token }}
+          branch: ${{ github.ref }}
 
   release_clangd:
     if: github.ref == 'refs/heads/clangd-release'
