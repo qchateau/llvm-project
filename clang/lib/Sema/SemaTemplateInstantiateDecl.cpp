@@ -9,6 +9,7 @@
 //
 //===----------------------------------------------------------------------===/
 
+#include "TreeTransform.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTMutationListener.h"
@@ -1097,7 +1098,7 @@ Decl *TemplateDeclInstantiator::VisitVarDecl(VarDecl *D,
       llvm_unreachable("Unknown context type");
 
     // This is the last chance we have of checking copy elision eligibility
-    // for functions in depdendent contexts. The sema actions for building
+    // for functions in dependent contexts. The sema actions for building
     // the return statement during template instantiation will have no effect
     // regarding copy elision, since NRVO propagation runs on the scope exit
     // actions, and these are not run on instantiation.
@@ -1825,9 +1826,16 @@ Decl *TemplateDeclInstantiator::VisitCXXRecordDecl(CXXRecordDecl *D) {
     PrevDecl = cast<CXXRecordDecl>(Prev);
   }
 
-  CXXRecordDecl *Record = CXXRecordDecl::Create(
-      SemaRef.Context, D->getTagKind(), Owner, D->getBeginLoc(),
-      D->getLocation(), D->getIdentifier(), PrevDecl);
+  CXXRecordDecl *Record = nullptr;
+  if (D->isLambda())
+    Record = CXXRecordDecl::CreateLambda(
+        SemaRef.Context, Owner, D->getLambdaTypeInfo(), D->getLocation(),
+        D->isDependentLambda(), D->isGenericLambda(),
+        D->getLambdaCaptureDefault());
+  else
+    Record = CXXRecordDecl::Create(SemaRef.Context, D->getTagKind(), Owner,
+                                   D->getBeginLoc(), D->getLocation(),
+                                   D->getIdentifier(), PrevDecl);
 
   // Substitute the nested name specifier, if any.
   if (SubstQualifier(D, Record))
@@ -2306,6 +2314,20 @@ Decl *TemplateDeclInstantiator::VisitCXXMethodDecl(
   if (InstantiatedExplicitSpecifier.isInvalid())
     return nullptr;
 
+  // Implicit destructors/constructors created for local classes in
+  // DeclareImplicit* (see SemaDeclCXX.cpp) might not have an associated TSI.
+  // Unfortunately there isn't enough context in those functions to
+  // conditionally populate the TSI without breaking non-template related use
+  // cases. Populate TSIs prior to calling SubstFunctionType to make sure we get
+  // a proper transformation.
+  if (cast<CXXRecordDecl>(D->getParent())->isLambda() &&
+      !D->getTypeSourceInfo() &&
+      isa<CXXConstructorDecl, CXXDestructorDecl>(D)) {
+    TypeSourceInfo *TSI =
+        SemaRef.Context.getTrivialTypeSourceInfo(D->getType());
+    D->setTypeSourceInfo(TSI);
+  }
+
   SmallVector<ParmVarDecl *, 4> Params;
   TypeSourceInfo *TInfo = SubstFunctionType(D, Params);
   if (!TInfo)
@@ -2395,6 +2417,9 @@ Decl *TemplateDeclInstantiator::VisitCXXMethodDecl(
         Destructor->isInlineSpecified(), false, Destructor->getConstexprKind(),
         TrailingRequiresClause);
     Method->setRangeEnd(Destructor->getEndLoc());
+    Method->setDeclName(SemaRef.Context.DeclarationNames.getCXXDestructorName(
+        SemaRef.Context.getCanonicalType(
+            SemaRef.Context.getTypeDeclType(Record))));
   } else if (CXXConversionDecl *Conversion = dyn_cast<CXXConversionDecl>(D)) {
     Method = CXXConversionDecl::Create(
         SemaRef.Context, Record, StartLoc, NameInfo, T, TInfo,
@@ -4910,16 +4935,85 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
   // Introduce a new scope where local variable instantiations will be
   // recorded, unless we're actually a member function within a local
   // class, in which case we need to merge our results with the parent
-  // scope (of the enclosing function).
+  // scope (of the enclosing function). The exception is instantiating
+  // a function template specialization, since the template to be
+  // instantiated already has references to locals properly substituted.
   bool MergeWithParentScope = false;
   if (CXXRecordDecl *Rec = dyn_cast<CXXRecordDecl>(Function->getDeclContext()))
-    MergeWithParentScope = Rec->isLocalClass();
+    MergeWithParentScope =
+        Rec->isLocalClass() && !Function->isFunctionTemplateSpecialization();
 
   LocalInstantiationScope Scope(*this, MergeWithParentScope);
+  auto RebuildTypeSourceInfoForDefaultSpecialMembers = [&]() {
+    // Special members might get their TypeSourceInfo set up w.r.t the
+    // PatternDecl context, in which case parameters could still be pointing
+    // back to the original class, make sure arguments are bound to the
+    // instantiated record instead.
+    assert(PatternDecl->isDefaulted() &&
+           "Special member needs to be defaulted");
+    auto PatternSM = getDefaultedFunctionKind(PatternDecl).asSpecialMember();
+    if (!(PatternSM == Sema::CXXCopyConstructor ||
+          PatternSM == Sema::CXXCopyAssignment ||
+          PatternSM == Sema::CXXMoveConstructor ||
+          PatternSM == Sema::CXXMoveAssignment))
+      return;
 
-  if (PatternDecl->isDefaulted())
+    auto *NewRec = dyn_cast<CXXRecordDecl>(Function->getDeclContext());
+    const auto *PatternRec =
+        dyn_cast<CXXRecordDecl>(PatternDecl->getDeclContext());
+    if (!NewRec || !PatternRec)
+      return;
+    if (!PatternRec->isLambda())
+      return;
+
+    struct SpecialMemberTypeInfoRebuilder
+        : TreeTransform<SpecialMemberTypeInfoRebuilder> {
+      using Base = TreeTransform<SpecialMemberTypeInfoRebuilder>;
+      const CXXRecordDecl *OldDecl;
+      CXXRecordDecl *NewDecl;
+
+      SpecialMemberTypeInfoRebuilder(Sema &SemaRef, const CXXRecordDecl *O,
+                                     CXXRecordDecl *N)
+          : TreeTransform(SemaRef), OldDecl(O), NewDecl(N) {}
+
+      bool TransformExceptionSpec(SourceLocation Loc,
+                                  FunctionProtoType::ExceptionSpecInfo &ESI,
+                                  SmallVectorImpl<QualType> &Exceptions,
+                                  bool &Changed) {
+        return false;
+      }
+
+      QualType TransformRecordType(TypeLocBuilder &TLB, RecordTypeLoc TL) {
+        const RecordType *T = TL.getTypePtr();
+        RecordDecl *Record = cast_or_null<RecordDecl>(
+            getDerived().TransformDecl(TL.getNameLoc(), T->getDecl()));
+        if (Record != OldDecl)
+          return Base::TransformRecordType(TLB, TL);
+
+        QualType Result = getDerived().RebuildRecordType(NewDecl);
+        if (Result.isNull())
+          return QualType();
+
+        RecordTypeLoc NewTL = TLB.push<RecordTypeLoc>(Result);
+        NewTL.setNameLoc(TL.getNameLoc());
+        return Result;
+      }
+    } IR{*this, PatternRec, NewRec};
+
+    TypeSourceInfo *NewSI = IR.TransformType(Function->getTypeSourceInfo());
+    Function->setType(NewSI->getType());
+    Function->setTypeSourceInfo(NewSI);
+
+    ParmVarDecl *Parm = Function->getParamDecl(0);
+    TypeSourceInfo *NewParmSI = IR.TransformType(Parm->getTypeSourceInfo());
+    Parm->setType(NewParmSI->getType());
+    Parm->setTypeSourceInfo(NewParmSI);
+  };
+
+  if (PatternDecl->isDefaulted()) {
+    RebuildTypeSourceInfoForDefaultSpecialMembers();
     SetDeclDefaulted(Function, PatternDecl->getLocation());
-  else {
+  } else {
     MultiLevelTemplateArgumentList TemplateArgs =
       getTemplateInstantiationArgs(Function, nullptr, false, PatternDecl);
 

@@ -484,8 +484,25 @@ ParsedType Sema::getDestructorTypeForDecltype(const DeclSpec &DS,
 }
 
 bool Sema::checkLiteralOperatorId(const CXXScopeSpec &SS,
-                                  const UnqualifiedId &Name) {
+                                  const UnqualifiedId &Name, bool IsUDSuffix) {
   assert(Name.getKind() == UnqualifiedIdKind::IK_LiteralOperatorId);
+  if (!IsUDSuffix) {
+    // [over.literal] p8
+    //
+    // double operator""_Bq(long double);  // OK: not a reserved identifier
+    // double operator"" _Bq(long double); // ill-formed, no diagnostic required
+    IdentifierInfo *II = Name.Identifier;
+    ReservedIdentifierStatus Status = II->isReserved(PP.getLangOpts());
+    SourceLocation Loc = Name.getEndLoc();
+    if (Status != ReservedIdentifierStatus::NotReserved &&
+        !PP.getSourceManager().isInSystemHeader(Loc)) {
+      Diag(Loc, diag::warn_reserved_extern_symbol)
+          << II << static_cast<int>(Status)
+          << FixItHint::CreateReplacement(
+                 Name.getSourceRange(),
+                 (StringRef("operator\"\"") + II->getName()).str());
+    }
+  }
 
   if (!SS.isValid())
     return false;
@@ -3894,7 +3911,7 @@ ExprResult Sema::CheckConditionVariable(VarDecl *ConditionVar,
 
 /// CheckCXXBooleanCondition - Returns true if a conversion to bool is invalid.
 ExprResult Sema::CheckCXXBooleanCondition(Expr *CondExpr, bool IsConstexpr) {
-  // C++ 6.4p4:
+  // C++11 6.4p4:
   // The value of a condition that is an initialized declaration in a statement
   // other than a switch statement is the value of the declared variable
   // implicitly converted to type bool. If that conversion is ill-formed, the
@@ -3902,12 +3919,22 @@ ExprResult Sema::CheckCXXBooleanCondition(Expr *CondExpr, bool IsConstexpr) {
   // The value of a condition that is an expression is the value of the
   // expression, implicitly converted to bool.
   //
+  // C++2b 8.5.2p2
+  // If the if statement is of the form if constexpr, the value of the condition
+  // is contextually converted to bool and the converted expression shall be
+  // a constant expression.
+  //
+
+  ExprResult E = PerformContextuallyConvertToBool(CondExpr);
+  if (!IsConstexpr || E.isInvalid() || E.get()->isValueDependent())
+    return E;
+
   // FIXME: Return this value to the caller so they don't need to recompute it.
-  llvm::APSInt Value(/*BitWidth*/1);
-  return (IsConstexpr && !CondExpr->isValueDependent())
-             ? CheckConvertedConstantExpression(CondExpr, Context.BoolTy, Value,
-                                                CCEK_ConstexprIf)
-             : PerformContextuallyConvertToBool(CondExpr);
+  llvm::APSInt Cond;
+  E = VerifyIntegerConstantExpression(
+      E.get(), &Cond,
+      diag::err_constexpr_if_condition_expression_is_not_constant);
+  return E;
 }
 
 /// Helper function to determine whether this is the (deprecated) C++
@@ -7769,7 +7796,7 @@ ExprResult Sema::BuildCXXMemberCallExpr(Expr *E, NamedDecl *FoundDecl,
                         Method->getType()->castAs<FunctionProtoType>()))
     return ExprError();
 
-  return CE;
+  return CheckForImmediateInvocation(CE, CE->getMethodDecl());
 }
 
 ExprResult Sema::BuildCXXNoexceptExpr(SourceLocation KeyLoc, Expr *Operand,
@@ -7808,11 +7835,15 @@ static void MaybeDecrementCount(
     Expr *E, llvm::DenseMap<const VarDecl *, int> &RefsMinusAssignments) {
   DeclRefExpr *LHS = nullptr;
   if (BinaryOperator *BO = dyn_cast<BinaryOperator>(E)) {
-    if (!BO->isAssignmentOp())
+    if (BO->getLHS()->getType()->isDependentType() ||
+        BO->getRHS()->getType()->isDependentType()) {
+      if (BO->getOpcode() != BO_Assign)
+        return;
+    } else if (!BO->isAssignmentOp())
       return;
     LHS = dyn_cast<DeclRefExpr>(BO->getLHS());
   } else if (CXXOperatorCallExpr *COCE = dyn_cast<CXXOperatorCallExpr>(E)) {
-    if (!COCE->isAssignmentOp())
+    if (COCE->getOperator() != OO_Equal)
       return;
     LHS = dyn_cast<DeclRefExpr>(COCE->getArg(0));
   }
@@ -8322,6 +8353,7 @@ class TransformTypos : public TreeTransform<TransformTypos> {
 
         AmbiguousTypoExprs.remove(TE);
         SemaRef.getTypoExprState(TE).Consumer->restoreSavedPosition();
+        TransformCache[TE] = SavedTransformCache[TE];
       }
       TransformCache = std::move(SavedTransformCache);
     }

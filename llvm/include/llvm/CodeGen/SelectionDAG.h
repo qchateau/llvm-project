@@ -837,6 +837,10 @@ public:
   ///   <0, Step, Step * 2, Step * 3, ...>
   SDValue getStepVector(const SDLoc &DL, EVT ResVT, SDValue Step);
 
+  /// Returns a vector of type ResVT whose elements contain the linear sequence
+  ///   <0, 1, 2, 3, ...>
+  SDValue getStepVector(const SDLoc &DL, EVT ResVT);
+
   /// Returns an ISD::VECTOR_SHUFFLE node semantically equivalent to
   /// the shuffle node in input but with swapped operands.
   ///
@@ -1316,10 +1320,10 @@ public:
   SDValue getIndexedMaskedStore(SDValue OrigStore, const SDLoc &dl,
                                 SDValue Base, SDValue Offset,
                                 ISD::MemIndexedMode AM);
-  SDValue getMaskedGather(SDVTList VTs, EVT VT, const SDLoc &dl,
+  SDValue getMaskedGather(SDVTList VTs, EVT MemVT, const SDLoc &dl,
                           ArrayRef<SDValue> Ops, MachineMemOperand *MMO,
                           ISD::MemIndexType IndexType, ISD::LoadExtType ExtTy);
-  SDValue getMaskedScatter(SDVTList VTs, EVT VT, const SDLoc &dl,
+  SDValue getMaskedScatter(SDVTList VTs, EVT MemVT, const SDLoc &dl,
                            ArrayRef<SDValue> Ops, MachineMemOperand *MMO,
                            ISD::MemIndexType IndexType,
                            bool IsTruncating = false);

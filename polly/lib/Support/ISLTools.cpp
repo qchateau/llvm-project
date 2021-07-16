@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Support/ISLTools.h"
+#include "polly/Support/GICHelper.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <vector>
@@ -165,7 +166,7 @@ isl_size polly::getNumScatterDims(const isl::union_map &Schedule) {
     if (Map.is_null())
       continue;
 
-    Dims = std::max(Dims, Map.dim(isl::dim::out));
+    Dims = std::max(Dims, Map.range_tuple_dim());
   }
   return Dims;
 }
@@ -213,7 +214,7 @@ isl::union_map polly::reverseDomain(const isl::union_map &UMap) {
 }
 
 isl::set polly::shiftDim(isl::set Set, int Pos, int Amount) {
-  int NumDims = Set.dim(isl::dim::set);
+  int NumDims = Set.tuple_dim();
   if (Pos < 0)
     Pos = NumDims + Pos;
   assert(Pos < NumDims && "Dimension index must be in range");
@@ -228,7 +229,7 @@ isl::union_set polly::shiftDim(isl::union_set USet, int Pos, int Amount) {
   isl::union_set Result = isl::union_set::empty(USet.get_space());
   for (isl::set Set : USet.get_set_list()) {
     isl::set Shifted = shiftDim(Set, Pos, Amount);
-    Result = Result.add_set(Shifted);
+    Result = Result.unite(Shifted);
   }
   return Result;
 }
@@ -547,7 +548,7 @@ isl::val polly::getConstant(isl::pw_aff PwAff, bool Max, bool Min) {
         // TODO: If Min/Max, we can also determine a minimum/maximum value if
         // Set is constant-bounded.
         if (!Aff.is_cst()) {
-          Result = isl::val::nan(Aff.get_ctx());
+          Result = isl::val::nan(Aff.ctx());
           return isl::stat::error();
         }
 
@@ -571,7 +572,7 @@ isl::val polly::getConstant(isl::pw_aff PwAff, bool Max, bool Min) {
         }
 
         // Not compatible
-        Result = isl::val::nan(Aff.get_ctx());
+        Result = isl::val::nan(Aff.ctx());
         return isl::stat::error();
       });
 
@@ -760,9 +761,9 @@ static void printSortedPolyhedra(isl::union_set USet, llvm::raw_ostream &OS,
   for (const isl::basic_set &BSet : BSets) {
     std::string Str;
     if (IsMap)
-      Str = isl::map(BSet.unwrap()).to_str();
+      Str = stringFromIslObj(isl::map(BSet.unwrap()));
     else
-      Str = isl::set(BSet).to_str();
+      Str = stringFromIslObj(isl::set(BSet));
     size_t OpenPos = Str.find_first_of('{');
     assert(OpenPos != std::string::npos);
     size_t ClosePos = Str.find_last_of('}');
@@ -826,7 +827,7 @@ static isl::union_set expand(const isl::union_set &USet) {
   isl::union_set Expanded = isl::union_set::empty(USet.get_space());
   for (isl::set Set : USet.get_set_list()) {
     isl::set SetExpanded = expand(Set);
-    Expanded = Expanded.add_set(SetExpanded);
+    Expanded = Expanded.unite(SetExpanded);
   }
   return Expanded;
 }

@@ -730,6 +730,12 @@ let Command = "process status" in {
     Desc<"Show verbose process status including extended crash information.">;
 }
 
+let Command = "process save_core" in {
+  def process_save_core_style : Option<"style", "s">, Group<1>,
+    EnumArg<"SaveCoreStyle", "SaveCoreStyles()">, Desc<"Request a specific style "
+    "of corefile to be saved.">;
+}
+
 let Command = "script import" in {
   def script_import_allow_reload : Option<"allow-reload", "r">, Group<1>,
     Desc<"Allow the script to be loaded even if it was already loaded before. "
@@ -739,6 +745,8 @@ let Command = "script import" in {
     Group<1>, Desc<"Resolve non-absolute paths relative to the location of the "
     "current command file. This argument can only be used when the command is "
     "being sourced from a file.">;
+  def silent : Option<"silent", "s">, Group<1>,
+    Desc<"If true don't print any script output while importing.">;
 }
 
 let Command = "script add" in {

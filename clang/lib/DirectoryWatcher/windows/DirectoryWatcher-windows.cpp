@@ -115,9 +115,6 @@ DirectoryWatcherWindows::DirectoryWatcherWindows(
   HandlerThread = std::thread([this, WaitForInitialSync]() {
     this->NotifierThreadProc(WaitForInitialSync);
   });
-
-  std::unique_lock<std::mutex> lock(Mutex);
-  Ready.wait(lock, [this] { return this->WatcherActive; });
 }
 
 DirectoryWatcherWindows::~DirectoryWatcherWindows() {
@@ -130,16 +127,13 @@ DirectoryWatcherWindows::~DirectoryWatcherWindows() {
 }
 
 void DirectoryWatcherWindows::InitialScan() {
+  std::unique_lock<std::mutex> lock(Mutex);
+  Ready.wait(lock, [this] { return this->WatcherActive; });
+
   Callback(getAsFileEvents(scanDirectory(Path.data())), /*IsInitial=*/true);
 }
 
 void DirectoryWatcherWindows::WatcherThreadProc(HANDLE DirectoryHandle) {
-  {
-    std::unique_lock<std::mutex> lock(Mutex);
-    WatcherActive = true;
-  }
-  Ready.notify_one();
-
   while (true) {
     // We do not guarantee subdirectories, but macOS already provides
     // subdirectories, might as well as ...
@@ -159,6 +153,12 @@ void DirectoryWatcherWindows::WatcherThreadProc(HANDLE DirectoryHandle) {
                 "");
       break;
     }
+
+    if (!WatcherActive) {
+      std::unique_lock<std::mutex> lock(Mutex);
+      WatcherActive = true;
+    }
+    Ready.notify_one();
 
     HANDLE Handles[2] = { Terminate, Overlapped.hEvent };
     switch (WaitForMultipleObjects(2, Handles, FALSE, INFINITE)) {

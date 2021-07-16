@@ -117,13 +117,6 @@ static const uint64_t kPS4CPU_ShadowOffset64 = 1ULL << 40;
 static const uint64_t kWindowsShadowOffset32 = 3ULL << 28;
 static const uint64_t kEmscriptenShadowOffset = 0;
 
-static const uint64_t kMyriadShadowScale = 5;
-static const uint64_t kMyriadMemoryOffset32 = 0x80000000ULL;
-static const uint64_t kMyriadMemorySize32 = 0x20000000ULL;
-static const uint64_t kMyriadTagShift = 29;
-static const uint64_t kMyriadDDRTag = 4;
-static const uint64_t kMyriadCacheBitMask32 = 0x40000000ULL;
-
 // The shadow memory space is dynamically allocated.
 static const uint64_t kWindowsShadowOffset64 = kDynamicShadowSentinel;
 
@@ -469,17 +462,12 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
   bool IsRISCV64 = TargetTriple.getArch() == Triple::riscv64;
   bool IsWindows = TargetTriple.isOSWindows();
   bool IsFuchsia = TargetTriple.isOSFuchsia();
-  bool IsMyriad = TargetTriple.getVendor() == llvm::Triple::Myriad;
   bool IsEmscripten = TargetTriple.isOSEmscripten();
   bool IsAMDGPU = TargetTriple.isAMDGPU();
 
-  // Asan support for AMDGPU assumes X86 as the host right now.
-  if (IsAMDGPU)
-    IsX86_64 = true;
-
   ShadowMapping Mapping;
 
-  Mapping.Scale = IsMyriad ? kMyriadShadowScale : kDefaultShadowScale;
+  Mapping.Scale = kDefaultShadowScale;
   if (ClMappingScale.getNumOccurrences() > 0) {
     Mapping.Scale = ClMappingScale;
   }
@@ -499,11 +487,6 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
       Mapping.Offset = kWindowsShadowOffset32;
     else if (IsEmscripten)
       Mapping.Offset = kEmscriptenShadowOffset;
-    else if (IsMyriad) {
-      uint64_t ShadowOffset = (kMyriadMemoryOffset32 + kMyriadMemorySize32 -
-                               (kMyriadMemorySize32 >> Mapping.Scale));
-      Mapping.Offset = ShadowOffset - (kMyriadMemoryOffset32 >> Mapping.Scale);
-    }
     else
       Mapping.Offset = kDefaultShadowOffset32;
   } else {  // LongSize == 64
@@ -545,6 +528,9 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
       Mapping.Offset = kAArch64_ShadowOffset64;
     else if (IsRISCV64)
       Mapping.Offset = kRISCV64_ShadowOffset64;
+    else if (IsAMDGPU)
+      Mapping.Offset = (kSmallX86_64ShadowOffsetBase &
+                        (kSmallX86_64ShadowOffsetAlignMask << Mapping.Scale));
     else
       Mapping.Offset = kDefaultShadowOffset64;
   }
@@ -1747,8 +1733,6 @@ void AddressSanitizer::instrumentAddress(Instruction *OrigIns,
                                          uint32_t TypeSize, bool IsWrite,
                                          Value *SizeArgument, bool UseCalls,
                                          uint32_t Exp) {
-  bool IsMyriad = TargetTriple.getVendor() == llvm::Triple::Myriad;
-
   if (TargetTriple.isAMDGPU()) {
     InsertBefore = instrumentAMDGPUAddress(OrigIns, InsertBefore, Addr,
                                            TypeSize, IsWrite, SizeArgument);
@@ -1768,24 +1752,6 @@ void AddressSanitizer::instrumentAddress(Instruction *OrigIns,
       IRB.CreateCall(AsanMemoryAccessCallback[IsWrite][1][AccessSizeIndex],
                      {AddrLong, ConstantInt::get(IRB.getInt32Ty(), Exp)});
     return;
-  }
-
-  if (IsMyriad) {
-    // Strip the cache bit and do range check.
-    // AddrLong &= ~kMyriadCacheBitMask32
-    AddrLong = IRB.CreateAnd(AddrLong, ~kMyriadCacheBitMask32);
-    // Tag = AddrLong >> kMyriadTagShift
-    Value *Tag = IRB.CreateLShr(AddrLong, kMyriadTagShift);
-    // Tag == kMyriadDDRTag
-    Value *TagCheck =
-        IRB.CreateICmpEQ(Tag, ConstantInt::get(IntptrTy, kMyriadDDRTag));
-
-    Instruction *TagCheckTerm =
-        SplitBlockAndInsertIfThen(TagCheck, InsertBefore, false,
-                                  MDBuilder(*C).createBranchWeights(1, 100000));
-    assert(cast<BranchInst>(TagCheckTerm)->isUnconditional());
-    IRB.SetInsertPoint(TagCheckTerm);
-    InsertBefore = TagCheckTerm;
   }
 
   Type *ShadowTy =

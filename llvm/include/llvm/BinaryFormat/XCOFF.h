@@ -19,6 +19,7 @@
 namespace llvm {
 class StringRef;
 template <unsigned> class SmallString;
+template <typename T> class Expected;
 
 namespace XCOFF {
 
@@ -286,7 +287,14 @@ enum SymbolAuxType : uint8_t {
 
 StringRef getMappingClassString(XCOFF::StorageMappingClass SMC);
 StringRef getRelocationTypeString(XCOFF::RelocationType Type);
-SmallString<32> parseParmsType(uint32_t Value, unsigned ParmsNum);
+Expected<SmallString<32>> parseParmsType(uint32_t Value, unsigned FixedParmsNum,
+                                         unsigned FloatingParmsNum);
+Expected<SmallString<32>> parseParmsTypeWithVecInfo(uint32_t Value,
+                                                    unsigned FixedParmsNum,
+                                                    unsigned FloatingParmsNum,
+                                                    unsigned VectorParmsNum);
+Expected<SmallString<32>> parseVectorParmsType(uint32_t Value,
+                                               unsigned ParmsNum);
 
 struct TracebackTable {
   enum LanguageID : uint8_t {
@@ -342,8 +350,8 @@ struct TracebackTable {
   static constexpr uint32_t FPRSavedShift = 24;
 
   // Byte 6
-  static constexpr uint32_t HasVectorInfoMask = 0x0080'0000;
-  static constexpr uint32_t HasExtensionTableMask = 0x0040'0000;
+  static constexpr uint32_t HasExtensionTableMask = 0x0080'0000;
+  static constexpr uint32_t HasVectorInfoMask = 0x0040'0000;
   static constexpr uint32_t GPRSavedMask = 0x003F'0000;
   static constexpr uint32_t GPRSavedShift = 16;
 
@@ -381,6 +389,8 @@ struct TracebackTable {
   static constexpr uint32_t ParmTypeIsVectorShortBit = 0x4000'0000;
   static constexpr uint32_t ParmTypeIsVectorIntBit = 0x8000'0000;
   static constexpr uint32_t ParmTypeIsVectorFloatBit = 0xC000'0000;
+
+  static constexpr uint8_t WidthOfParamType = 2;
 };
 
 // Extended Traceback table flags.

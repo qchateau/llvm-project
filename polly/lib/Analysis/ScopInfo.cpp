@@ -172,7 +172,7 @@ static cl::list<std::string> IslArgs("polly-isl-arg",
 static isl::set addRangeBoundsToSet(isl::set S, const ConstantRange &Range,
                                     int dim, isl::dim type) {
   isl::val V;
-  isl::ctx Ctx = S.get_ctx();
+  isl::ctx Ctx = S.ctx();
 
   // The upper and lower bound for a parameter value is derived either from
   // the data type of the parameter or from the - possibly more restrictive -
@@ -253,7 +253,7 @@ ScopArrayInfo::ScopArrayInfo(Value *BasePtr, Type *ElementType, isl::ctx Ctx,
 ScopArrayInfo::~ScopArrayInfo() = default;
 
 isl::space ScopArrayInfo::getSpace() const {
-  auto Space = isl::space(Id.get_ctx(), 0, getNumberOfDimensions());
+  auto Space = isl::space(Id.ctx(), 0, getNumberOfDimensions());
   Space = Space.set_tuple_id(isl::dim::set, Id);
   return Space;
 }
@@ -418,7 +418,7 @@ const ScopArrayInfo *ScopArrayInfo::getFromId(isl::id Id) {
 void MemoryAccess::wrapConstantDimensions() {
   auto *SAI = getScopArrayInfo();
   isl::space ArraySpace = SAI->getSpace();
-  isl::ctx Ctx = ArraySpace.get_ctx();
+  isl::ctx Ctx = ArraySpace.ctx();
   unsigned DimsArray = SAI->getNumberOfDimensions();
 
   isl::multi_aff DivModAff = isl::multi_aff::identity(
@@ -471,7 +471,7 @@ void MemoryAccess::updateDimensionality() {
   auto *SAI = getScopArrayInfo();
   isl::space ArraySpace = SAI->getSpace();
   isl::space AccessSpace = AccessRelation.get_space().range();
-  isl::ctx Ctx = ArraySpace.get_ctx();
+  isl::ctx Ctx = ArraySpace.ctx();
 
   auto DimsArray = ArraySpace.dim(isl::dim::set);
   auto DimsAccess = AccessSpace.dim(isl::dim::set);
@@ -618,7 +618,7 @@ isl::map MemoryAccess::getOriginalAccessRelation() const {
 }
 
 std::string MemoryAccess::getOriginalAccessRelationStr() const {
-  return AccessRelation.to_str();
+  return stringFromIslObj(AccessRelation);
 }
 
 isl::space MemoryAccess::getOriginalAccessRelationSpace() const {
@@ -630,11 +630,11 @@ isl::map MemoryAccess::getNewAccessRelation() const {
 }
 
 std::string MemoryAccess::getNewAccessRelationStr() const {
-  return NewAccessRelation.to_str();
+  return stringFromIslObj(NewAccessRelation);
 }
 
 std::string MemoryAccess::getAccessRelationStr() const {
-  return getAccessRelation().to_str();
+  return stringFromIslObj(getAccessRelation());
 }
 
 isl::basic_map MemoryAccess::createBasicAccessMap(ScopStmt *Statement) {
@@ -845,7 +845,7 @@ void MemoryAccess::buildAccessRelation(const ScopArrayInfo *SAI) {
   isl::set StmtInvalidDomain = getStatement()->getInvalidDomain();
   InvalidDomain = isl::set::empty(StmtInvalidDomain.get_space());
 
-  isl::ctx Ctx = Id.get_ctx();
+  isl::ctx Ctx = Id.ctx();
   isl::id BaseAddrId = SAI->getBasePtrId();
 
   if (getAccessInstruction() && isa<MemIntrinsic>(getAccessInstruction())) {
@@ -1006,7 +1006,7 @@ isl::pw_aff MemoryAccess::getPwAff(const SCEV *E) {
 static isl::map getEqualAndLarger(isl::space SetDomain) {
   isl::space Space = SetDomain.map_from_set();
   isl::map Map = isl::map::universe(Space);
-  unsigned lastDimension = Map.dim(isl::dim::in) - 1;
+  unsigned lastDimension = Map.domain_tuple_dim() - 1;
 
   // Set all but the last dimension to be equal for the input and output
   //
@@ -1046,10 +1046,9 @@ bool MemoryAccess::isStrideX(isl::map Schedule, int StrideWidth) const {
 
   Stride = getStride(Schedule);
   StrideX = isl::set::universe(Stride.get_space());
-  for (auto i : seq<isl_size>(0, StrideX.dim(isl::dim::set) - 1))
+  for (auto i : seq<isl_size>(0, StrideX.tuple_dim() - 1))
     StrideX = StrideX.fix_si(isl::dim::set, i, 0);
-  StrideX = StrideX.fix_si(isl::dim::set, StrideX.dim(isl::dim::set) - 1,
-                           StrideWidth);
+  StrideX = StrideX.fix_si(isl::dim::set, StrideX.tuple_dim() - 1, StrideWidth);
   IsStrideX = Stride.is_subset(StrideX);
 
   return IsStrideX;
@@ -1233,15 +1232,10 @@ ScopStmt::ScopStmt(Scop &parent, isl::map SourceRel, isl::map TargetRel,
 
 ScopStmt::~ScopStmt() = default;
 
-std::string ScopStmt::getDomainStr() const { return Domain.to_str(); }
+std::string ScopStmt::getDomainStr() const { return stringFromIslObj(Domain); }
 
 std::string ScopStmt::getScheduleStr() const {
-  auto *S = getSchedule().release();
-  if (!S)
-    return {};
-  auto Str = stringFromIslObj(S);
-  isl_map_free(S);
-  return Str;
+  return stringFromIslObj(getSchedule());
 }
 
 void ScopStmt::setInvalidDomain(isl::set ID) { InvalidDomain = ID; }
@@ -1892,15 +1886,17 @@ ScopArrayInfo *Scop::getScopArrayInfo(Value *BasePtr, MemoryKind Kind) {
   return SAI;
 }
 
-std::string Scop::getContextStr() const { return getContext().to_str(); }
+std::string Scop::getContextStr() const {
+  return stringFromIslObj(getContext());
+}
 
 std::string Scop::getAssumedContextStr() const {
   assert(!AssumedContext.is_null() && "Assumed context not yet built");
-  return AssumedContext.to_str();
+  return stringFromIslObj(AssumedContext);
 }
 
 std::string Scop::getInvalidContextStr() const {
-  return InvalidContext.to_str();
+  return stringFromIslObj(InvalidContext);
 }
 
 std::string Scop::getNameStr() const {
@@ -2103,7 +2099,7 @@ bool Scop::trackAssumption(AssumptionKind Kind, isl::set Set, DebugLoc Loc,
   }
 
   auto Suffix = Sign == AS_ASSUMPTION ? " assumption:\t" : " restriction:\t";
-  std::string Msg = toString(Kind) + Suffix + Set.to_str();
+  std::string Msg = toString(Kind) + Suffix + stringFromIslObj(Set);
   if (BB)
     ORE.emit(OptimizationRemarkAnalysis(DEBUG_TYPE, "AssumpRestrict", Loc, BB)
              << Msg);

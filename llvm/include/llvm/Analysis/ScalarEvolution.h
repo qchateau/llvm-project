@@ -633,9 +633,25 @@ public:
   const SCEV *getNotSCEV(const SCEV *V);
 
   /// Return LHS-RHS.  Minus is represented in SCEV as A+B*-1.
+  ///
+  /// If the LHS and RHS are pointers which don't share a common base
+  /// (according to getPointerBase()), this returns a SCEVCouldNotCompute.
+  /// To compute the difference between two unrelated pointers, you can
+  /// explicitly convert the arguments using getPtrToIntExpr(), for pointer
+  /// types that support it.
   const SCEV *getMinusSCEV(const SCEV *LHS, const SCEV *RHS,
                            SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap,
                            unsigned Depth = 0);
+
+  /// Compute ceil(N / D). N and D are treated as unsigned values.
+  ///
+  /// Since SCEV doesn't have native ceiling division, this generates a
+  /// SCEV expression of the following form:
+  ///
+  /// umin(N, 1) + floor((N - umin(N, 1)) / D)
+  ///
+  /// A denominator of zero or poison is handled the same way as getUDivExpr().
+  const SCEV *getUDivCeilSCEV(const SCEV *N, const SCEV *D);
 
   /// Return a SCEV corresponding to a conversion of the input value to the
   /// specified type.  If the type must be extended, it is zero extended.

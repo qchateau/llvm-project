@@ -264,9 +264,11 @@ class Preprocessor {
   /// avoid tearing the Lexer and etc. down).
   bool IncrementalProcessing = false;
 
+public:
   /// The kind of translation unit we are processing.
-  TranslationUnitKind TUKind;
+  const TranslationUnitKind TUKind;
 
+private:
   /// The code-completion handler.
   CodeCompletionHandler *CodeComplete = nullptr;
 
@@ -2365,7 +2367,7 @@ private:
 
 public:
   void HandlePragmaOnce(Token &OnceTok);
-  void HandlePragmaMark();
+  void HandlePragmaMark(Token &MarkTok);
   void HandlePragmaPoison();
   void HandlePragmaSystemHeader(Token &SysHeaderTok);
   void HandlePragmaDependency(Token &DependencyTok);

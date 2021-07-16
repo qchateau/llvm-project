@@ -1,10 +1,20 @@
-// RUN: %check_clang_tidy %s performance-unnecessary-copy-initialization %t
+// RUN: %check_clang_tidy -std=c++17 %s performance-unnecessary-copy-initialization %t
+
+template <typename T>
+struct Iterator {
+  void operator++();
+  const T &operator*() const;
+  bool operator!=(const Iterator &) const;
+  typedef const T &const_reference;
+};
 
 struct ExpensiveToCopyType {
   ExpensiveToCopyType();
   virtual ~ExpensiveToCopyType();
   const ExpensiveToCopyType &reference() const;
   const ExpensiveToCopyType *pointer() const;
+  Iterator<ExpensiveToCopyType> begin() const;
+  Iterator<ExpensiveToCopyType> end() const;
   void nonConstMethod();
   bool constMethod() const;
 };
@@ -586,6 +596,66 @@ void positiveUnusedReferenceIsRemoved() {
   // CHECK-FIXES: int i = 0; // Foo bar.
   auto TrailingCommentRemoved = ExpensiveTypeReference(); // Trailing comment.
   // CHECK-MESSAGES: [[@LINE-1]]:8: warning: the variable 'TrailingCommentRemoved' is copy-constructed from a const reference but is never used;
-  // CHECK-FIXES-NOT: auto TrailingCommentRemoved = ExpensiveTypeReference(); // Trailing comment.
+  // CHECK-FIXES-NOT: auto TrailingCommentRemoved = ExpensiveTypeReference();
+  // CHECK-FIXES-NOT: // Trailing comment.
   // clang-format on
+
+  auto UnusedAndUnnecessary = ExpensiveTypeReference();
+  // Comments on a new line should not be deleted.
+  // CHECK-MESSAGES: [[@LINE-2]]:8: warning: the variable 'UnusedAndUnnecessary' is copy-constructed
+  // CHECK-FIXES-NOT: auto UnusedAndUnnecessary = ExpensiveTypeReference();
+  // CHECK-FIXES: // Comments on a new line should not be deleted.
+}
+
+void negativeloopedOverObjectIsModified() {
+  ExpensiveToCopyType Orig;
+  for (const auto &Element : Orig) {
+    const auto Copy = Element;
+    Orig.nonConstMethod();
+    Copy.constMethod();
+  }
+
+  auto Lambda = []() {
+    ExpensiveToCopyType Orig;
+    for (const auto &Element : Orig) {
+      const auto Copy = Element;
+      Orig.nonConstMethod();
+      Copy.constMethod();
+    }
+  };
+}
+
+void negativeReferenceIsInitializedOutsideOfBlock() {
+  ExpensiveToCopyType Orig;
+  const auto &E2 = Orig;
+  if (1 != 2 * 3) {
+    const auto C2 = E2;
+    Orig.nonConstMethod();
+    C2.constMethod();
+  }
+
+  auto Lambda = []() {
+    ExpensiveToCopyType Orig;
+    const auto &E2 = Orig;
+    if (1 != 2 * 3) {
+      const auto C2 = E2;
+      Orig.nonConstMethod();
+      C2.constMethod();
+    }
+  };
+}
+
+void negativeStructuredBinding() {
+  // Structured bindings are not yet supported but can trigger false positives
+  // since the DecompositionDecl itself is unused and the check doesn't traverse
+  // VarDecls of the BindingDecls.
+  struct Pair {
+    ExpensiveToCopyType first;
+    ExpensiveToCopyType second;
+  };
+
+  Pair P;
+  const auto [C, D] = P;
+  C.constMethod();
+  D.constMethod();
 }

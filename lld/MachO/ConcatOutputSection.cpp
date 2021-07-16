@@ -17,8 +17,7 @@
 #include "lld/Common/Memory.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/ScopedPrinter.h"
-
-#include <algorithm>
+#include "llvm/Support/TimeProfiler.h"
 
 using namespace llvm;
 using namespace llvm::MachO;
@@ -28,10 +27,10 @@ using namespace lld::macho;
 void ConcatOutputSection::addInput(ConcatInputSection *input) {
   if (inputs.empty()) {
     align = input->align;
-    flags = input->flags;
+    flags = input->getFlags();
   } else {
     align = std::max(align, input->align);
-    mergeFlags(input);
+    finalizeFlags(input);
   }
   inputs.push_back(input);
   input->parent = this;
@@ -192,7 +191,6 @@ void ConcatOutputSection::finalize() {
     isecAddr = alignTo(isecAddr, isec->align);
     isecFileOff = alignTo(isecFileOff, isec->align);
     isec->outSecOff = isecAddr - addr;
-    isec->outSecFileOff = isecFileOff - fileOff;
     isec->isFinal = true;
     isecAddr += isec->getSize();
     isecFileOff += isec->getFileSize();
@@ -243,6 +241,8 @@ void ConcatOutputSection::finalize() {
     }
     // Process relocs by ascending address, i.e., ascending offset within isec
     std::vector<Reloc> &relocs = isec->relocs;
+    // FIXME: This property does not hold for object files produced by ld64's
+    // `-r` mode.
     assert(is_sorted(relocs,
                      [](Reloc &a, Reloc &b) { return a.offset > b.offset; }));
     for (Reloc &r : reverse(relocs)) {
@@ -290,7 +290,8 @@ void ConcatOutputSection::finalize() {
         // unfinalized inputs[finalIdx].
         fatal(Twine(__FUNCTION__) + ": FIXME: thunk range overrun");
       }
-      thunkInfo.isec = make<ConcatInputSection>(isec->segname, isec->name);
+      thunkInfo.isec =
+          make<ConcatInputSection>(isec->getSegName(), isec->getName());
       thunkInfo.isec->parent = this;
       StringRef thunkName = saver.save(funcSym->getName() + ".thunk." +
                                        std::to_string(thunkInfo.sequence++));
@@ -323,38 +324,36 @@ void ConcatOutputSection::writeTo(uint8_t *buf) const {
   while (i < ie || t < te) {
     while (i < ie && (t == te || inputs[i]->getSize() == 0 ||
                       inputs[i]->outSecOff < thunks[t]->outSecOff)) {
-      inputs[i]->writeTo(buf + inputs[i]->outSecFileOff);
+      inputs[i]->writeTo(buf + inputs[i]->outSecOff);
       ++i;
     }
     while (t < te && (i == ie || thunks[t]->outSecOff < inputs[i]->outSecOff)) {
-      thunks[t]->writeTo(buf + thunks[t]->outSecFileOff);
+      thunks[t]->writeTo(buf + thunks[t]->outSecOff);
       ++t;
     }
   }
 }
 
-// TODO: this is most likely wrong; reconsider how section flags
-// are actually merged. The logic presented here was written without
-// any form of informed research.
-void ConcatOutputSection::mergeFlags(InputSection *input) {
-  uint8_t baseType = sectionType(flags);
-  uint8_t inputType = sectionType(input->flags);
-  if (baseType != inputType)
-    error("Cannot merge section " + input->name + " (type=0x" +
-          to_hexString(inputType) + ") into " + name + " (type=0x" +
-          to_hexString(baseType) + "): inconsistent types");
-
-  constexpr uint32_t strictFlags = S_ATTR_DEBUG | S_ATTR_STRIP_STATIC_SYMS |
-                                   S_ATTR_NO_DEAD_STRIP | S_ATTR_LIVE_SUPPORT;
-  if ((input->flags ^ flags) & strictFlags)
-    error("Cannot merge section " + input->name + " (flags=0x" +
-          to_hexString(input->flags) + ") into " + name + " (flags=0x" +
-          to_hexString(flags) + "): strict flags differ");
-
-  // Negate pure instruction presence if any section isn't pure.
-  uint32_t pureMask = ~S_ATTR_PURE_INSTRUCTIONS | (input->flags & flags);
-
-  // Merge the rest
-  flags |= input->flags;
-  flags &= pureMask;
+void ConcatOutputSection::finalizeFlags(InputSection *input) {
+  switch (sectionType(input->getFlags())) {
+  default /*type-unspec'ed*/:
+    // FIXME: Add additional logics here when supporting emitting obj files.
+    break;
+  case S_4BYTE_LITERALS:
+  case S_8BYTE_LITERALS:
+  case S_16BYTE_LITERALS:
+  case S_CSTRING_LITERALS:
+  case S_ZEROFILL:
+  case S_LAZY_SYMBOL_POINTERS:
+  case S_MOD_TERM_FUNC_POINTERS:
+  case S_THREAD_LOCAL_REGULAR:
+  case S_THREAD_LOCAL_ZEROFILL:
+  case S_THREAD_LOCAL_VARIABLES:
+  case S_THREAD_LOCAL_INIT_FUNCTION_POINTERS:
+  case S_THREAD_LOCAL_VARIABLE_POINTERS:
+  case S_NON_LAZY_SYMBOL_POINTERS:
+  case S_SYMBOL_STUBS:
+    flags |= input->getFlags();
+    break;
+  }
 }

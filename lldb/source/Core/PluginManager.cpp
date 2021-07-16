@@ -38,7 +38,7 @@ typedef bool (*PluginInitCallback)();
 typedef void (*PluginTermCallback)();
 
 struct PluginInfo {
-  PluginInfo() {}
+  PluginInfo() = default;
 
   llvm::sys::DynamicLibrary library;
   PluginInitCallback plugin_init_callback = nullptr;
@@ -684,11 +684,13 @@ PluginManager::GetObjectFileCreateMemoryCallbackForPluginName(
 }
 
 Status PluginManager::SaveCore(const lldb::ProcessSP &process_sp,
-                               const FileSpec &outfile) {
+                               const FileSpec &outfile,
+                               lldb::SaveCoreStyle &core_style) {
   Status error;
   auto &instances = GetObjectFileInstances().GetInstances();
   for (auto &instance : instances) {
-    if (instance.save_core && instance.save_core(process_sp, outfile, error))
+    if (instance.save_core &&
+        instance.save_core(process_sp, outfile, core_style, error))
       return error;
   }
   error.SetErrorString(

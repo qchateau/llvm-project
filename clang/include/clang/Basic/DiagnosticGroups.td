@@ -525,6 +525,7 @@ def OpenCLUnsupportedRGBA: DiagGroup<"opencl-unsupported-rgba">;
 def UnderalignedExceptionObject : DiagGroup<"underaligned-exception-object">;
 def DeprecatedObjCIsaUsage : DiagGroup<"deprecated-objc-isa-usage">;
 def ExplicitInitializeCall : DiagGroup<"explicit-initialize-call">;
+def OrderedCompareFunctionPointers : DiagGroup<"ordered-compare-function-pointers">;
 def Packed : DiagGroup<"packed">;
 def Padded : DiagGroup<"padded">;
 
@@ -1185,14 +1186,19 @@ def OpenMPClauses : DiagGroup<"openmp-clauses">;
 def OpenMPLoopForm : DiagGroup<"openmp-loop-form">;
 def OpenMPMapping : DiagGroup<"openmp-mapping">;
 def OpenMPTarget : DiagGroup<"openmp-target", [OpenMPMapping]>;
+def OpenMPPre51Compat : DiagGroup<"pre-openmp-51-compat">;
+def OpenMP51Ext : DiagGroup<"openmp-51-extensions">;
 def OpenMP : DiagGroup<"openmp", [
-    SourceUsesOpenMP, OpenMPClauses, OpenMPLoopForm, OpenMPTarget, OpenMPMapping
+    SourceUsesOpenMP, OpenMPClauses, OpenMPLoopForm, OpenMPTarget,
+    OpenMPMapping, OpenMP51Ext
   ]>;
 
 // Backend warnings.
 def BackendInlineAsm : DiagGroup<"inline-asm">;
 def BackendSourceMgr : DiagGroup<"source-mgr">;
-def BackendFrameLargerThanEQ : DiagGroup<"frame-larger-than=">;
+def BackendFrameLargerThan : DiagGroup<"frame-larger-than">;
+// Compatibility flag name from old versions of Clang.
+def : DiagGroup<"frame-larger-than=", [BackendFrameLargerThan]>;
 def BackendPlugin : DiagGroup<"backend-plugin">;
 def RemarkBackendPlugin : DiagGroup<"remark-backend-plugin">;
 def BackendOptimizationRemark : DiagGroup<"pass">;

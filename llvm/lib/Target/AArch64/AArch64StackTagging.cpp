@@ -520,24 +520,6 @@ void AArch64StackTagging::alignAndPadAlloca(AllocaInfo &Info) {
   Info.AI = NewAI;
 }
 
-// Helper function to check for post-dominance.
-static bool postDominates(const PostDominatorTree *PDT, const IntrinsicInst *A,
-                          const IntrinsicInst *B) {
-  const BasicBlock *ABB = A->getParent();
-  const BasicBlock *BBB = B->getParent();
-
-  if (ABB != BBB)
-    return PDT->dominates(ABB, BBB);
-
-  for (const Instruction &I : *ABB) {
-    if (&I == B)
-      return true;
-    if (&I == A)
-      return false;
-  }
-  llvm_unreachable("Corrupt instruction list");
-}
-
 // FIXME: check for MTE extension
 bool AArch64StackTagging::runOnFunction(Function &Fn) {
   if (!Fn.hasFnAttribute(Attribute::SanitizeMemTag))
@@ -566,7 +548,9 @@ bool AArch64StackTagging::runOnFunction(Function &Fn) {
       if (auto *DVI = dyn_cast<DbgVariableIntrinsic>(I)) {
         for (Value *V : DVI->location_ops())
           if (auto *AI = dyn_cast_or_null<AllocaInst>(V))
-            Allocas[AI].DbgVariableIntrinsics.push_back(DVI);
+            if (Allocas[AI].DbgVariableIntrinsics.empty() ||
+                Allocas[AI].DbgVariableIntrinsics.back() != DVI)
+              Allocas[AI].DbgVariableIntrinsics.push_back(DVI);
         continue;
       }
 
@@ -666,7 +650,7 @@ bool AArch64StackTagging::runOnFunction(Function &Fn) {
       tagAlloca(AI, Start->getNextNode(), Start->getArgOperand(1), Size);
       // We need to ensure that if we tag some object, we certainly untag it
       // before the function exits.
-      if (PDT != nullptr && postDominates(PDT, End, Start)) {
+      if (PDT != nullptr && PDT->dominates(End, Start)) {
         untagAlloca(AI, End, Size);
       } else {
         SmallVector<Instruction *, 8> ReachableRetVec;

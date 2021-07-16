@@ -424,6 +424,9 @@ public:
   // This function returns string table entry.
   Expected<StringRef> getStringTableEntry(uint32_t Offset) const;
 
+  // This function returns the string table.
+  StringRef getStringTable() const;
+
   const XCOFF::SymbolAuxType *getSymbolAuxType(uintptr_t AuxEntryAddress) const;
 
   static uintptr_t getAdvancedSymbolEntryAddress(uintptr_t CurrentAddress,
@@ -538,20 +541,19 @@ private:
 };
 
 class TBVectorExt {
-  friend class XCOFFTracebackTable;
-
   uint16_t Data;
-  uint32_t VecParmsInfo;
+  SmallString<32> VecParmsInfo;
 
-  TBVectorExt(StringRef TBvectorStrRef);
+  TBVectorExt(StringRef TBvectorStrRef, Error &Err);
 
 public:
+  static Expected<TBVectorExt> create(StringRef TBvectorStrRef);
   uint8_t getNumberOfVRSaved() const;
   bool isVRSavedOnStack() const;
   bool hasVarArgs() const;
   uint8_t getNumberOfVectorParms() const;
   bool hasVMXInstruction() const;
-  SmallString<32> getVectorParmsInfoString() const;
+  SmallString<32> getVectorParmsInfo() const { return VecParmsInfo; };
 };
 
 /// This class provides methods to extract traceback table data from a buffer.

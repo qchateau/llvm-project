@@ -906,7 +906,7 @@ public:
     _LIBCPP_INLINE_VISIBILITY
     constexpr
     const value_type&
-    operator*() const&
+    operator*() const& noexcept
     {
         _LIBCPP_ASSERT(this->has_value(), "optional operator* called on a disengaged value");
         return this->__get();
@@ -915,7 +915,7 @@ public:
     _LIBCPP_INLINE_VISIBILITY
     constexpr
     value_type&
-    operator*() &
+    operator*() & noexcept
     {
         _LIBCPP_ASSERT(this->has_value(), "optional operator* called on a disengaged value");
         return this->__get();
@@ -924,7 +924,7 @@ public:
     _LIBCPP_INLINE_VISIBILITY
     constexpr
     value_type&&
-    operator*() &&
+    operator*() && noexcept
     {
         _LIBCPP_ASSERT(this->has_value(), "optional operator* called on a disengaged value");
         return _VSTD::move(this->__get());
@@ -933,7 +933,7 @@ public:
     _LIBCPP_INLINE_VISIBILITY
     constexpr
     const value_type&&
-    operator*() const&&
+    operator*() const&& noexcept
     {
         _LIBCPP_ASSERT(this->has_value(), "optional operator* called on a disengaged value");
         return _VSTD::move(this->__get());
@@ -1407,11 +1407,13 @@ struct _LIBCPP_TEMPLATE_VIS hash<
     __enable_hash_helper<optional<_Tp>, remove_const_t<_Tp>>
 >
 {
-    typedef optional<_Tp> argument_type;
-    typedef size_t        result_type;
+#if _LIBCPP_STD_VER <= 17 || defined(_LIBCPP_ENABLE_CXX20_REMOVED_BINDER_TYPEDEFS)
+    _LIBCPP_DEPRECATED_IN_CXX17 typedef optional<_Tp> argument_type;
+    _LIBCPP_DEPRECATED_IN_CXX17 typedef size_t        result_type;
+#endif
 
     _LIBCPP_INLINE_VISIBILITY
-    result_type operator()(const argument_type& __opt) const
+    size_t operator()(const optional<_Tp>& __opt) const
     {
         return static_cast<bool>(__opt) ? hash<remove_const_t<_Tp>>()(*__opt) : 0;
     }
