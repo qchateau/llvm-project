@@ -110,6 +110,19 @@ public:
   }
 };
 
+static constexpr OptionEnumValueElement g_follow_fork_mode_values[] = {
+    {
+        eFollowParent,
+        "parent",
+        "Continue tracing the parent process and detach the child.",
+    },
+    {
+        eFollowChild,
+        "child",
+        "Trace the child process and detach the parent.",
+    },
+};
+
 #define LLDB_PROPERTIES_process
 #include "TargetProperties.inc"
 
@@ -332,6 +345,12 @@ void ProcessProperties::SetOSPluginReportsAllThreads(bool does_report) {
   if (exp_values)
     exp_values->SetPropertyAtIndexAsBoolean(
         nullptr, ePropertyOSPluginReportsAllThreads, does_report);
+}
+
+FollowForkMode ProcessProperties::GetFollowForkMode() const {
+  const uint32_t idx = ePropertyFollowForkMode;
+  return (FollowForkMode)m_collection_sp->GetPropertyAtIndexAsEnumeration(
+      nullptr, idx, g_process_properties[idx].default_uint_value);
 }
 
 ProcessSP Process::FindPlugin(lldb::TargetSP target_sp,
@@ -777,13 +796,30 @@ bool Process::HandleProcessStateChangedEvent(const EventSP &event_sp,
         ThreadSP curr_thread(thread_list.GetSelectedThread());
         ThreadSP thread;
         StopReason curr_thread_stop_reason = eStopReasonInvalid;
-        if (curr_thread) {
+        bool prefer_curr_thread = false;
+        if (curr_thread && curr_thread->IsValid()) {
           curr_thread_stop_reason = curr_thread->GetStopReason();
+          switch (curr_thread_stop_reason) {
+          case eStopReasonNone:
+          case eStopReasonInvalid:
+            // Don't prefer the current thread if it didn't stop for a reason.
+            break;
+          case eStopReasonSignal: {
+            // We need to do the same computation we do for other threads
+            // below in case the current thread happens to be the one that
+            // stopped for the no-stop signal.
+            uint64_t signo = curr_thread->GetStopInfo()->GetValue();
+            if (process_sp->GetUnixSignals()->GetShouldStop(signo))
+              prefer_curr_thread = true;
+          } break;
+          default:
+            prefer_curr_thread = true;
+            break;
+          }
           curr_thread_stop_info_sp = curr_thread->GetStopInfo();
         }
-        if (!curr_thread || !curr_thread->IsValid() ||
-            curr_thread_stop_reason == eStopReasonInvalid ||
-            curr_thread_stop_reason == eStopReasonNone) {
+
+        if (!prefer_curr_thread) {
           // Prefer a thread that has just completed its plan over another
           // thread as current thread.
           ThreadSP plan_thread;
@@ -3228,7 +3264,7 @@ Status Process::DestroyImpl(bool force_kill) {
       error = StopForDestroyOrDetach(exit_event_sp);
     }
 
-    if (m_public_state.GetValue() != eStateRunning) {
+    if (m_public_state.GetValue() == eStateStopped) {
       // Ditch all thread plans, and remove all our breakpoints: in case we
       // have to restart the target to kill it, we don't want it hitting a
       // breakpoint... Only do this if we've stopped, however, since if we
@@ -4293,8 +4329,8 @@ public:
       : IOHandler(process->GetTarget().GetDebugger(),
                   IOHandler::Type::ProcessIO),
         m_process(process),
-        m_read_file(GetInputFD(), File::eOpenOptionRead, false),
-        m_write_file(write_fd, File::eOpenOptionWrite, false) {
+        m_read_file(GetInputFD(), File::eOpenOptionReadOnly, false),
+        m_write_file(write_fd, File::eOpenOptionWriteOnly, false) {
     m_pipe.CreateNew(false);
   }
 
@@ -6067,8 +6103,7 @@ bool Process::CallVoidArgVoidPtrReturn(const Address *address,
   return false;
 }
 
-llvm::Expected<const MemoryTagManager *>
-Process::GetMemoryTagManager(lldb::addr_t addr, lldb::addr_t end_addr) {
+llvm::Expected<const MemoryTagManager *> Process::GetMemoryTagManager() {
   Architecture *arch = GetTarget().GetArchitecturePlugin();
   const MemoryTagManager *tag_manager =
       arch ? arch->GetMemoryTagManager() : nullptr;
@@ -6084,66 +6119,40 @@ Process::GetMemoryTagManager(lldb::addr_t addr, lldb::addr_t end_addr) {
                                    "Process does not support memory tagging");
   }
 
-  ptrdiff_t len = tag_manager->AddressDiff(end_addr, addr);
-  if (len <= 0) {
-    return llvm::createStringError(
-        llvm::inconvertibleErrorCode(),
-        "End address (0x%" PRIx64
-        ") must be greater than the start address (0x%" PRIx64 ")",
-        end_addr, addr);
-  }
-
-  // Region lookup is not address size aware so mask the address
-  MemoryRegionInfo::RangeType tag_range(tag_manager->RemoveNonAddressBits(addr),
-                                        len);
-  tag_range = tag_manager->ExpandToGranule(tag_range);
-
-  // Make a copy so we can use the original range in errors
-  MemoryRegionInfo::RangeType remaining_range(tag_range);
-
-  // While we haven't found a matching memory region for some of the range
-  while (remaining_range.IsValid()) {
-    MemoryRegionInfo region;
-    Status status = GetMemoryRegionInfo(remaining_range.GetRangeBase(), region);
-
-    if (status.Fail() || region.GetMemoryTagged() != MemoryRegionInfo::eYes) {
-      return llvm::createStringError(
-          llvm::inconvertibleErrorCode(),
-          "Address range 0x%lx:0x%lx is not in a memory tagged region",
-          tag_range.GetRangeBase(), tag_range.GetRangeEnd());
-    }
-
-    if (region.GetRange().GetRangeEnd() >= remaining_range.GetRangeEnd()) {
-      // We've found a region for the whole range or the last piece of a range
-      remaining_range.SetByteSize(0);
-    } else {
-      // We've found some part of the range, look for the rest
-      remaining_range.SetRangeBase(region.GetRange().GetRangeEnd());
-    }
-  }
-
   return tag_manager;
 }
 
 llvm::Expected<std::vector<lldb::addr_t>>
-Process::ReadMemoryTags(const MemoryTagManager *tag_manager, lldb::addr_t addr,
-                        size_t len) {
-  if (!tag_manager) {
-    return llvm::createStringError(
-        llvm::inconvertibleErrorCode(),
-        "A memory tag manager is required for reading memory tags.");
-  }
+Process::ReadMemoryTags(lldb::addr_t addr, size_t len) {
+  llvm::Expected<const MemoryTagManager *> tag_manager_or_err =
+      GetMemoryTagManager();
+  if (!tag_manager_or_err)
+    return tag_manager_or_err.takeError();
 
-  MemoryTagManager::TagRange range(tag_manager->RemoveNonAddressBits(addr),
-                                   len);
-  range = tag_manager->ExpandToGranule(range);
-
+  const MemoryTagManager *tag_manager = *tag_manager_or_err;
   llvm::Expected<std::vector<uint8_t>> tag_data =
-      DoReadMemoryTags(range.GetRangeBase(), range.GetByteSize(),
-                       tag_manager->GetAllocationTagType());
+      DoReadMemoryTags(addr, len, tag_manager->GetAllocationTagType());
   if (!tag_data)
     return tag_data.takeError();
 
-  return tag_manager->UnpackTagsData(
-      *tag_data, range.GetByteSize() / tag_manager->GetGranuleSize());
+  return tag_manager->UnpackTagsData(*tag_data,
+                                     len / tag_manager->GetGranuleSize());
+}
+
+Status Process::WriteMemoryTags(lldb::addr_t addr, size_t len,
+                                const std::vector<lldb::addr_t> &tags) {
+  llvm::Expected<const MemoryTagManager *> tag_manager_or_err =
+      GetMemoryTagManager();
+  if (!tag_manager_or_err)
+    return Status(tag_manager_or_err.takeError());
+
+  const MemoryTagManager *tag_manager = *tag_manager_or_err;
+  llvm::Expected<std::vector<uint8_t>> packed_tags =
+      tag_manager->PackTags(tags);
+  if (!packed_tags) {
+    return Status(packed_tags.takeError());
+  }
+
+  return DoWriteMemoryTags(addr, len, tag_manager->GetAllocationTagType(),
+                           *packed_tags);
 }

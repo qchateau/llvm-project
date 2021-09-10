@@ -33,41 +33,15 @@ namespace orc {
 
 namespace orcrpctpc {
 
-enum WireProtectionFlags : uint8_t {
-  WPF_None = 0,
-  WPF_Read = 1U << 0,
-  WPF_Write = 1U << 1,
-  WPF_Exec = 1U << 2,
-  LLVM_MARK_AS_BITMASK_ENUM(WPF_Exec)
+struct ExecutorProcessInfo {
+  std::string Triple;
+  unsigned PageSize;
+  JITTargetAddress DispatchFuncAddr;
+  JITTargetAddress DispatchCtxAddr;
 };
 
-/// Convert from sys::Memory::ProtectionFlags
-inline WireProtectionFlags
-toWireProtectionFlags(sys::Memory::ProtectionFlags PF) {
-  WireProtectionFlags WPF = WPF_None;
-  if (PF & sys::Memory::MF_READ)
-    WPF |= WPF_Read;
-  if (PF & sys::Memory::MF_WRITE)
-    WPF |= WPF_Write;
-  if (PF & sys::Memory::MF_EXEC)
-    WPF |= WPF_Exec;
-  return WPF;
-}
-
-inline sys::Memory::ProtectionFlags
-fromWireProtectionFlags(WireProtectionFlags WPF) {
-  int PF = 0;
-  if (WPF & WPF_Read)
-    PF |= sys::Memory::MF_READ;
-  if (WPF & WPF_Write)
-    PF |= sys::Memory::MF_WRITE;
-  if (WPF & WPF_Exec)
-    PF |= sys::Memory::MF_EXEC;
-  return static_cast<sys::Memory::ProtectionFlags>(PF);
-}
-
 struct ReserveMemRequestElement {
-  WireProtectionFlags Prot = WPF_None;
+  tpctypes::WireProtectionFlags Prot = tpctypes::WPF_None;
   uint64_t Size = 0;
   uint64_t Alignment = 0;
 };
@@ -75,7 +49,7 @@ struct ReserveMemRequestElement {
 using ReserveMemRequest = std::vector<ReserveMemRequestElement>;
 
 struct ReserveMemResultElement {
-  WireProtectionFlags Prot = WPF_None;
+  tpctypes::WireProtectionFlags Prot = tpctypes::WPF_None;
   JITTargetAddress Address = 0;
   uint64_t AllocatedSize = 0;
 };
@@ -83,7 +57,7 @@ struct ReserveMemResultElement {
 using ReserveMemResult = std::vector<ReserveMemResultElement>;
 
 struct ReleaseOrFinalizeMemRequestElement {
-  WireProtectionFlags Prot = WPF_None;
+  tpctypes::WireProtectionFlags Prot = tpctypes::WPF_None;
   JITTargetAddress Address = 0;
   uint64_t Size = 0;
 };
@@ -94,6 +68,40 @@ using ReleaseOrFinalizeMemRequest =
 } // end namespace orcrpctpc
 
 namespace shared {
+
+template <> class SerializationTypeName<WrapperFunctionResult> {
+public:
+  static const char *getName() { return "WrapperFunctionResult"; }
+};
+
+template <typename ChannelT>
+class SerializationTraits<
+    ChannelT, WrapperFunctionResult, WrapperFunctionResult,
+    std::enable_if_t<std::is_base_of<RawByteChannel, ChannelT>::value>> {
+public:
+  static Error serialize(ChannelT &C, const WrapperFunctionResult &E) {
+    if (auto Err = serializeSeq(C, static_cast<uint64_t>(E.size())))
+      return Err;
+    if (E.size() == 0)
+      return Error::success();
+    return C.appendBytes(E.data(), E.size());
+  }
+
+  static Error deserialize(ChannelT &C, WrapperFunctionResult &E) {
+    uint64_t Size;
+    if (auto Err = deserializeSeq(C, Size))
+      return Err;
+
+    auto Tmp = WrapperFunctionResult::allocate(Size);
+
+    if (auto Err = C.readBytes(Tmp.data(), Tmp.size()))
+      return Err;
+
+    E = std::move(Tmp);
+
+    return Error::success();
+  }
+};
 
 template <> class SerializationTypeName<tpctypes::UInt8Write> {
 public:
@@ -136,9 +144,9 @@ public:
   static const char *getName() { return "ReleaseOrFinalizeMemRequestElement"; }
 };
 
-template <> class SerializationTypeName<shared::WrapperFunctionResult> {
+template <> class SerializationTypeName<orcrpctpc::ExecutorProcessInfo> {
 public:
-  static const char *getName() { return "WrapperFunctionResult"; }
+  static const char *getName() { return "ExecutorProcessInfo"; }
 };
 
 template <typename ChannelT, typename WriteT>
@@ -234,26 +242,17 @@ public:
 };
 
 template <typename ChannelT>
-class SerializationTraits<
-    ChannelT, shared::WrapperFunctionResult, shared::WrapperFunctionResult,
-    std::enable_if_t<std::is_base_of<RawByteChannel, ChannelT>::value>> {
+class SerializationTraits<ChannelT, orcrpctpc::ExecutorProcessInfo> {
 public:
-  static Error serialize(ChannelT &C, const shared::WrapperFunctionResult &E) {
-    if (auto Err = serializeSeq(C, static_cast<uint64_t>(E.size())))
-      return Err;
-    if (E.size() == 0)
-      return Error::success();
-    return C.appendBytes(E.data(), E.size());
+  static Error serialize(ChannelT &C,
+                         const orcrpctpc::ExecutorProcessInfo &EPI) {
+    return serializeSeq(C, EPI.Triple, EPI.PageSize, EPI.DispatchFuncAddr,
+                        EPI.DispatchCtxAddr);
   }
 
-  static Error deserialize(ChannelT &C, shared::WrapperFunctionResult &E) {
-
-    uint64_t Size;
-    if (auto Err = deserializeSeq(C, Size))
-      return Err;
-
-    char *DataPtr = shared::WrapperFunctionResult::allocate(E, Size);
-    return C.readBytes(DataPtr, E.size());
+  static Error deserialize(ChannelT &C, orcrpctpc::ExecutorProcessInfo &EPI) {
+    return deserializeSeq(C, EPI.Triple, EPI.PageSize, EPI.DispatchFuncAddr,
+                          EPI.DispatchCtxAddr);
   }
 };
 
@@ -265,15 +264,11 @@ using RemoteSymbolLookupSet = std::vector<std::pair<std::string, bool>>;
 using RemoteLookupRequest =
     std::pair<tpctypes::DylibHandle, RemoteSymbolLookupSet>;
 
-class GetTargetTriple
-    : public shared::RPCFunction<GetTargetTriple, std::string()> {
+class GetExecutorProcessInfo
+    : public shared::RPCFunction<GetExecutorProcessInfo,
+                                 orcrpctpc::ExecutorProcessInfo()> {
 public:
-  static const char *getName() { return "GetTargetTriple"; }
-};
-
-class GetPageSize : public shared::RPCFunction<GetPageSize, uint64_t()> {
-public:
-  static const char *getName() { return "GetPageSize"; }
+  static const char *getName() { return "GetJITDispatchInfo"; }
 };
 
 class ReserveMem
@@ -349,7 +344,7 @@ public:
 
 class RunMain
     : public shared::RPCFunction<RunMain,
-                                 int32_t(JITTargetAddress MainAddr,
+                                 int64_t(JITTargetAddress MainAddr,
                                          std::vector<std::string> Args)> {
 public:
   static const char *getName() { return "RunMain"; }
@@ -372,18 +367,18 @@ public:
 
 /// TargetProcessControl for a process connected via an ORC RPC Endpoint.
 template <typename RPCEndpointT> class OrcRPCTPCServer {
+private:
+  using ThisT = OrcRPCTPCServer<RPCEndpointT>;
+
 public:
   /// Create an OrcRPCTPCServer from the given endpoint.
   OrcRPCTPCServer(RPCEndpointT &EP) : EP(EP) {
-    using ThisT = OrcRPCTPCServer<RPCEndpointT>;
 
     TripleStr = sys::getProcessTriple();
     PageSize = sys::Process::getPageSizeEstimate();
 
-    EP.template addHandler<orcrpctpc::GetTargetTriple>(*this,
-                                                       &ThisT::getTargetTriple);
-    EP.template addHandler<orcrpctpc::GetPageSize>(*this, &ThisT::getPageSize);
-
+    EP.template addHandler<orcrpctpc::GetExecutorProcessInfo>(
+        *this, &ThisT::getExecutorProcessInfo);
     EP.template addHandler<orcrpctpc::ReserveMem>(*this, &ThisT::reserveMemory);
     EP.template addHandler<orcrpctpc::FinalizeMem>(*this,
                                                    &ThisT::finalizeMemory);
@@ -428,23 +423,40 @@ public:
     return Error::success();
   }
 
+  Expected<shared::WrapperFunctionResult>
+  runWrapperInJIT(JITTargetAddress FunctionId, ArrayRef<char> ArgBuffer) {
+    return EP.template callB<orcrpctpc::RunWrapper>(
+        FunctionId,
+        ArrayRef<uint8_t>(reinterpret_cast<const uint8_t *>(ArgBuffer.data()),
+                          ArgBuffer.size()));
+  }
+
 private:
-  std::string getTargetTriple() { return TripleStr; }
-  uint64_t getPageSize() { return PageSize; }
+  static shared::detail::CWrapperFunctionResult
+  jitDispatchViaOrcRPCTPCServer(void *Ctx, const void *FnTag, const char *Data,
+                                size_t Size) {
+    assert(Ctx && "Attempt to dispatch with null context ptr");
+    auto R = static_cast<ThisT *>(Ctx)->runWrapperInJIT(
+        pointerToJITTargetAddress(FnTag), {Data, Size});
+    if (!R) {
+      auto ErrMsg = toString(R.takeError());
+      return shared::WrapperFunctionResult::createOutOfBandError(ErrMsg.data())
+          .release();
+    }
+    return R->release();
+  }
+
+  orcrpctpc::ExecutorProcessInfo getExecutorProcessInfo() {
+    return {TripleStr, static_cast<uint32_t>(PageSize),
+            pointerToJITTargetAddress(jitDispatchViaOrcRPCTPCServer),
+            pointerToJITTargetAddress(this)};
+  }
 
   template <typename WriteT>
   static void handleWriteUInt(const std::vector<WriteT> &Ws) {
     using ValueT = decltype(std::declval<WriteT>().Value);
     for (auto &W : Ws)
       *jitTargetAddressToPointer<ValueT *>(W.Address) = W.Value;
-  }
-
-  std::string getProtStr(orcrpctpc::WireProtectionFlags WPF) {
-    std::string Result;
-    Result += (WPF & orcrpctpc::WPF_Read) ? 'R' : '-';
-    Result += (WPF & orcrpctpc::WPF_Write) ? 'W' : '-';
-    Result += (WPF & orcrpctpc::WPF_Exec) ? 'X' : '-';
-    return Result;
   }
 
   static void handleWriteBuffer(const std::vector<tpctypes::BufferWrite> &Ws) {
@@ -501,7 +513,7 @@ private:
     for (const auto &E : FMR) {
       sys::MemoryBlock MB(jitTargetAddressToPointer<void *>(E.Address), E.Size);
 
-      auto PF = orcrpctpc::fromWireProtectionFlags(E.Prot);
+      auto PF = tpctypes::fromWireProtectionFlags(E.Prot);
       if (auto EC =
               sys::Memory::protectMappedMemory(MB, static_cast<unsigned>(PF)))
         return make_error<StringError>("error protecting memory: " +
@@ -569,7 +581,7 @@ private:
     return Result;
   }
 
-  int32_t runMain(JITTargetAddress MainFnAddr,
+  int64_t runMain(JITTargetAddress MainFnAddr,
                   const std::vector<std::string> &Args) {
     Optional<StringRef> ProgramNameOverride;
     if (ProgramName)

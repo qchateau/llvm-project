@@ -255,11 +255,23 @@ protected:
           rewriter.getNamedAttr(function_like_impl::getArgDictAttrName(),
                                 rewriter.getArrayAttr(newArgAttrs)));
     }
+    for (auto pair : llvm::enumerate(attributes)) {
+      if (pair.value().first == "llvm.linkage") {
+        attributes.erase(attributes.begin() + pair.index());
+        break;
+      }
+    }
 
     // Create an LLVM function, use external linkage by default until MLIR
     // functions have linkage.
+    LLVM::Linkage linkage = LLVM::Linkage::External;
+    if (funcOp->hasAttr("llvm.linkage")) {
+      linkage = funcOp->getAttr("llvm.linkage")
+                    .cast<mlir::LLVM::LinkageAttr>()
+                    .getLinkage();
+    }
     auto newFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
-        funcOp.getLoc(), funcOp.getName(), llvmType, LLVM::Linkage::External,
+        funcOp.getLoc(), funcOp.getName(), llvmType, linkage,
         /*dsoLocal*/ false, attributes);
     rewriter.inlineRegionBefore(funcOp.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
@@ -309,6 +321,12 @@ struct BarePtrFuncOpConversion : public FuncOpConversionBase {
   LogicalResult
   matchAndRewrite(FuncOp funcOp, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
+
+    // TODO: bare ptr conversion could be handled by argument materialization
+    // and most of the code below would go away. But to do this, we would need a
+    // way to distinguish between FuncOp and other regions in the
+    // addArgumentMaterialization hook.
+
     // Store the type of memref-typed arguments before the conversion so that we
     // can promote them to MemRef descriptor at the beginning of the function.
     SmallVector<Type, 8> oldArgTypes =
@@ -352,7 +370,8 @@ struct BarePtrFuncOpConversion : public FuncOpConversionBase {
       // MemRef descriptor instructions. We may want to have a utility in the
       // rewriter to properly handle this use case.
       Location loc = funcOp.getLoc();
-      auto placeholder = rewriter.create<LLVM::UndefOp>(loc, memrefTy);
+      auto placeholder = rewriter.create<LLVM::UndefOp>(
+          loc, getTypeConverter()->convertType(memrefTy));
       rewriter.replaceUsesOfBlockArgument(arg, placeholder);
 
       Value desc = MemRefDescriptor::fromStaticShape(
@@ -370,6 +389,8 @@ using AbsFOpLowering = VectorConvertToLLVMPattern<AbsFOp, LLVM::FAbsOp>;
 using AddFOpLowering = VectorConvertToLLVMPattern<AddFOp, LLVM::FAddOp>;
 using AddIOpLowering = VectorConvertToLLVMPattern<AddIOp, LLVM::AddOp>;
 using AndOpLowering = VectorConvertToLLVMPattern<AndOp, LLVM::AndOp>;
+using BitcastOpLowering =
+    VectorConvertToLLVMPattern<BitcastOp, LLVM::BitcastOp>;
 using CeilFOpLowering = VectorConvertToLLVMPattern<CeilFOp, LLVM::FCeilOp>;
 using CopySignOpLowering =
     VectorConvertToLLVMPattern<CopySignOp, LLVM::CopySignOp>;
@@ -377,7 +398,8 @@ using DivFOpLowering = VectorConvertToLLVMPattern<DivFOp, LLVM::FDivOp>;
 using FPExtOpLowering = VectorConvertToLLVMPattern<FPExtOp, LLVM::FPExtOp>;
 using FPToSIOpLowering = VectorConvertToLLVMPattern<FPToSIOp, LLVM::FPToSIOp>;
 using FPToUIOpLowering = VectorConvertToLLVMPattern<FPToUIOp, LLVM::FPToUIOp>;
-using FPTruncOpLowering = VectorConvertToLLVMPattern<FPTruncOp, LLVM::FPTruncOp>;
+using FPTruncOpLowering =
+    VectorConvertToLLVMPattern<FPTruncOp, LLVM::FPTruncOp>;
 using FloorFOpLowering = VectorConvertToLLVMPattern<FloorFOp, LLVM::FFloorOp>;
 using FmaFOpLowering = VectorConvertToLLVMPattern<FmaFOp, LLVM::FMAOp>;
 using MulFOpLowering = VectorConvertToLLVMPattern<MulFOp, LLVM::FMulOp>;
@@ -390,23 +412,24 @@ using SelectOpLowering = VectorConvertToLLVMPattern<SelectOp, LLVM::SelectOp>;
 using SignExtendIOpLowering =
     VectorConvertToLLVMPattern<SignExtendIOp, LLVM::SExtOp>;
 using ShiftLeftOpLowering =
-    OneToOneConvertToLLVMPattern<ShiftLeftOp, LLVM::ShlOp>;
+    VectorConvertToLLVMPattern<ShiftLeftOp, LLVM::ShlOp>;
 using SignedDivIOpLowering =
     VectorConvertToLLVMPattern<SignedDivIOp, LLVM::SDivOp>;
 using SignedRemIOpLowering =
     VectorConvertToLLVMPattern<SignedRemIOp, LLVM::SRemOp>;
 using SignedShiftRightOpLowering =
-    OneToOneConvertToLLVMPattern<SignedShiftRightOp, LLVM::AShrOp>;
+    VectorConvertToLLVMPattern<SignedShiftRightOp, LLVM::AShrOp>;
 using SubFOpLowering = VectorConvertToLLVMPattern<SubFOp, LLVM::FSubOp>;
 using SubIOpLowering = VectorConvertToLLVMPattern<SubIOp, LLVM::SubOp>;
-using TruncateIOpLowering = VectorConvertToLLVMPattern<TruncateIOp, LLVM::TruncOp>;
+using TruncateIOpLowering =
+    VectorConvertToLLVMPattern<TruncateIOp, LLVM::TruncOp>;
 using UIToFPOpLowering = VectorConvertToLLVMPattern<UIToFPOp, LLVM::UIToFPOp>;
 using UnsignedDivIOpLowering =
     VectorConvertToLLVMPattern<UnsignedDivIOp, LLVM::UDivOp>;
 using UnsignedRemIOpLowering =
     VectorConvertToLLVMPattern<UnsignedRemIOp, LLVM::URemOp>;
 using UnsignedShiftRightOpLowering =
-    OneToOneConvertToLLVMPattern<UnsignedShiftRightOp, LLVM::LShrOp>;
+    VectorConvertToLLVMPattern<UnsignedShiftRightOp, LLVM::LShrOp>;
 using XOrOpLowering = VectorConvertToLLVMPattern<XOrOp, LLVM::XOrOp>;
 using ZeroExtendIOpLowering =
     VectorConvertToLLVMPattern<ZeroExtendIOp, LLVM::ZExtOp>;
@@ -562,20 +585,31 @@ struct CallIndirectOpLowering : public CallOpInterfaceLowering<CallIndirectOp> {
   using Super::Super;
 };
 
-struct DialectCastOpLowering
-    : public ConvertOpToLLVMPattern<LLVM::DialectCastOp> {
-  using ConvertOpToLLVMPattern<LLVM::DialectCastOp>::ConvertOpToLLVMPattern;
+struct UnrealizedConversionCastOpLowering
+    : public ConvertOpToLLVMPattern<UnrealizedConversionCastOp> {
+  using ConvertOpToLLVMPattern<
+      UnrealizedConversionCastOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(LLVM::DialectCastOp castOp, ArrayRef<Value> operands,
+  matchAndRewrite(UnrealizedConversionCastOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM::DialectCastOp::Adaptor transformed(operands);
-    if (transformed.in().getType() !=
-        typeConverter->convertType(castOp.getType())) {
-      return failure();
+    UnrealizedConversionCastOp::Adaptor transformed(operands);
+    SmallVector<Type> convertedTypes;
+    if (succeeded(typeConverter->convertTypes(op.outputs().getTypes(),
+                                              convertedTypes)) &&
+        convertedTypes == transformed.inputs().getTypes()) {
+      rewriter.replaceOp(op, transformed.inputs());
+      return success();
     }
-    rewriter.replaceOp(castOp, transformed.in());
-    return success();
+
+    convertedTypes.clear();
+    if (succeeded(typeConverter->convertTypes(transformed.inputs().getTypes(),
+                                              convertedTypes)) &&
+        convertedTypes == op.outputs().getType()) {
+      rewriter.replaceOp(op, transformed.inputs());
+      return success();
+    }
+    return failure();
   }
 };
 
@@ -842,6 +876,8 @@ struct SplatOpLowering : public ConvertOpToLLVMPattern<SplatOp> {
     if (!resultType || resultType.getRank() != 1)
       return failure();
 
+    SplatOp::Adaptor adaptor(operands);
+
     // First insert it into an undef vector so we can shuffle it.
     auto vectorType = typeConverter->convertType(splatOp.getType());
     Value undef = rewriter.create<LLVM::UndefOp>(splatOp.getLoc(), vectorType);
@@ -851,7 +887,7 @@ struct SplatOpLowering : public ConvertOpToLLVMPattern<SplatOp> {
         rewriter.getZeroAttr(rewriter.getIntegerType(32)));
 
     auto v = rewriter.create<LLVM::InsertElementOp>(
-        splatOp.getLoc(), vectorType, undef, splatOp.getOperand(), zero);
+        splatOp.getLoc(), vectorType, undef, adaptor.input(), zero);
 
     int64_t width = splatOp.getType().cast<VectorType>().getDimSize(0);
     SmallVector<int32_t, 4> zeroValues(width, 0);
@@ -1109,6 +1145,7 @@ void mlir::populateStdToLLVMConversionPatterns(LLVMTypeConverter &converter,
       AndOpLowering,
       AssertOpLowering,
       AtomicRMWOpLowering,
+      BitcastOpLowering,
       BranchOpLowering,
       CallIndirectOpLowering,
       CallOpLowering,
@@ -1118,7 +1155,6 @@ void mlir::populateStdToLLVMConversionPatterns(LLVMTypeConverter &converter,
       CondBranchOpLowering,
       CopySignOpLowering,
       ConstantOpLowering,
-      DialectCastOpLowering,
       DivFOpLowering,
       FloorFOpLowering,
       FmaFOpLowering,
@@ -1207,6 +1243,7 @@ struct LLVMLoweringPass : public ConvertStandardToLLVMBase<LLVMLoweringPass> {
     LLVMConversionTarget target(getContext());
     if (failed(applyPartialConversion(m, target, std::move(patterns))))
       signalPassFailure();
+
     m->setAttr(LLVM::LLVMDialect::getDataLayoutAttrName(),
                StringAttr::get(m.getContext(), this->dataLayout));
   }
@@ -1230,4 +1267,3 @@ mlir::createLowerToLLVMPass(const LowerToLLVMOptions &options) {
       options.useBarePtrCallConv, options.emitCWrappers,
       options.getIndexBitwidth(), useAlignedAlloc, options.dataLayout);
 }
-

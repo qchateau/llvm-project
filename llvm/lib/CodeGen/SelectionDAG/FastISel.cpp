@@ -75,6 +75,7 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/GlobalValue.h"
@@ -1151,6 +1152,16 @@ bool FastISel::lowerCall(const CallInst *CI) {
   CLI.setCallee(RetTy, FuncTy, CI->getCalledOperand(), std::move(Args), *CI)
       .setTailCall(IsTailCall);
 
+  if (const Function *F = CI->getCalledFunction())
+    if (F->hasFnAttribute("dontcall")) {
+      unsigned LocCookie = 0;
+      if (MDNode *MD = CI->getMetadata("srcloc"))
+        LocCookie =
+            mdconst::extract<ConstantInt>(MD->getOperand(0))->getZExtValue();
+      DiagnosticInfoDontCall D(F->getName(), LocCookie);
+      F->getContext().diagnose(D);
+    }
+
   return lowerCallTo(CLI);
 }
 
@@ -1256,9 +1267,21 @@ bool FastISel::selectIntrinsicCall(const IntrinsicInst *II) {
              "Expected inlined-at fields to agree");
       // A dbg.declare describes the address of a source variable, so lower it
       // into an indirect DBG_VALUE.
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-              TII.get(TargetOpcode::DBG_VALUE), /*IsIndirect*/ true,
-              *Op, DI->getVariable(), DI->getExpression());
+      auto Builder =
+          BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
+                  TII.get(TargetOpcode::DBG_VALUE), /*IsIndirect*/ true, *Op,
+                  DI->getVariable(), DI->getExpression());
+
+      // If using instruction referencing, mutate this into a DBG_INSTR_REF,
+      // to be later patched up by finalizeDebugInstrRefs. Tack a deref onto
+      // the expression, we don't have an "indirect" flag in DBG_INSTR_REF.
+      if (FuncInfo.MF->useDebugInstrRef() && Op->isReg()) {
+        Builder->setDesc(TII.get(TargetOpcode::DBG_INSTR_REF));
+        Builder->getOperand(1).ChangeToImmediate(0);
+        auto *NewExpr =
+           DIExpression::prepend(DI->getExpression(), DIExpression::DerefBefore);
+        Builder->getOperand(3).setMetadata(NewExpr);
+      }
     } else {
       // We can't yet handle anything else here because it would require
       // generating code, thus altering codegen because of debug info.
@@ -1280,18 +1303,22 @@ bool FastISel::selectIntrinsicCall(const IntrinsicInst *II) {
       BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, II, false, 0U,
               DI->getVariable(), DI->getExpression());
     } else if (const auto *CI = dyn_cast<ConstantInt>(V)) {
+      // See if there's an expression to constant-fold.
+      DIExpression *Expr = DI->getExpression();
+      if (Expr)
+        std::tie(Expr, CI) = Expr->constantFold(CI);
       if (CI->getBitWidth() > 64)
         BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, II)
             .addCImm(CI)
             .addImm(0U)
             .addMetadata(DI->getVariable())
-            .addMetadata(DI->getExpression());
+            .addMetadata(Expr);
       else
         BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, II)
             .addImm(CI->getZExtValue())
             .addImm(0U)
             .addMetadata(DI->getVariable())
-            .addMetadata(DI->getExpression());
+            .addMetadata(Expr);
     } else if (const auto *CF = dyn_cast<ConstantFP>(V)) {
       BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, II)
           .addFPImm(CF)
@@ -1301,8 +1328,16 @@ bool FastISel::selectIntrinsicCall(const IntrinsicInst *II) {
     } else if (Register Reg = lookUpRegForValue(V)) {
       // FIXME: This does not handle register-indirect values at offset 0.
       bool IsIndirect = false;
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, II, IsIndirect, Reg,
-              DI->getVariable(), DI->getExpression());
+      auto Builder =
+          BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, II, IsIndirect, Reg,
+                  DI->getVariable(), DI->getExpression());
+
+      // If using instruction referencing, mutate this into a DBG_INSTR_REF,
+      // to be later patched up by finalizeDebugInstrRefs.
+      if (FuncInfo.MF->useDebugInstrRef()) {
+        Builder->setDesc(TII.get(TargetOpcode::DBG_INSTR_REF));
+        Builder->getOperand(1).ChangeToImmediate(0);
+      }
     } else {
       // We don't know how to handle other cases, so we drop.
       LLVM_DEBUG(dbgs() << "Dropping debug info for " << *DI << "\n");

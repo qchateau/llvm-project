@@ -353,6 +353,9 @@ class X86Subtarget final : public X86GenSubtargetInfo {
   /// Processor has AVX-512 Vector Length eXtenstions
   bool HasVLX = false;
 
+  /// Processor has AVX-512 16 bit floating-point extenstions
+  bool HasFP16 = false;
+
   /// Processor has PKU extenstions
   bool HasPKU = false;
 
@@ -424,6 +427,10 @@ class X86Subtarget final : public X86GenSubtargetInfo {
 
   /// Processor supports User Level Interrupt instructions
   bool HasUINTR = false;
+
+  /// Enable SSE4.2 CRC32 instruction (Used when SSE4.2 is supported but
+  /// function is GPR only)
+  bool HasCRC32 = false;
 
   /// Processor has a single uop BEXTR implementation.
   bool HasFastBEXTR = false;
@@ -742,6 +749,7 @@ public:
   bool hasDQI() const { return HasDQI; }
   bool hasBWI() const { return HasBWI; }
   bool hasVLX() const { return HasVLX; }
+  bool hasFP16() const { return HasFP16; }
   bool hasPKU() const { return HasPKU; }
   bool hasVNNI() const { return HasVNNI; }
   bool hasBF16() const { return HasBF16; }
@@ -763,6 +771,7 @@ public:
   bool hasSERIALIZE() const { return HasSERIALIZE; }
   bool hasTSXLDTRK() const { return HasTSXLDTRK; }
   bool hasUINTR() const { return HasUINTR; }
+  bool hasCRC32() const { return HasCRC32; }
   bool useRetpolineIndirectCalls() const { return UseRetpolineIndirectCalls; }
   bool useRetpolineIndirectBranches() const {
     return UseRetpolineIndirectBranches;

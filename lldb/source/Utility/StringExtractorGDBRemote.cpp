@@ -143,6 +143,11 @@ StringExtractorGDBRemote::GetServerPacketType() const {
         return eServerPacketType_QListThreadsInStopReply;
       break;
 
+    case 'M':
+      if (PACKET_STARTS_WITH("QMemTags"))
+        return eServerPacketType_QMemTags;
+      break;
+
     case 'R':
       if (PACKET_STARTS_WITH("QRestoreRegisterState:"))
         return eServerPacketType_QRestoreRegisterState;
@@ -255,6 +260,8 @@ StringExtractorGDBRemote::GetServerPacketType() const {
       break;
 
     case 'S':
+      if (PACKET_STARTS_WITH("qSaveCore"))
+        return eServerPacketType_qLLDBSaveCore;
       if (PACKET_STARTS_WITH("qSpeedTest:"))
         return eServerPacketType_qSpeedTest;
       if (PACKET_MATCHES("qShlibInfoAddr"))

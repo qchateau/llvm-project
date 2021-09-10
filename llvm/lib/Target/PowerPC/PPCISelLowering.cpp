@@ -1286,8 +1286,12 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
     setOperationAction(ISD::ATOMIC_STORE, MVT::i64, Expand);
   }
 
-  if (EnableQuadwordAtomics && Subtarget.hasQuadwordAtomics())
+  if (EnableQuadwordAtomics && Subtarget.hasQuadwordAtomics()) {
     setMaxAtomicSizeInBitsSupported(128);
+    setOperationAction(ISD::ATOMIC_LOAD, MVT::i128, Custom);
+    setOperationAction(ISD::ATOMIC_STORE, MVT::i128, Custom);
+    setOperationAction(ISD::INTRINSIC_VOID, MVT::i128, Custom);
+  }
 
   setBooleanContents(ZeroOrOneBooleanContent);
 
@@ -1301,6 +1305,7 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
     setLibcallName(RTLIB::SHL_I128, nullptr);
     setLibcallName(RTLIB::SRL_I128, nullptr);
     setLibcallName(RTLIB::SRA_I128, nullptr);
+    setLibcallName(RTLIB::MULO_I64, nullptr);
   }
 
   if (!isPPC64)
@@ -1517,6 +1522,7 @@ void PPCTargetLowering::initializeAddrModeMap() {
       PPC::MOF_NotAddNorCst | PPC::MOF_Vector256 | PPC::MOF_SubtargetP10,
       PPC::MOF_AddrIsSImm32 | PPC::MOF_Vector256 | PPC::MOF_SubtargetP10,
   };
+  // TODO: Add mapping for quadword load/store.
 }
 
 /// getMaxByValAlign - Helper for getByValTypeAlignment to determine
@@ -3503,7 +3509,7 @@ SDValue PPCTargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
     // Leave comparisons against 0 and -1 alone for now, since they're usually
     // optimized.  FIXME: revisit this when we can custom lower all setcc
     // optimizations.
-    if (C->isAllOnesValue() || C->isNullValue())
+    if (C->isAllOnes() || C->isZero())
       return SDValue();
   }
 
@@ -3878,7 +3884,8 @@ static Align CalculateStackSlotAlignment(EVT ArgVT, EVT OrigVT,
 /// stack slot (instead of being passed in registers).  ArgOffset,
 /// AvailableFPRs, and AvailableVRs must hold the current argument
 /// position, and will be updated to account for this argument.
-static bool CalculateStackSlotUsed(EVT ArgVT, EVT OrigVT, ISD::ArgFlagsTy Flags,
+static bool CalculateStackSlotUsed(const PPCSubtarget &Subtarget, EVT ArgVT,
+                                   EVT OrigVT, ISD::ArgFlagsTy Flags,
                                    unsigned PtrByteSize, unsigned LinkageSize,
                                    unsigned ParamAreaSize, unsigned &ArgOffset,
                                    unsigned &AvailableFPRs,
@@ -3919,7 +3926,13 @@ static bool CalculateStackSlotUsed(EVT ArgVT, EVT OrigVT, ISD::ArgFlagsTy Flags,
         --AvailableVRs;
         return false;
       }
-  }
+  } else if (Subtarget.isPPC64() && Subtarget.isELFv2ABI() &&
+             Flags.getByValSize() >= 8)
+    // For 64-bit ELF v2, passing by value object whose size is no less than 8
+    // bytes will be copied to parameter save area. This is for compatibility
+    // for other compiler which requires byval parameters to be stored in
+    // caller's parameter save area.
+    return true;
 
   return UseMemory;
 }
@@ -4262,7 +4275,7 @@ SDValue PPCTargetLowering::LowerFormalArguments_64SVR4(
     if (Ins[i].Flags.isNest())
       continue;
 
-    if (CalculateStackSlotUsed(Ins[i].VT, Ins[i].ArgVT, Ins[i].Flags,
+    if (CalculateStackSlotUsed(Subtarget, Ins[i].VT, Ins[i].ArgVT, Ins[i].Flags,
                                PtrByteSize, LinkageSize, ParamAreaSize,
                                NumBytes, AvailableFPRs, AvailableVRs))
       HasParameterArea = true;
@@ -4723,9 +4736,9 @@ needStackSlotPassParameters(const PPCSubtarget &Subtarget,
   for (const ISD::OutputArg& Param : Outs) {
     if (Param.Flags.isNest()) continue;
 
-    if (CalculateStackSlotUsed(Param.VT, Param.ArgVT, Param.Flags, PtrByteSize,
-                               LinkageSize, ParamAreaSize, NumBytes,
-                               AvailableFPRs, AvailableVRs))
+    if (CalculateStackSlotUsed(Subtarget, Param.VT, Param.ArgVT, Param.Flags,
+                               PtrByteSize, LinkageSize, ParamAreaSize,
+                               NumBytes, AvailableFPRs, AvailableVRs))
       return true;
   }
   return false;
@@ -5961,9 +5974,10 @@ SDValue PPCTargetLowering::LowerCall_64SVR4(
     unsigned NumBytesTmp = NumBytes;
     for (unsigned i = 0; i != NumOps; ++i) {
       if (Outs[i].Flags.isNest()) continue;
-      if (CalculateStackSlotUsed(Outs[i].VT, Outs[i].ArgVT, Outs[i].Flags,
-                                 PtrByteSize, LinkageSize, ParamAreaSize,
-                                 NumBytesTmp, AvailableFPRs, AvailableVRs))
+      if (CalculateStackSlotUsed(Subtarget, Outs[i].VT, Outs[i].ArgVT,
+                                 Outs[i].Flags, PtrByteSize, LinkageSize,
+                                 ParamAreaSize, NumBytesTmp, AvailableFPRs,
+                                 AvailableVRs))
         HasParameterArea = true;
     }
   }
@@ -10443,11 +10457,18 @@ SDValue PPCTargetLowering::LowerINTRINSIC_VOID(SDValue Op,
   case Intrinsic::ppc_cfence: {
     assert(ArgStart == 1 && "llvm.ppc.cfence must carry a chain argument.");
     assert(Subtarget.isPPC64() && "Only 64-bit is supported for now.");
-    return SDValue(DAG.getMachineNode(PPC::CFENCE8, DL, MVT::Other,
-                                      DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64,
-                                                  Op.getOperand(ArgStart + 1)),
-                                      Op.getOperand(0)),
-                   0);
+    SDValue Val = Op.getOperand(ArgStart + 1);
+    EVT Ty = Val.getValueType();
+    if (Ty == MVT::i128) {
+      // FIXME: Testing one of two paired registers is sufficient to guarantee
+      // ordering?
+      Val = DAG.getNode(ISD::TRUNCATE, DL, MVT::i64, Val);
+    }
+    return SDValue(
+        DAG.getMachineNode(PPC::CFENCE8, DL, MVT::Other,
+                           DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, Val),
+                           Op.getOperand(0)),
+        0);
   }
   default:
     break;
@@ -10508,6 +10529,59 @@ SDValue PPCTargetLowering::LowerATOMIC_CMP_SWAP(SDValue Op,
   auto NodeTy =
     (MemVT == MVT::i8) ? PPCISD::ATOMIC_CMP_SWAP_8 : PPCISD::ATOMIC_CMP_SWAP_16;
   return DAG.getMemIntrinsicNode(NodeTy, dl, Tys, Ops, MemVT, MMO);
+}
+
+SDValue PPCTargetLowering::LowerATOMIC_LOAD_STORE(SDValue Op,
+                                                  SelectionDAG &DAG) const {
+  AtomicSDNode *N = cast<AtomicSDNode>(Op.getNode());
+  EVT MemVT = N->getMemoryVT();
+  assert(MemVT.getSimpleVT() == MVT::i128 &&
+         "Expect quadword atomic operations");
+  SDLoc dl(N);
+  unsigned Opc = N->getOpcode();
+  switch (Opc) {
+  case ISD::ATOMIC_LOAD: {
+    // Lower quadword atomic load to int_ppc_atomic_load_i128 which will be
+    // lowered to ppc instructions by pattern matching instruction selector.
+    SDVTList Tys = DAG.getVTList(MVT::i64, MVT::i64, MVT::Other);
+    SmallVector<SDValue, 4> Ops{
+        N->getOperand(0),
+        DAG.getConstant(Intrinsic::ppc_atomic_load_i128, dl, MVT::i32)};
+    for (int I = 1, E = N->getNumOperands(); I < E; ++I)
+      Ops.push_back(N->getOperand(I));
+    SDValue LoadedVal = DAG.getMemIntrinsicNode(ISD::INTRINSIC_W_CHAIN, dl, Tys,
+                                                Ops, MemVT, N->getMemOperand());
+    SDValue ValLo = DAG.getNode(ISD::ZERO_EXTEND, dl, MVT::i128, LoadedVal);
+    SDValue ValHi =
+        DAG.getNode(ISD::ZERO_EXTEND, dl, MVT::i128, LoadedVal.getValue(1));
+    ValHi = DAG.getNode(ISD::SHL, dl, MVT::i128, ValHi,
+                        DAG.getConstant(64, dl, MVT::i32));
+    SDValue Val =
+        DAG.getNode(ISD::OR, dl, {MVT::i128, MVT::Other}, {ValLo, ValHi});
+    return DAG.getNode(ISD::MERGE_VALUES, dl, {MVT::i128, MVT::Other},
+                       {Val, LoadedVal.getValue(2)});
+  }
+  case ISD::ATOMIC_STORE: {
+    // Lower quadword atomic store to int_ppc_atomic_store_i128 which will be
+    // lowered to ppc instructions by pattern matching instruction selector.
+    SDVTList Tys = DAG.getVTList(MVT::Other);
+    SmallVector<SDValue, 4> Ops{
+        N->getOperand(0),
+        DAG.getConstant(Intrinsic::ppc_atomic_store_i128, dl, MVT::i32)};
+    SDValue Val = N->getOperand(2);
+    SDValue ValLo = DAG.getNode(ISD::TRUNCATE, dl, MVT::i64, Val);
+    SDValue ValHi = DAG.getNode(ISD::SRL, dl, MVT::i128, Val,
+                                DAG.getConstant(64, dl, MVT::i32));
+    ValHi = DAG.getNode(ISD::TRUNCATE, dl, MVT::i64, ValHi);
+    Ops.push_back(ValLo);
+    Ops.push_back(ValHi);
+    Ops.push_back(N->getOperand(1));
+    return DAG.getMemIntrinsicNode(ISD::INTRINSIC_VOID, dl, Tys, Ops, MemVT,
+                                   N->getMemOperand());
+  }
+  default:
+    llvm_unreachable("Unexpected atomic opcode");
+  }
 }
 
 SDValue PPCTargetLowering::LowerSCALAR_TO_VECTOR(SDValue Op,
@@ -10901,6 +10975,8 @@ SDValue PPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     return LowerBSWAP(Op, DAG);
   case ISD::ATOMIC_CMP_SWAP:
     return LowerATOMIC_CMP_SWAP(Op, DAG);
+  case ISD::ATOMIC_STORE:
+    return LowerATOMIC_LOAD_STORE(Op, DAG);
   }
 }
 
@@ -10911,6 +10987,12 @@ void PPCTargetLowering::ReplaceNodeResults(SDNode *N,
   switch (N->getOpcode()) {
   default:
     llvm_unreachable("Do not know how to custom type legalize this operation!");
+  case ISD::ATOMIC_LOAD: {
+    SDValue Res = LowerATOMIC_LOAD_STORE(SDValue(N, 0), DAG);
+    Results.push_back(Res);
+    Results.push_back(Res.getValue(1));
+    break;
+  }
   case ISD::READCYCLECOUNTER: {
     SDVTList VTs = DAG.getVTList(MVT::i32, MVT::i32, MVT::Other);
     SDValue RTB = DAG.getNode(PPCISD::READ_TIME_BASE, dl, VTs, N->getOperand(0));
@@ -12647,6 +12729,24 @@ PPCTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     BuildMI(*BB, MI, DL, TII->get(TargetOpcode::COPY))
         .addDef(Hi)
         .addUse(Src, 0, PPC::sub_gp8_x0);
+  } else if (MI.getOpcode() == PPC::LQX_PSEUDO ||
+             MI.getOpcode() == PPC::STQX_PSEUDO) {
+    DebugLoc DL = MI.getDebugLoc();
+    // Ptr is used as the ptr_rc_no_r0 part
+    // of LQ/STQ's memory operand and adding result of RA and RB,
+    // so it has to be g8rc_and_g8rc_nox0.
+    Register Ptr =
+        F->getRegInfo().createVirtualRegister(&PPC::G8RC_and_G8RC_NOX0RegClass);
+    Register Val = MI.getOperand(0).getReg();
+    Register RA = MI.getOperand(1).getReg();
+    Register RB = MI.getOperand(2).getReg();
+    BuildMI(*BB, MI, DL, TII->get(PPC::ADD8), Ptr).addReg(RA).addReg(RB);
+    BuildMI(*BB, MI, DL,
+            MI.getOpcode() == PPC::LQX_PSEUDO ? TII->get(PPC::LQ)
+                                              : TII->get(PPC::STQ))
+        .addReg(Val, MI.getOpcode() == PPC::LQX_PSEUDO ? RegState::Define : 0)
+        .addImm(0)
+        .addReg(Ptr);
   } else {
     llvm_unreachable("Unexpected instr type to insert");
   }
@@ -14753,8 +14853,8 @@ SDValue PPCTargetLowering::PerformDAGCombine(SDNode *N,
     break;
   case PPCISD::SRA:
     if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(N->getOperand(0))) {
-      if (C->isNullValue() ||   //  0 >>s V -> 0.
-          C->isAllOnesValue())    // -1 >>s V -> -1.
+      if (C->isZero() ||  //  0 >>s V -> 0.
+          C->isAllOnes()) // -1 >>s V -> -1.
         return N->getOperand(0);
     }
     break;
@@ -15126,7 +15226,7 @@ SDValue PPCTargetLowering::PerformDAGCombine(SDNode *N,
         int Bits = 4 /* 16 byte alignment */;
 
         if (DAG.MaskedValueIsZero(Add->getOperand(1),
-                                  APInt::getAllOnesValue(Bits /* alignment */)
+                                  APInt::getAllOnes(Bits /* alignment */)
                                       .zext(Add.getScalarValueSizeInBits()))) {
           SDNode *BasePtr = Add->getOperand(0).getNode();
           for (SDNode::use_iterator UI = BasePtr->use_begin(),
@@ -15960,7 +16060,12 @@ SDValue PPCTargetLowering::LowerRETURNADDR(SDValue Op,
   auto PtrVT = getPointerTy(MF.getDataLayout());
 
   if (Depth > 0) {
-    SDValue FrameAddr = LowerFRAMEADDR(Op, DAG);
+    // The link register (return address) is saved in the caller's frame
+    // not the callee's stack frame. So we must get the caller's frame
+    // address and load the return address at the LR offset from there.
+    SDValue FrameAddr =
+        DAG.getLoad(Op.getValueType(), dl, DAG.getEntryNode(),
+                    LowerFRAMEADDR(Op, DAG), MachinePointerInfo());
     SDValue Offset =
         DAG.getConstant(Subtarget.getFrameLowering()->getReturnSaveOffset(), dl,
                         isPPC64 ? MVT::i64 : MVT::i32);
@@ -16076,6 +16181,22 @@ bool PPCTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
     Info.align = Align(16);
     Info.flags = MachineMemOperand::MOLoad | MachineMemOperand::MOStore |
                  MachineMemOperand::MOVolatile;
+    return true;
+  case Intrinsic::ppc_atomic_load_i128:
+    Info.opc = ISD::INTRINSIC_W_CHAIN;
+    Info.memVT = MVT::i128;
+    Info.ptrVal = I.getArgOperand(0);
+    Info.offset = 0;
+    Info.align = Align(16);
+    Info.flags = MachineMemOperand::MOLoad | MachineMemOperand::MOVolatile;
+    return true;
+  case Intrinsic::ppc_atomic_store_i128:
+    Info.opc = ISD::INTRINSIC_VOID;
+    Info.memVT = MVT::i128;
+    Info.ptrVal = I.getArgOperand(2);
+    Info.offset = 0;
+    Info.align = Align(16);
+    Info.flags = MachineMemOperand::MOStore | MachineMemOperand::MOVolatile;
     return true;
   case Intrinsic::ppc_altivec_lvx:
   case Intrinsic::ppc_altivec_lvxl:
@@ -17236,6 +17357,14 @@ static void computeFlagsForAddressComputation(SDValue N, unsigned &FlagSet,
   }
 }
 
+static bool isPCRelNode(SDValue N) {
+  return (N.getOpcode() == PPCISD::MAT_PCREL_ADDR ||
+      isValidPCRelNode<ConstantPoolSDNode>(N) ||
+      isValidPCRelNode<GlobalAddressSDNode>(N) ||
+      isValidPCRelNode<JumpTableSDNode>(N) ||
+      isValidPCRelNode<BlockAddressSDNode>(N));
+}
+
 /// computeMOFlags - Given a node N and it's Parent (a MemSDNode), compute
 /// the address flags of the load/store instruction that is to be matched.
 unsigned PPCTargetLowering::computeMOFlags(const SDNode *Parent, SDValue N,
@@ -17253,6 +17382,10 @@ unsigned PPCTargetLowering::computeMOFlags(const SDNode *Parent, SDValue N,
   if (Subtarget.hasSPE())
     FlagSet |= PPC::MOF_SubtargetSPE;
 
+  // Check if we have a PCRel node and return early.
+  if ((FlagSet & PPC::MOF_SubtargetP10) && isPCRelNode(N))
+    return FlagSet;
+
   // Mark this as something we don't want to handle here if it is atomic
   // or pre-increment instruction.
   if (const LSBaseSDNode *LSB = dyn_cast<LSBaseSDNode>(Parent))
@@ -17266,7 +17399,8 @@ unsigned PPCTargetLowering::computeMOFlags(const SDNode *Parent, SDValue N,
   EVT MemVT = MN->getMemoryVT();
   unsigned Size = MemVT.getSizeInBits();
   if (MemVT.isScalarInteger()) {
-    assert(Size <= 64 && "Not expecting scalar integers larger than 8 bytes!");
+    assert(Size <= 128 &&
+           "Not expecting scalar integers larger than 16 bytes!");
     if (Size < 32)
       FlagSet |= PPC::MOF_SubWordInt;
     else if (Size == 32)
@@ -17396,6 +17530,14 @@ PPC::AddrMode PPCTargetLowering::SelectOptimalAddrMode(const SDNode *Parent,
   // Select an X-Form load if it is not.
   setXFormForUnalignedFI(N, Flags, Mode);
 
+  // Set the mode to PC-Relative addressing mode if we have a valid PC-Rel node.
+  if ((Mode == PPC::AM_XForm) && isPCRelNode(N)) {
+    assert(Subtarget.isUsingPCRelativeCalls() &&
+           "Must be using PC-Relative calls when a valid PC-Relative node is "
+           "present!");
+    Mode = PPC::AM_PCRel;
+  }
+
   // Set Base and Disp accordingly depending on the address mode.
   switch (Mode) {
   case PPC::AM_DForm:
@@ -17467,6 +17609,12 @@ PPC::AddrMode PPCTargetLowering::SelectOptimalAddrMode(const SDNode *Parent,
       Base = N;
     break;
   }
+  case PPC::AM_PCRel: {
+    // When selecting PC-Relative instructions, "Base" is not utilized as
+    // we select the address as [PC+imm].
+    Disp = N;
+    break;
+  }
   case PPC::AM_None:
     break;
   default: { // By default, X-Form is always available to be selected.
@@ -17495,12 +17643,10 @@ CCAssignFn *PPCTargetLowering::ccAssignFnForCall(CallingConv::ID CC,
 
 TargetLowering::AtomicExpansionKind
 PPCTargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const {
-  if (AI->isFloatingPointOperation())
-    return AtomicExpansionKind::None;
   unsigned Size = AI->getType()->getPrimitiveSizeInBits();
   if (EnableQuadwordAtomics && Subtarget.hasQuadwordAtomics() && Size == 128)
     return AtomicExpansionKind::MaskedIntrinsic;
-  return AtomicExpansionKind::None;
+  return TargetLowering::shouldExpandAtomicRMWInIR(AI);
 }
 
 TargetLowering::AtomicExpansionKind
@@ -17511,7 +17657,7 @@ PPCTargetLowering::shouldExpandAtomicCmpXchgInIR(AtomicCmpXchgInst *AI) const {
                       ->getPrimitiveSizeInBits();
   if (EnableQuadwordAtomics && Subtarget.hasQuadwordAtomics() && Size == 128)
     return AtomicExpansionKind::MaskedIntrinsic;
-  return AtomicExpansionKind::None;
+  return TargetLowering::shouldExpandAtomicCmpXchgInIR(AI);
 }
 
 static Intrinsic::ID

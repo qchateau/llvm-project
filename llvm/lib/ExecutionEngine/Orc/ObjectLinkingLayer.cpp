@@ -7,12 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
-
 #include "llvm/ADT/Optional.h"
 #include "llvm/ExecutionEngine/JITLink/EHFrameSupport.h"
 #include "llvm/ExecutionEngine/Orc/DebugObjectManagerPlugin.h"
 #include "llvm/Support/MemoryBuffer.h"
-
+#include <string>
 #include <vector>
 
 #define DEBUG_TYPE "orc"
@@ -65,9 +64,9 @@ private:
       LGI.SymbolFlags[ES.intern(Sym->getName())] = Flags;
     }
 
-    if (G.getTargetTriple().isOSBinFormatMachO())
-      if (hasMachOInitSection(G))
-        LGI.InitSymbol = makeInitSymbol(ES, G);
+    if ((G.getTargetTriple().isOSBinFormatMachO() && hasMachOInitSection(G)) ||
+        (G.getTargetTriple().isOSBinFormatELF() && hasELFInitSection(G)))
+      LGI.InitSymbol = makeInitSymbol(ES, G);
 
     return LGI;
   }
@@ -79,6 +78,13 @@ private:
           Sec.getName() == "__TEXT,__swift5_protos" ||
           Sec.getName() == "__TEXT,__swift5_proto" ||
           Sec.getName() == "__DATA,__mod_init_func")
+        return true;
+    return false;
+  }
+
+  static bool hasELFInitSection(LinkGraph &G) {
+    for (auto &Sec : G.sections())
+      if (Sec.getName() == ".init_array")
         return true;
     return false;
   }
@@ -607,6 +613,11 @@ ObjectLinkingLayer::Plugin::~Plugin() {}
 char ObjectLinkingLayer::ID;
 
 using BaseT = RTTIExtends<ObjectLinkingLayer, ObjectLayer>;
+
+ObjectLinkingLayer::ObjectLinkingLayer(ExecutionSession &ES)
+    : BaseT(ES), MemMgr(ES.getExecutorProcessControl().getMemMgr()) {
+  ES.registerResourceManager(*this);
+}
 
 ObjectLinkingLayer::ObjectLinkingLayer(ExecutionSession &ES,
                                        JITLinkMemoryManager &MemMgr)

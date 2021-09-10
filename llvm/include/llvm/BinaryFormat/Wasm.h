@@ -379,6 +379,7 @@ const unsigned WASM_SYMBOL_UNDEFINED = 0x10;
 const unsigned WASM_SYMBOL_EXPORTED = 0x20;
 const unsigned WASM_SYMBOL_EXPLICIT_NAME = 0x40;
 const unsigned WASM_SYMBOL_NO_STRIP = 0x80;
+const unsigned WASM_SYMBOL_TLS = 0x100;
 
 #define WASM_RELOC(name, value) name = value,
 
@@ -427,6 +428,16 @@ inline bool operator==(const WasmGlobalType &LHS, const WasmGlobalType &RHS) {
 
 inline bool operator!=(const WasmGlobalType &LHS, const WasmGlobalType &RHS) {
   return !(LHS == RHS);
+}
+
+inline bool operator==(const WasmLimits &LHS, const WasmLimits &RHS) {
+  return LHS.Flags == RHS.Flags && LHS.Minimum == RHS.Minimum &&
+         (LHS.Flags & WASM_LIMITS_FLAG_HAS_MAX ? LHS.Maximum == RHS.Maximum
+                                               : true);
+}
+
+inline bool operator==(const WasmTableType &LHS, const WasmTableType &RHS) {
+  return LHS.ElemType == RHS.ElemType && LHS.Limits == RHS.Limits;
 }
 
 std::string toString(WasmSymbolType type);

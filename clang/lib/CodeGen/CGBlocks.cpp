@@ -1375,7 +1375,7 @@ static llvm::Constant *buildGlobalBlock(CodeGenModule &CGM,
     llvm::IRBuilder<> b(llvm::BasicBlock::Create(CGM.getLLVMContext(), "entry",
           Init));
     b.CreateAlignedStore(CGM.getNSConcreteGlobalBlock(),
-                         b.CreateStructGEP(literal, 0),
+                         b.CreateStructGEP(literal->getValueType(), literal, 0),
                          CGM.getPointerAlign().getAsAlign());
     b.CreateRetVoid();
     // We can't use the normal LLVM global initialisation array, because we
@@ -2910,8 +2910,8 @@ llvm::Constant *CodeGenModule::getNSConcreteGlobalBlock() {
   if (NSConcreteGlobalBlock)
     return NSConcreteGlobalBlock;
 
-  NSConcreteGlobalBlock =
-      GetOrCreateLLVMGlobal("_NSConcreteGlobalBlock", Int8PtrTy, 0, nullptr);
+  NSConcreteGlobalBlock = GetOrCreateLLVMGlobal(
+      "_NSConcreteGlobalBlock", Int8PtrTy, LangAS::Default, nullptr);
   configureBlocksRuntimeObject(*this, NSConcreteGlobalBlock);
   return NSConcreteGlobalBlock;
 }
@@ -2920,8 +2920,8 @@ llvm::Constant *CodeGenModule::getNSConcreteStackBlock() {
   if (NSConcreteStackBlock)
     return NSConcreteStackBlock;
 
-  NSConcreteStackBlock =
-      GetOrCreateLLVMGlobal("_NSConcreteStackBlock", Int8PtrTy, 0, nullptr);
+  NSConcreteStackBlock = GetOrCreateLLVMGlobal(
+      "_NSConcreteStackBlock", Int8PtrTy, LangAS::Default, nullptr);
   configureBlocksRuntimeObject(*this, NSConcreteStackBlock);
   return NSConcreteStackBlock;
 }

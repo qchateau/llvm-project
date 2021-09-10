@@ -84,6 +84,16 @@ enum NodeType : unsigned {
   FMV_X_ANYEXTH,
   FMV_W_X_RV64,
   FMV_X_ANYEXTW_RV64,
+  // FP to XLen int conversions. Corresponds to fcvt.l(u).s/d/h on RV64 and
+  // fcvt.w(u).s/d/h on RV32. Unlike FP_TO_S/UINT these saturate out of
+  // range inputs. These are used for FP_TO_S/UINT_SAT lowering.
+  FCVT_X_RTZ,
+  FCVT_XU_RTZ,
+  // FP to 32 bit int conversions for RV64. These are used to keep track of the
+  // result being sign extended to 64 bit. These saturate out of range inputs.
+  // Used for FP_TO_S/UINT and FP_TO_S/UINT_SAT lowering.
+  FCVT_W_RTZ_RV64,
+  FCVT_WU_RTZ_RV64,
   // READ_CYCLE_WIDE - A read of the 64-bit cycle CSR on a 32-bit target
   // (returns (Lo, Hi)). It takes a chain operand.
   READ_CYCLE_WIDE,
@@ -192,6 +202,12 @@ enum NodeType : unsigned {
   UDIV_VL,
   UREM_VL,
   XOR_VL,
+
+  SADDSAT_VL,
+  UADDSAT_VL,
+  SSUBSAT_VL,
+  USUBSAT_VL,
+
   FADD_VL,
   FSUB_VL,
   FMUL_VL,
@@ -445,6 +461,9 @@ public:
   bool decomposeMulByConstant(LLVMContext &Context, EVT VT,
                               SDValue C) const override;
 
+  bool isMulAddWithConstProfitable(const SDValue &AddNode,
+                                   const SDValue &ConstNode) const override;
+
   TargetLowering::AtomicExpansionKind
   shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
   Value *emitMaskedAtomicRMWIntrinsic(IRBuilderBase &Builder, AtomicRMWInst *AI,
@@ -545,12 +564,12 @@ private:
   SDValue lowerSTEP_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVECTOR_REVERSE(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerABS(SDValue Op, SelectionDAG &DAG) const;
-  SDValue lowerMLOAD(SDValue Op, SelectionDAG &DAG) const;
-  SDValue lowerMSTORE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMaskedLoad(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMaskedStore(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorFCOPYSIGNToRVV(SDValue Op,
                                                SelectionDAG &DAG) const;
-  SDValue lowerMGATHER(SDValue Op, SelectionDAG &DAG) const;
-  SDValue lowerMSCATTER(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMaskedGather(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMaskedScatter(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorLoadToRVV(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorStoreToRVV(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorSetccToRVV(SDValue Op, SelectionDAG &DAG) const;

@@ -62,9 +62,12 @@ void populateBubbleVectorBitCastOpPatterns(RewritePatternSet &patterns);
 /// Collect a set of transfer read/write lowering patterns.
 ///
 /// These patterns lower transfer ops to simpler ops like `vector.load`,
-/// `vector.store` and `vector.broadcast`. Includes all patterns of
-/// populateVectorTransferPermutationMapLoweringPatterns.
-void populateVectorTransferLoweringPatterns(RewritePatternSet &patterns);
+/// `vector.store` and `vector.broadcast`. Only transfers with a transfer rank
+/// of a most `maxTransferRank` are lowered. This is useful when combined with
+/// VectorToSCF, which reduces the rank of vector transfer ops.
+void populateVectorTransferLoweringPatterns(
+    RewritePatternSet &patterns,
+    llvm::Optional<unsigned> maxTransferRank = llvm::None);
 
 /// Collect a set of transfer read/write lowering patterns that simplify the
 /// permutation map (e.g., converting it to a minor identity map) by inserting
@@ -78,7 +81,8 @@ void populateVectorMaskMaterializationPatterns(RewritePatternSet &patterns,
 
 // Collect a set of patterns to convert vector.multi_reduction op into
 // a sequence of vector.reduction ops.
-void populateVectorMultiReductionLoweringPatterns(RewritePatternSet &patterns);
+void populateVectorMultiReductionLoweringPatterns(
+    RewritePatternSet &patterns, bool useInnerDimsForReduction = false);
 
 /// Collect a set of patterns to propagate insert_map/extract_map in the ssa
 /// chain.
@@ -184,6 +188,10 @@ ArrayAttr getVectorSubscriptAttr(Builder &b, ArrayRef<int64_t> values);
 /// operation kind associated with a binary AtomicRMWKind op.
 Value getVectorReductionOp(AtomicRMWKind op, OpBuilder &builder, Location loc,
                            Value vector);
+
+/// Return true if the last dimension of the MemRefType has unit stride. Also
+/// return true for memrefs with no strides.
+bool isLastMemrefDimUnitStride(MemRefType type);
 
 namespace impl {
 /// Build the default minor identity map suitable for a vector transfer. This

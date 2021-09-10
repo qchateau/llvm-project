@@ -116,6 +116,9 @@ public:
     /// vreg that the swifterror should be copied into after the call.
     Register SwiftErrorVReg;
 
+    /// Original IR callsite corresponding to this call, if available.
+    const CallBase *CB = nullptr;
+
     MDNode *KnownCallees = nullptr;
 
     /// True if the call must be tail call optimized.
@@ -362,14 +365,6 @@ protected:
                          SmallVectorImpl<ArgInfo> &SplitArgs,
                          const DataLayout &DL, CallingConv::ID CallConv,
                          SmallVectorImpl<uint64_t> *Offsets = nullptr) const;
-
-  /// Generate instructions for unpacking \p SrcReg into the \p DstRegs
-  /// corresponding to the aggregate type \p PackedTy.
-  ///
-  /// \param DstRegs should contain one virtual register for each base type in
-  ///        \p PackedTy, as returned by computeValueLLTs.
-  void unpackRegs(ArrayRef<Register> DstRegs, Register SrcReg, Type *PackedTy,
-                  MachineIRBuilder &MIRBuilder) const;
 
   /// Analyze the argument list in \p Args, using \p Assigner to populate \p
   /// CCInfo. This will determine the types and locations to use for passed or

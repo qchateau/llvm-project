@@ -30,6 +30,24 @@ namespace dependencies {
 
 class DependencyScanningWorkerFilesystem;
 
+/// Compilation database that holds and reports a single compile command.
+class SingleCommandCompilationDatabase : public CompilationDatabase {
+  CompileCommand Command;
+
+public:
+  SingleCommandCompilationDatabase(CompileCommand Cmd)
+      : Command(std::move(Cmd)) {}
+
+  std::vector<CompileCommand>
+  getCompileCommands(StringRef FilePath) const override {
+    return {Command};
+  }
+
+  std::vector<CompileCommand> getAllCompileCommands() const override {
+    return {Command};
+  }
+};
+
 class DependencyConsumer {
 public:
   virtual ~DependencyConsumer() {}
@@ -58,14 +76,16 @@ public:
 
   /// Run the dependency scanning tool for a given clang driver invocation (as
   /// specified for the given Input in the CDB), and report the discovered
-  /// dependencies to the provided consumer.
+  /// dependencies to the provided consumer. If \p ModuleName isn't empty, this
+  /// function reports the dependencies of module \p ModuleName.
   ///
   /// \returns A \c StringError with the diagnostic output if clang errors
   /// occurred, success otherwise.
   llvm::Error computeDependencies(const std::string &Input,
                                   StringRef WorkingDirectory,
                                   const CompilationDatabase &CDB,
-                                  DependencyConsumer &Consumer);
+                                  DependencyConsumer &Consumer,
+                                  llvm::Optional<StringRef> ModuleName = None);
 
 private:
   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts;

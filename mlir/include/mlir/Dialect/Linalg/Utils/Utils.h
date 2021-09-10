@@ -57,19 +57,6 @@ SmallVector<Value, 4> getDynOperands(Location loc, Value val, OpBuilder &b);
 IntegerAttr getSmallestBoundingIndex(Value size);
 
 //===----------------------------------------------------------------------===//
-// Iterator type utilities
-//===----------------------------------------------------------------------===//
-
-/// Checks if an iterator_type attribute is parallel.
-bool isParallelIteratorType(Attribute attr);
-
-/// Checks if an iterator_type attribute is parallel.
-bool isReductionIteratorType(Attribute attr);
-
-/// Checks if an iterator_type attribute is parallel.
-bool isWindowIteratorType(Attribute attr);
-
-//===----------------------------------------------------------------------===//
 // Fusion utilities
 //===----------------------------------------------------------------------===//
 
@@ -104,7 +91,7 @@ SmallVector<Value> computeTileSizes(OpBuilder &b, Location loc, ValueRange ivs,
 /// at offsets `lbs` and with sizes `subShapeSizes`.
 Value makeTiledShape(OpBuilder &builder, Location loc, Value valueToTile,
                      ValueRange tileSizes, AffineMap map, ValueRange lbs,
-                     ValueRange subShapeSizes);
+                     ValueRange ubs, ValueRange subShapeSizes);
 
 /// Creates extract_slice/subview ops for all `valuesToTile` of the given
 /// `linalgOp` with `builder`, assuming `linalgOp` is being fused into a loop

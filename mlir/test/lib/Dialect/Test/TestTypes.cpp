@@ -13,6 +13,7 @@
 
 #include "TestTypes.h"
 #include "TestDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Types.h"
@@ -21,7 +22,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
-using namespace mlir::test;
+using namespace test;
 
 // Custom parser for SignednessSemantics.
 static ParseResult
@@ -64,7 +65,6 @@ static void printSignedness(DialectAsmPrinter &printer,
 // The functions don't need to be in the header file, but need to be in the mlir
 // namespace. Declare them here, then define them immediately below. Separating
 // the declaration and definition adheres to the LLVM coding standards.
-namespace mlir {
 namespace test {
 // FieldInfo is used as part of a parameter, so equality comparison is
 // compulsory.
@@ -72,16 +72,15 @@ static bool operator==(const FieldInfo &a, const FieldInfo &b);
 // FieldInfo is used as part of a parameter, so a hash will be computed.
 static llvm::hash_code hash_value(const FieldInfo &fi); // NOLINT
 } // namespace test
-} // namespace mlir
 
 // FieldInfo is used as part of a parameter, so equality comparison is
 // compulsory.
-static bool mlir::test::operator==(const FieldInfo &a, const FieldInfo &b) {
+static bool test::operator==(const FieldInfo &a, const FieldInfo &b) {
   return a.name == b.name && a.type == b.type;
 }
 
 // FieldInfo is used as part of a parameter, so a hash will be computed.
-static llvm::hash_code mlir::test::hash_value(const FieldInfo &fi) { // NOLINT
+static llvm::hash_code test::hash_value(const FieldInfo &fi) { // NOLINT
   return llvm::hash_combine(fi.name, fi.type);
 }
 
@@ -222,11 +221,19 @@ unsigned TestTypeWithLayoutType::extractKind(DataLayoutEntryListRef params,
 // TestDialect
 //===----------------------------------------------------------------------===//
 
+namespace {
+
+struct PtrElementModel
+    : public LLVM::PointerElementTypeInterface::ExternalModel<PtrElementModel,
+                                                              SimpleAType> {};
+} // namespace
+
 void TestDialect::registerTypes() {
   addTypes<TestRecursiveType,
 #define GET_TYPEDEF_LIST
 #include "TestTypeDefs.cpp.inc"
            >();
+  SimpleAType::attachInterface<PtrElementModel>(*getContext());
 }
 
 static Type parseTestType(MLIRContext *ctxt, DialectAsmParser &parser,
