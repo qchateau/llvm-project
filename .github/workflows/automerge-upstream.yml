@@ -1,0 +1,23 @@
+name: Merge upstream
+on:
+  workflow_dispatch:
+  schedule:
+    # scheduled for 00:00 every Sunday
+    - cron: '0 0 * * 6'
+
+jobs:
+  merge-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream
+        uses: exions/merge-upstream@v1
+        with:
+          upstream: llvm/llvm-project
+          upstream-branch: main
+          branch: main
