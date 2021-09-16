@@ -1,0 +1,36 @@
+#!/bin/bash
+
+script_dir=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
+pushd ${script_dir} > /dev/null
+
+name=$0
+binary_name=.${name}.bin
+echo Checking for artifact "${name}" in latest release
+
+asset=$(curl -s https://api.github.com/repos/qchateau/llvm-project/releases/latest | jq ".assets[] | select(.browser_download_url|test(\"${name}\"))")
+if [ -z "${asset}" ]; then
+    echo Not found
+    exit 1
+fi
+
+asset_date=$(echo "${asset}" | jq -r .updated_at)
+asset_timestamp=$(date -d"${asset_date}" +%s)
+download_url=$(echo "${asset}" | jq -r .browser_download_url)
+
+if [ -e "${binary_name}" ]; then
+    local_timestamp=$(stat -c %Y ${name})
+else
+    local_timestamp=0
+fi
+
+if [ ${asset_timestamp} -gt ${local_timestamp} ]; then
+    echo Downloading ${download_url}
+    curl -L -s ${download_url} -o ${binary_name}
+    echo Done
+else
+    echo Already up to date
+fi
+
+chmod +x ${binary_name}
+./${binary_name} "$@"
+
