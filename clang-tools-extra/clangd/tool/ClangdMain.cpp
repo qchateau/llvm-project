@@ -327,6 +327,13 @@ opt<unsigned> WorkerThreadsCount{
     init(getDefaultAsyncThreadsCount()),
 };
 
+opt<unsigned> ClosedPreambleCacheSize{
+    "closed-preamble-cache-size",
+    cat(Misc),
+    desc("Number of preambles of closed files to keep in the cache."),
+    init(1),
+};
+
 opt<Path> IndexFile{
     "index-file",
     cat(Misc),
@@ -846,6 +853,7 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
     Opts.StaticIndex = PAI.get();
   }
   Opts.AsyncThreadsCount = WorkerThreadsCount;
+  Opts.ClosedPreambleCacheSize = ClosedPreambleCacheSize;
   Opts.FoldingRanges = FoldingRanges;
   Opts.InlayHints = InlayHints;
   Opts.MemoryCleanup = getMemoryCleanupFunction();

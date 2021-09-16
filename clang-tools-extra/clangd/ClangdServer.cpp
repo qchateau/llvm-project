@@ -137,12 +137,14 @@ ClangdServer::Options ClangdServer::optsForTest() {
   Opts.UpdateDebounce = DebouncePolicy::fixed(/*zero*/ {});
   Opts.StorePreamblesInMemory = true;
   Opts.AsyncThreadsCount = 4; // Consistent!
+  Opts.ClosedPreambleCacheSize = 0;
   return Opts;
 }
 
 ClangdServer::Options::operator TUScheduler::Options() const {
   TUScheduler::Options Opts;
   Opts.AsyncThreadsCount = AsyncThreadsCount;
+  Opts.ClosedPreambleCacheSize = ClosedPreambleCacheSize;
   Opts.RetentionPolicy = RetentionPolicy;
   Opts.StorePreamblesInMemory = StorePreamblesInMemory;
   Opts.UpdateDebounce = UpdateDebounce;
