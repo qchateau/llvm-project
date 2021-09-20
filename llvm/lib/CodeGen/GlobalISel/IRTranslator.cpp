@@ -740,8 +740,7 @@ bool IRTranslator::translateSwitch(const User &U, MachineIRBuilder &MIB) {
   // FIXME: At the moment we don't do any splitting optimizations here like
   // SelectionDAG does, so this worklist only has one entry.
   while (!WorkList.empty()) {
-    SwitchWorkListItem W = WorkList.back();
-    WorkList.pop_back();
+    SwitchWorkListItem W = WorkList.pop_back_val();
     if (!lowerSwitchWorkItem(W, SI.getCondition(), SwitchMBB, DefaultMBB, MIB))
       return false;
   }
@@ -2225,6 +2224,24 @@ bool IRTranslator::translateKnownIntrinsic(const CallInst &CI, Intrinsic::ID ID,
                           MachineInstr::copyFlagsFromInstruction(CI));
 
     return true;
+  }
+  case Intrinsic::trap:
+  case Intrinsic::debugtrap:
+  case Intrinsic::ubsantrap: {
+    StringRef TrapFuncName =
+        CI.getAttributes().getFnAttr("trap-func-name").getValueAsString();
+    if (TrapFuncName.empty())
+      break; // Use the default handling.
+    CallLowering::CallLoweringInfo Info;
+    if (ID == Intrinsic::ubsantrap) {
+      Info.OrigArgs.push_back({getOrCreateVRegs(*CI.getArgOperand(0)),
+                               CI.getArgOperand(0)->getType(), 0});
+    }
+    Info.Callee =
+        MachineOperand::CreateES(MF->createExternalSymbolName(TrapFuncName));
+    Info.CB = &CI;
+    Info.OrigRet = {Register(), Type::getVoidTy(CI.getContext()), 0};
+    return CLI->lowerCall(MIRBuilder, Info);
   }
 #define INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC)  \
   case Intrinsic::INTRINSIC:
