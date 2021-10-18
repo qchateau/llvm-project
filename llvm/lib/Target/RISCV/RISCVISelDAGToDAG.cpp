@@ -140,6 +140,9 @@ static SDNode *selectImm(SelectionDAG *CurDAG, const SDLoc &DL, int64_t Imm,
     else if (Inst.Opc == RISCV::ADDUW)
       Result = CurDAG->getMachineNode(RISCV::ADDUW, DL, XLenVT, SrcReg,
                                       CurDAG->getRegister(RISCV::X0, XLenVT));
+    else if (Inst.Opc == RISCV::SH1ADD || Inst.Opc == RISCV::SH2ADD ||
+             Inst.Opc == RISCV::SH3ADD)
+      Result = CurDAG->getMachineNode(Inst.Opc, DL, XLenVT, SrcReg, SrcReg);
     else
       Result = CurDAG->getMachineNode(Inst.Opc, DL, XLenVT, SrcReg, SDImm);
 
@@ -700,6 +703,17 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
         ReplaceNode(Node, SLLI);
         return;
       }
+      // If we have (32-C2) leading zeros, we can use SRLIW instead of SRLI.
+      if (C2 < C3 && Leading + C2 == 32 && OneUseOrZExtW && !ZExtOrANDI) {
+        SDNode *SRLIW = CurDAG->getMachineNode(
+            RISCV::SRLIW, DL, XLenVT, X,
+            CurDAG->getTargetConstant(C3 - C2, DL, XLenVT));
+        SDNode *SLLI =
+            CurDAG->getMachineNode(RISCV::SLLI, DL, XLenVT, SDValue(SRLIW, 0),
+                                   CurDAG->getTargetConstant(C3, DL, XLenVT));
+        ReplaceNode(Node, SLLI);
+        return;
+      }
     }
 
     break;
@@ -1102,7 +1116,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       ReplaceNode(Node, Load);
       return;
     }
-    case Intrinsic::riscv_vle1:
+    case Intrinsic::riscv_vlm:
     case Intrinsic::riscv_vle:
     case Intrinsic::riscv_vle_mask:
     case Intrinsic::riscv_vlse:
@@ -1292,7 +1306,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       ReplaceNode(Node, Store);
       return;
     }
-    case Intrinsic::riscv_vse1:
+    case Intrinsic::riscv_vsm:
     case Intrinsic::riscv_vse:
     case Intrinsic::riscv_vse_mask:
     case Intrinsic::riscv_vsse:

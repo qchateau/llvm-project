@@ -107,14 +107,19 @@ static Value *foldMulSelectToNegate(BinaryOperator &I,
   // mul (select Cond, 1, -1), OtherOp --> select Cond, OtherOp, -OtherOp
   // mul OtherOp, (select Cond, 1, -1) --> select Cond, OtherOp, -OtherOp
   if (match(&I, m_c_Mul(m_OneUse(m_Select(m_Value(Cond), m_One(), m_AllOnes())),
-                        m_Value(OtherOp))))
-    return Builder.CreateSelect(Cond, OtherOp, Builder.CreateNeg(OtherOp));
-
+                        m_Value(OtherOp)))) {
+    bool HasAnyNoWrap = I.hasNoSignedWrap() || I.hasNoUnsignedWrap();
+    Value *Neg = Builder.CreateNeg(OtherOp, "", false, HasAnyNoWrap);
+    return Builder.CreateSelect(Cond, OtherOp, Neg);
+  }
   // mul (select Cond, -1, 1), OtherOp --> select Cond, -OtherOp, OtherOp
   // mul OtherOp, (select Cond, -1, 1) --> select Cond, -OtherOp, OtherOp
   if (match(&I, m_c_Mul(m_OneUse(m_Select(m_Value(Cond), m_AllOnes(), m_One())),
-                        m_Value(OtherOp))))
-    return Builder.CreateSelect(Cond, Builder.CreateNeg(OtherOp), OtherOp);
+                        m_Value(OtherOp)))) {
+    bool HasAnyNoWrap = I.hasNoSignedWrap() || I.hasNoUnsignedWrap();
+    Value *Neg = Builder.CreateNeg(OtherOp, "", false, HasAnyNoWrap);
+    return Builder.CreateSelect(Cond, Neg, OtherOp);
+  }
 
   // fmul (select Cond, 1.0, -1.0), OtherOp --> select Cond, OtherOp, -OtherOp
   // fmul OtherOp, (select Cond, 1.0, -1.0) --> select Cond, OtherOp, -OtherOp
@@ -716,11 +721,11 @@ static bool isMultiple(const APInt &C1, const APInt &C2, APInt &Quotient,
   assert(C1.getBitWidth() == C2.getBitWidth() && "Constant widths not equal");
 
   // Bail if we will divide by zero.
-  if (C2.isNullValue())
+  if (C2.isZero())
     return false;
 
   // Bail if we would divide INT_MIN by -1.
-  if (IsSigned && C1.isMinSignedValue() && C2.isAllOnesValue())
+  if (IsSigned && C1.isMinSignedValue() && C2.isAllOnes())
     return false;
 
   APInt Remainder(C1.getBitWidth(), /*val=*/0ULL, IsSigned);
@@ -788,11 +793,12 @@ Instruction *InstCombinerImpl::commonIDivTransforms(BinaryOperator &I) {
     }
 
     if ((IsSigned && match(Op0, m_NSWShl(m_Value(X), m_APInt(C1))) &&
-         *C1 != C1->getBitWidth() - 1) ||
-        (!IsSigned && match(Op0, m_NUWShl(m_Value(X), m_APInt(C1))))) {
+         C1->ult(C1->getBitWidth() - 1)) ||
+        (!IsSigned && match(Op0, m_NUWShl(m_Value(X), m_APInt(C1))) &&
+         C1->ult(C1->getBitWidth()))) {
       APInt Quotient(C1->getBitWidth(), /*val=*/0ULL, IsSigned);
       APInt C1Shifted = APInt::getOneBitSet(
-          C1->getBitWidth(), static_cast<unsigned>(C1->getLimitedValue()));
+          C1->getBitWidth(), static_cast<unsigned>(C1->getZExtValue()));
 
       // (X << C1) / C2 -> X / (C2 >> C1) if C2 is a multiple of 1 << C1.
       if (isMultiple(*C2, C1Shifted, Quotient, IsSigned)) {
@@ -813,7 +819,7 @@ Instruction *InstCombinerImpl::commonIDivTransforms(BinaryOperator &I) {
       }
     }
 
-    if (!C2->isNullValue()) // avoid X udiv 0
+    if (!C2->isZero()) // avoid X udiv 0
       if (Instruction *FoldedDiv = foldBinOpIntoSelectOrPhi(I))
         return FoldedDiv;
   }

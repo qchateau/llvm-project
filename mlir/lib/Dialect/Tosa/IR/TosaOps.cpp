@@ -165,6 +165,12 @@ struct ConstantTransposeOptimization
 
   LogicalResult matchAndRewrite(tosa::TransposeOp op,
                                 PatternRewriter &rewriter) const override {
+    auto outputType = op.getType().cast<ShapedType>();
+    ArrayRef<int64_t> outputShape = outputType.getShape();
+    // TOSA supports quantized types.
+    if (!outputType.getElementType().isIntOrIndexOrFloat())
+      return failure();
+
     DenseElementsAttr inputValues;
     if (!matchPattern(op.input1(), m_Constant(&inputValues)))
       return failure();
@@ -183,9 +189,6 @@ struct ConstantTransposeOptimization
     auto inputType = op.input1().getType().cast<ShapedType>();
     ArrayRef<int64_t> inputShape = inputType.getShape();
     int64_t numElements = inputType.getNumElements();
-
-    auto outputType = op.getType().cast<ShapedType>();
-    ArrayRef<int64_t> outputShape = outputType.getShape();
 
     SmallVector<Attribute, 4> outputValues;
     outputValues.resize(numElements);
@@ -337,6 +340,26 @@ static LogicalResult verifyConvOp(T op) {
     return failure();
 
   return success();
+}
+
+static LogicalResult verifyAveragePoolOp(tosa::AvgPool2dOp op) {
+  auto inputETy = op.input().getType().cast<ShapedType>().getElementType();
+  auto resultETy = op.getType().cast<ShapedType>().getElementType();
+
+  if (auto quantType = inputETy.dyn_cast<mlir::quant::UniformQuantizedType>())
+    inputETy = quantType.getStorageType();
+
+  if (auto quantType = resultETy.dyn_cast<mlir::quant::UniformQuantizedType>())
+    resultETy = quantType.getStorageType();
+
+  if (inputETy.isF32() && resultETy.isF32())
+    return success();
+  if (inputETy.isInteger(8) && resultETy.isInteger(32))
+    return success();
+  if (inputETy.isInteger(16) && resultETy.isInteger(32))
+    return success();
+
+  return op.emitOpError("input/output element types are incompatible.");
 }
 
 //===----------------------------------------------------------------------===//
@@ -810,10 +833,16 @@ LogicalResult tosa::TransposeOp::inferReturnTypeComponents(
 
   // If input rank and permutation length is unknown, the output rank is
   // unknown.
-  if (!inputShape.hasRank() &&
-      (!permsShape.hasRank() || permsShape.isDynamicDim(0))) {
+  if (!inputShape.hasRank() || !permsShape.hasRank() ||
+      permsShape.isDynamicDim(0)) {
     inferredReturnShapes.push_back(ShapedTypeComponents());
     return success();
+  }
+
+  // This would imply the number of permutations does not match the rank of the
+  // input which is illegal.
+  if (permsShape.getDimSize(0) != inputShape.getRank()) {
+    return failure();
   }
 
   // Without the input dims we cannot determine the output dim sizes but we

@@ -375,6 +375,7 @@ private:
   SDValue PromoteIntOp_BUILD_VECTOR(SDNode *N);
   SDValue PromoteIntOp_INSERT_VECTOR_ELT(SDNode *N, unsigned OpNo);
   SDValue PromoteIntOp_EXTRACT_VECTOR_ELT(SDNode *N);
+  SDValue PromoteIntOp_EXTRACT_SUBVECTOR(SDNode *N);
   SDValue PromoteIntOp_INSERT_SUBVECTOR(SDNode *N);
   SDValue PromoteIntOp_CONCAT_VECTORS(SDNode *N);
   SDValue PromoteIntOp_SCALAR_TO_VECTOR(SDNode *N);
@@ -526,6 +527,7 @@ private:
   SDValue SoftenFloatRes_Unary(SDNode *N, RTLIB::Libcall LC);
   SDValue SoftenFloatRes_Binary(SDNode *N, RTLIB::Libcall LC);
   SDValue SoftenFloatRes_MERGE_VALUES(SDNode *N, unsigned ResNo);
+  SDValue SoftenFloatRes_ARITH_FENCE(SDNode *N);
   SDValue SoftenFloatRes_BITCAST(SDNode *N);
   SDValue SoftenFloatRes_BUILD_PAIR(SDNode *N);
   SDValue SoftenFloatRes_ConstantFP(SDNode *N);
@@ -1019,6 +1021,7 @@ private:
   // Generic Result Splitting.
   void SplitRes_MERGE_VALUES(SDNode *N, unsigned ResNo,
                              SDValue &Lo, SDValue &Hi);
+  void SplitRes_ARITH_FENCE (SDNode *N, SDValue &Lo, SDValue &Hi);
   void SplitRes_SELECT      (SDNode *N, SDValue &Lo, SDValue &Hi);
   void SplitRes_SELECT_CC   (SDNode *N, SDValue &Lo, SDValue &Hi);
   void SplitRes_UNDEF       (SDNode *N, SDValue &Lo, SDValue &Hi);

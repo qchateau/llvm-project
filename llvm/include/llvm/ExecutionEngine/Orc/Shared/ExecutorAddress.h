@@ -96,7 +96,7 @@ public:
     return *this;
   }
   ExecutorAddr operator++(int) { return ExecutorAddr(Addr++); }
-  ExecutorAddr operator--(int) { return ExecutorAddr(Addr++); }
+  ExecutorAddr operator--(int) { return ExecutorAddr(Addr--); }
 
   ExecutorAddr &operator+=(const ExecutorAddrDiff Delta) {
     Addr += Delta.getValue();
@@ -135,6 +135,8 @@ struct ExecutorAddrRange {
   ExecutorAddrRange() = default;
   ExecutorAddrRange(ExecutorAddr Start, ExecutorAddr End)
       : Start(Start), End(End) {}
+  ExecutorAddrRange(ExecutorAddr Start, ExecutorAddrDiff Size)
+      : Start(Start), End(Start + Size) {}
 
   bool empty() const { return Start == End; }
   ExecutorAddrDiff size() const { return End - Start; }

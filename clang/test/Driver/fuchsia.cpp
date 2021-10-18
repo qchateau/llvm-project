@@ -13,6 +13,21 @@
 // RUN:     -resource-dir=%S/Inputs/resource_dir_with_per_target_subdir \
 // RUN:     --sysroot=%S/platform -fuse-ld=lld 2>&1 \
 // RUN:     | FileCheck -check-prefixes=CHECK,CHECK-RISCV64 %s
+// RUN: %clangxx %s -### -no-canonical-prefixes --target=x86_64-fuchsia \
+// RUN:     -ccc-install-dir %S/Inputs/basic_fuchsia_tree/bin \
+// RUN:     -resource-dir=%S/Inputs/resource_dir_with_per_target_subdir \
+// RUN:     --sysroot=%S/platform -fuse-ld=lld 2>&1 \
+// RUN:     | FileCheck -check-prefixes=CHECK,CHECK-X86_64 %s
+// RUN: %clangxx %s -### -no-canonical-prefixes --target=aarch64-fuchsia \
+// RUN:     -ccc-install-dir %S/Inputs/basic_fuchsia_tree/bin \
+// RUN:     -resource-dir=%S/Inputs/resource_dir_with_per_target_subdir \
+// RUN:     --sysroot=%S/platform -fuse-ld=lld 2>&1 \
+// RUN:     | FileCheck -check-prefixes=CHECK,CHECK-AARCH64 %s
+// RUN: %clangxx %s -### -no-canonical-prefixes --target=riscv64-fuchsia \
+// RUN:     -ccc-install-dir %S/Inputs/basic_fuchsia_tree/bin \
+// RUN:     -resource-dir=%S/Inputs/resource_dir_with_per_target_subdir \
+// RUN:     --sysroot=%S/platform -fuse-ld=lld 2>&1 \
+// RUN:     | FileCheck -check-prefixes=CHECK,CHECK-RISCV64 %s
 // CHECK: {{.*}}clang{{.*}}" "-cc1"
 // CHECK-X86_64: "-triple" "x86_64-unknown-fuchsia"
 // CHECK-AARCH64: "-triple" "aarch64-unknown-fuchsia"
@@ -37,8 +52,8 @@
 // CHECK: "--push-state"
 // CHECK: "--as-needed"
 // CHECK: "-lc++"
-// CHECK: "--pop-state"
 // CHECK: "-lm"
+// CHECK: "--pop-state"
 // CHECK-X86_64: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}x86_64-unknown-fuchsia{{/|\\\\}}libclang_rt.builtins.a"
 // CHECK-AARCH64: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}aarch64-unknown-fuchsia{{/|\\\\}}libclang_rt.builtins.a"
 // CHECK-RISCV64: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}riscv64-unknown-fuchsia{{/|\\\\}}libclang_rt.builtins.a"
@@ -55,10 +70,12 @@
 // RUN:     -fuse-ld=lld 2>&1 \
 // RUN:     | FileCheck %s -check-prefix=CHECK-STATIC
 // CHECK-STATIC: "--push-state"
+// CHECK-STATIC: "--as-needed"
 // CHECK-STATIC: "-Bstatic"
 // CHECK-STATIC: "-lc++"
-// CHECK-STATIC: "--pop-state"
+// CHECK-STATIC: "-Bdynamic"
 // CHECK-STATIC: "-lm"
+// CHECK-STATIC: "--pop-state"
 // CHECK-STATIC: "-lc"
 
 // RUN: %clangxx %s -### --target=x86_64-unknown-fuchsia -nostdlib++ -fuse-ld=lld 2>&1 \

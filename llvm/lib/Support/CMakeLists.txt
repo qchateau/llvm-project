@@ -137,6 +137,7 @@ add_llvm_component_library(LLVMSupport
   Debug.cpp
   DebugCounter.cpp
   DeltaAlgorithm.cpp
+  DivisionByConstantInfo.cpp
   DAGDeltaAlgorithm.cpp
   DJB.cpp
   ELFAttributeParser.cpp
@@ -171,6 +172,8 @@ add_llvm_component_library(LLVMSupport
   MemoryBuffer.cpp
   MemoryBufferRef.cpp
   MD5.cpp
+  MSP430Attributes.cpp
+  MSP430AttributeParser.cpp
   NativeFormatting.cpp
   OptimizedStructLayout.cpp
   Optional.cpp
@@ -181,6 +184,7 @@ add_llvm_component_library(LLVMSupport
   Regex.cpp
   RISCVAttributes.cpp
   RISCVAttributeParser.cpp
+  RISCVISAInfo.cpp
   ScaledNumber.cpp
   ScopedPrinter.cpp
   SHA1.cpp
@@ -239,7 +243,6 @@ add_llvm_component_library(LLVMSupport
   Program.cpp
   RWMutex.cpp
   Signals.cpp
-  TargetRegistry.cpp
   ThreadLocal.cpp
   Threading.cpp
   Valgrind.cpp
