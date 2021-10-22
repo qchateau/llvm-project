@@ -93,66 +93,7 @@
 namespace clang {
 namespace clangd {
 using std::chrono::steady_clock;
-
-namespace {
 class ASTWorker;
-
-bool compileCommandsAreSimilar(const tooling::CompileCommand &LHS,
-                               const tooling::CompileCommand &RHS) {
-  auto LIt = LHS.CommandLine.begin();
-  auto RIt = RHS.CommandLine.begin();
-
-  auto SkipSpecificArg = [](auto It, auto End, const std::string &Filename) {
-    while (It != End) {
-      if (*It == "-o" || *It == "-x") {
-        // Erase -o and its argument
-        // Erase -x and its argument: it would prevent using header file
-        // preamble for a source file
-        It = std::min(It + 2, End);
-      } else if (*It == "-c" || It->find("-W") == 0 || *It == "-pedantic") {
-        // We don't care about those flags
-        It++;
-      } else if (It->find(Filename) != std::string::npos) {
-        // The file we're compiling appears in this argument, drop it to make it
-        // generic
-        It++;
-      } else {
-        break;
-      }
-    }
-    return It;
-  };
-
-  // Iterate the command line, skipping arguments that are specific to the
-  // file being compiled and that would not influence the premable
-  // compatiblity. Stop when one iterate reach the or when an argument differs
-  auto LEnd = LHS.CommandLine.end();
-  auto REnd = RHS.CommandLine.end();
-  while (true) {
-    LIt = SkipSpecificArg(LIt, LEnd, LHS.Filename);
-    RIt = SkipSpecificArg(RIt, REnd, RHS.Filename);
-
-    if (LIt == LEnd || RIt == REnd) {
-      break;
-    }
-
-    if (*LIt != *RIt) {
-      break;
-    }
-
-    LIt++;
-    RIt++;
-  }
-
-  // If both iterator get to the end at the same time, the CL are compatible
-  bool Compatible = LIt == LEnd && RIt == REnd;
-  if (Compatible) {
-    vlog("{0} and {1} are compatible", LHS.Filename, RHS.Filename);
-  }
-  return Compatible;
-}
-
-} // namespace
 
 static clang::clangd::Key<std::string> kFileBeingProcessed;
 
@@ -1238,8 +1179,9 @@ std::vector<TUScheduler::PreambleStore::Entry>
 ASTWorker::getCompatiblePreambles() const {
   auto AllPreamblesEntries = Preambles.getAll();
   auto End = llvm::remove_if(AllPreamblesEntries, [&](const auto &Item) {
-    return !compileCommandsAreSimilar(FileInputs.CompileCommand,
-                                      Item.Preamble->CompileCommand);
+    auto TransferedCmd = tooling::transferCompileCommand(
+        Item.Preamble->CompileCommand, FileName);
+    return TransferedCmd != FileInputs.CompileCommand;
   });
   AllPreamblesEntries.erase(End, AllPreamblesEntries.end());
   return AllPreamblesEntries;
