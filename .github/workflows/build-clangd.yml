@@ -31,7 +31,8 @@ jobs:
             -v $GITHUB_WORKSPACE/llvm-project:/tmp/llvm-project/ \
             -v $GITHUB_WORKSPACE/out:/tmp/out/ \
             clangd-image /build.sh /tmp/llvm-project/ /tmp/out/
-          mv out/clangd out/clangd-${{ matrix.docker-image }}
+          cd out/
+          tar jcvf ../clangd-${{ matrix.docker-image }}.tar.bz2 *
 
       - name: Set date
         run: echo "NOW=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
@@ -39,7 +40,7 @@ jobs:
       - name: Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: out/clangd-${{ matrix.docker-image }}
+          artifacts: clangd-${{ matrix.docker-image }}.tar.bz2
           commit: ${{ github.ref }}
           tag: clangd-${{ env.NOW }}
           token: ${{ secrets.GITHUB_TOKEN }}
