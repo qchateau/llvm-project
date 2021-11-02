@@ -17,4 +17,7 @@ cmake -G Ninja $1/llvm/ \
     "-DCMAKE_C_FLAGS_RELEASE=$cflags" \
     "-DCMAKE_CXX_FLAGS_RELEASE=$cflags"
 cmake --build . --target clangd
-cp ./bin/clangd $2
+mkdir -p $2/bin/
+cp ./bin/clangd $2/bin/
+mkdir -p $2/lib/
+cp -r ./lib/clang $2/lib/
