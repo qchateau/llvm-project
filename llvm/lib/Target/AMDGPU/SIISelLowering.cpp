@@ -2616,9 +2616,12 @@ SITargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
     SDValue ReturnAddrReg = CreateLiveInRegister(
       DAG, &AMDGPU::SReg_64RegClass, TRI->getReturnAddressReg(MF), MVT::i64);
 
-    SDValue ReturnAddrVirtualReg = DAG.getRegister(
-        MF.getRegInfo().createVirtualRegister(&AMDGPU::CCR_SGPR_64RegClass),
-        MVT::i64);
+    SDValue ReturnAddrVirtualReg =
+        DAG.getRegister(MF.getRegInfo().createVirtualRegister(
+                            CallConv != CallingConv::AMDGPU_Gfx
+                                ? &AMDGPU::CCR_SGPR_64RegClass
+                                : &AMDGPU::Gfx_CCR_SGPR_64RegClass),
+                        MVT::i64);
     Chain =
         DAG.getCopyToReg(Chain, DL, ReturnAddrVirtualReg, ReturnAddrReg, Flag);
     Flag = Chain.getValue(1);
@@ -2681,8 +2684,15 @@ SITargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
     RetOps.push_back(Flag);
 
   unsigned Opc = AMDGPUISD::ENDPGM;
-  if (!IsWaveEnd)
-    Opc = IsShader ? AMDGPUISD::RETURN_TO_EPILOG : AMDGPUISD::RET_FLAG;
+  if (!IsWaveEnd) {
+    if (IsShader)
+      Opc = AMDGPUISD::RETURN_TO_EPILOG;
+    else if (CallConv == CallingConv::AMDGPU_Gfx)
+      Opc = AMDGPUISD::RET_GFX_FLAG;
+    else
+      Opc = AMDGPUISD::RET_FLAG;
+  }
+
   return DAG.getNode(Opc, DL, MVT::Other, RetOps);
 }
 
@@ -10464,7 +10474,7 @@ SDValue SITargetLowering::performAddCombine(SDNode *N,
       return getMad64_32(DAG, SL, VT, MulLHS, MulRHS, AddRHS, false);
     }
 
-    if (numBitsSigned(MulLHS, DAG) < 32 && numBitsSigned(MulRHS, DAG) < 32) {
+    if (numBitsSigned(MulLHS, DAG) <= 32 && numBitsSigned(MulRHS, DAG) <= 32) {
       MulLHS = DAG.getSExtOrTrunc(MulLHS, SL, MVT::i32);
       MulRHS = DAG.getSExtOrTrunc(MulRHS, SL, MVT::i32);
       AddRHS = DAG.getSExtOrTrunc(AddRHS, SL, MVT::i64);
@@ -10863,7 +10873,7 @@ SDValue SITargetLowering::performCvtF32UByteNCombine(SDNode *N,
     // cvt_f32_ubyte1 (srl x, 16) -> cvt_f32_ubyte3 x
     // cvt_f32_ubyte0 (srl x,  8) -> cvt_f32_ubyte1 x
     if (auto *C = dyn_cast<ConstantSDNode>(Shift.getOperand(1))) {
-      Shift = DAG.getZExtOrTrunc(Shift.getOperand(0),
+      SDValue Shifted = DAG.getZExtOrTrunc(Shift.getOperand(0),
                                  SDLoc(Shift.getOperand(0)), MVT::i32);
 
       unsigned ShiftOffset = 8 * Offset;
@@ -10874,7 +10884,7 @@ SDValue SITargetLowering::performCvtF32UByteNCombine(SDNode *N,
 
       if (ShiftOffset < 32 && (ShiftOffset % 8) == 0) {
         return DAG.getNode(AMDGPUISD::CVT_F32_UBYTE0 + ShiftOffset / 8, SL,
-                           MVT::f32, Shift);
+                           MVT::f32, Shifted);
       }
     }
   }

@@ -2866,6 +2866,7 @@ the corresponding C11 operations, are:
 * ``__c11_atomic_fetch_and``
 * ``__c11_atomic_fetch_or``
 * ``__c11_atomic_fetch_xor``
+* ``__c11_atomic_fetch_nand`` (Nand is not presented in ``<stdatomic.h>``)
 * ``__c11_atomic_fetch_max``
 * ``__c11_atomic_fetch_min``
 
@@ -2946,7 +2947,7 @@ C++ Coroutines support builtins
 
 Clang provides experimental builtins to support C++ Coroutines as defined by
 https://wg21.link/P0057. The following four are intended to be used by the
-standard library to implement `std::experimental::coroutine_handle` type.
+standard library to implement the ``std::coroutine_handle`` type.
 
 **Syntax**:
 

@@ -686,6 +686,12 @@ public:
     for (auto attr : op.transp())
       transp.push_back(attr.cast<IntegerAttr>().getInt());
 
+    if (vectorTransformOptions.vectorTransposeLowering ==
+            vector::VectorTransposeLowering::Shuffle &&
+        resType.getRank() == 2 && transp[0] == 1 && transp[1] == 0)
+      return rewriter.notifyMatchFailure(
+          op, "Options specifies lowering to shuffle");
+
     // Handle a true 2-D matrix transpose differently when requested.
     if (vectorTransformOptions.vectorTransposeLowering ==
             vector::VectorTransposeLowering::Flat &&
@@ -736,6 +742,61 @@ private:
     return result;
   }
 
+  /// Options to control the vector patterns.
+  vector::VectorTransformsOptions vectorTransformOptions;
+};
+
+/// Rewrite a 2-D vector.transpose as a sequence of:
+///   vector.shape_cast 2D -> 1D
+///   vector.shuffle
+///   vector.shape_cast 1D -> 2D
+class TransposeOp2DToShuffleLowering
+    : public OpRewritePattern<vector::TransposeOp> {
+public:
+  using OpRewritePattern<vector::TransposeOp>::OpRewritePattern;
+
+  TransposeOp2DToShuffleLowering(
+      vector::VectorTransformsOptions vectorTransformOptions,
+      MLIRContext *context)
+      : OpRewritePattern<vector::TransposeOp>(context),
+        vectorTransformOptions(vectorTransformOptions) {}
+
+  LogicalResult matchAndRewrite(vector::TransposeOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    VectorType srcType = op.getVectorType();
+    if (srcType.getRank() != 2)
+      return rewriter.notifyMatchFailure(op, "Not a 2D transpose");
+
+    SmallVector<int64_t, 4> transp;
+    for (auto attr : op.transp())
+      transp.push_back(attr.cast<IntegerAttr>().getInt());
+    if (transp[0] != 1 && transp[1] != 0)
+      return rewriter.notifyMatchFailure(op, "Not a 2D transpose permutation");
+
+    if (vectorTransformOptions.vectorTransposeLowering !=
+        VectorTransposeLowering::Shuffle)
+      return rewriter.notifyMatchFailure(op, "Options do not ask for Shuffle");
+
+    int64_t m = srcType.getShape().front(), n = srcType.getShape().back();
+    Value casted = rewriter.create<vector::ShapeCastOp>(
+        loc, VectorType::get({m * n}, srcType.getElementType()), op.vector());
+    SmallVector<int64_t> mask;
+    mask.reserve(m * n);
+    for (int64_t j = 0; j < n; ++j)
+      for (int64_t i = 0; i < m; ++i)
+        mask.push_back(i * n + j);
+
+    Value shuffled =
+        rewriter.create<vector::ShuffleOp>(loc, casted, casted, mask);
+    rewriter.replaceOpWithNewOp<vector::ShapeCastOp>(op, op.getResultType(),
+                                                     shuffled);
+
+    return success();
+  }
+
+private:
   /// Options to control the vector patterns.
   vector::VectorTransformsOptions vectorTransformOptions;
 };
@@ -3402,7 +3463,7 @@ static Value createCastToIndexLike(PatternRewriter &rewriter, Location loc,
 //       generates more elaborate instructions for this intrinsic since it
 //       is very conservative on the boundary conditions.
 static Value buildVectorComparison(PatternRewriter &rewriter, Operation *op,
-                                   bool enableIndexOptimizations, int64_t dim,
+                                   bool indexOptimizations, int64_t dim,
                                    Value b, Value *off = nullptr) {
   auto loc = op->getLoc();
   // If we can assume all indices fit in 32-bit, we perform the vector
@@ -3410,7 +3471,7 @@ static Value buildVectorComparison(PatternRewriter &rewriter, Operation *op,
   // Otherwise we perform the vector comparison using 64-bit indices.
   Value indices;
   Type idxType;
-  if (enableIndexOptimizations) {
+  if (indexOptimizations) {
     indices = rewriter.create<arith::ConstantOp>(
         loc, rewriter.getI32VectorAttr(
                  llvm::to_vector<4>(llvm::seq<int32_t>(0, dim))));
@@ -3439,7 +3500,7 @@ struct MaterializeTransferMask : public OpRewritePattern<ConcreteOp> {
 public:
   explicit MaterializeTransferMask(MLIRContext *context, bool enableIndexOpt)
       : mlir::OpRewritePattern<ConcreteOp>(context),
-        enableIndexOptimizations(enableIndexOpt) {}
+        indexOptimizations(enableIndexOpt) {}
 
   LogicalResult matchAndRewrite(ConcreteOp xferOp,
                                 PatternRewriter &rewriter) const override {
@@ -3466,8 +3527,8 @@ public:
     Value off = xferOp.indices()[lastIndex];
     Value dim =
         vector::createOrFoldDimOp(rewriter, loc, xferOp.source(), lastIndex);
-    Value mask = buildVectorComparison(
-        rewriter, xferOp, enableIndexOptimizations, vecWidth, dim, &off);
+    Value mask = buildVectorComparison(rewriter, xferOp, indexOptimizations,
+                                       vecWidth, dim, &off);
 
     if (xferOp.mask()) {
       // Intersect the in-bounds with the mask specified as an op parameter.
@@ -3483,7 +3544,7 @@ public:
   }
 
 private:
-  const bool enableIndexOptimizations;
+  const bool indexOptimizations;
 };
 
 /// Conversion pattern for a vector.create_mask (1-D only).
@@ -3493,7 +3554,7 @@ public:
   explicit VectorCreateMaskOpConversion(MLIRContext *context,
                                         bool enableIndexOpt)
       : mlir::OpRewritePattern<vector::CreateMaskOp>(context),
-        enableIndexOptimizations(enableIndexOpt) {}
+        indexOptimizations(enableIndexOpt) {}
 
   LogicalResult matchAndRewrite(vector::CreateMaskOp op,
                                 PatternRewriter &rewriter) const override {
@@ -3501,7 +3562,7 @@ public:
     int64_t rank = dstType.getRank();
     if (rank == 1) {
       rewriter.replaceOp(
-          op, buildVectorComparison(rewriter, op, enableIndexOptimizations,
+          op, buildVectorComparison(rewriter, op, indexOptimizations,
                                     dstType.getDimSize(0), op.getOperand(0)));
       return success();
     }
@@ -3509,7 +3570,7 @@ public:
   }
 
 private:
-  const bool enableIndexOptimizations;
+  const bool indexOptimizations;
 };
 
 // Drop inner most contiguous unit dimensions from transfer_read operand.
@@ -3573,25 +3634,33 @@ class DropInnerMostUnitDims : public OpRewritePattern<vector::TransferReadOp> {
     auto loc = readOp.getLoc();
     SmallVector<int64_t> offsets(srcType.getRank(), 0);
     SmallVector<int64_t> strides(srcType.getRank(), 1);
+
+    ArrayAttr inBounds =
+        readOp.in_bounds()
+            ? rewriter.getArrayAttr(
+                  readOp.in_boundsAttr().getValue().drop_back(dimsToDrop))
+            : ArrayAttr();
     Value rankedReducedView = rewriter.create<memref::SubViewOp>(
         loc, resultMemrefType, readOp.source(), offsets, srcType.getShape(),
         strides);
+    auto permMap = getTransferMinorIdentityMap(
+        rankedReducedView.getType().cast<ShapedType>(), resultTargetVecType);
     Value result = rewriter.create<vector::TransferReadOp>(
         loc, resultTargetVecType, rankedReducedView,
-        readOp.indices().drop_back(dimsToDrop));
+        readOp.indices().drop_back(dimsToDrop), permMap, readOp.padding(),
+        inBounds);
     rewriter.replaceOpWithNewOp<vector::ShapeCastOp>(readOp, targetType,
                                                      result);
-
     return success();
   }
 };
 
 void mlir::vector::populateVectorMaskMaterializationPatterns(
-    RewritePatternSet &patterns, bool enableIndexOptimizations) {
+    RewritePatternSet &patterns, bool indexOptimizations) {
   patterns.add<VectorCreateMaskOpConversion,
                MaterializeTransferMask<vector::TransferReadOp>,
                MaterializeTransferMask<vector::TransferWriteOp>>(
-      patterns.getContext(), enableIndexOptimizations);
+      patterns.getContext(), indexOptimizations);
 }
 
 void mlir::vector::populatePropagateVectorDistributionPatterns(
@@ -3648,7 +3717,8 @@ void mlir::vector::populateVectorContractLoweringPatterns(
 
 void mlir::vector::populateVectorTransposeLoweringPatterns(
     RewritePatternSet &patterns, VectorTransformsOptions options) {
-  patterns.add<TransposeOpLowering>(options, patterns.getContext());
+  patterns.add<TransposeOpLowering, TransposeOp2DToShuffleLowering>(
+      options, patterns.getContext());
 }
 
 void mlir::vector::populateVectorReductionToContractPatterns(

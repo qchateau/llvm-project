@@ -192,6 +192,9 @@
 // RUN: %clang -target aarch64 -mcpu=neoverse-n2 -### -c %s 2>&1 | FileCheck -check-prefix=NEOVERSE-N2 %s
 // NEOVERSE-N2: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-cpu" "neoverse-n2"
 
+// RUN: %clang -target aarch64 -mcpu=neoverse-512tvb -### -c %s 2>&1 | FileCheck -check-prefix=NEOVERSE-512TVB %s
+// NEOVERSE-512TVB: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-cpu" "neoverse-512tvb"
+
 // RUN: %clang -target aarch64 -mcpu=cortex-r82  -### -c %s 2>&1 | FileCheck -check-prefix=CORTEXR82 %s
 // CORTEXR82: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-cpu" "cortex-r82"
 
@@ -400,6 +403,15 @@
 // CORTEX-A510-SAME: {{$}}
 // RUN: %clang -target aarch64 -mcpu=cortex-a510+crypto -### -c %s 2>&1 | FileCheck -check-prefix=CORTEX-A510-CRYPTO %s
 // CORTEX-A510-CRYPTO: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-feature" "+sm4" "-target-feature" "+sha3" "-target-feature" "+sha2" "-target-feature" "+aes"
+
+// RUN: %clang -target aarch64 -mcpu=cortex-x2 -### -c %s 2>&1 | FileCheck -check-prefix=CORTEX-X2 %s
+// CORTEX-X2: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-cpu" "cortex-x2"
+// CORTEX-X2-NOT: "-target-feature" "{{[+-]}}sm4"
+// CORTEX-X2-NOT: "-target-feature" "{{[+-]}}sha3"
+// CORTEX-X2-NOT: "-target-feature" "{{[+-]}}aes"
+// CORTEX-X2-SAME: {{$}}
+// RUN: %clang -target aarch64 -mcpu=cortex-x2+crypto -### -c %s 2>&1 | FileCheck -check-prefix=CORTEX-X2-CRYPTO %s
+// CORTEX-X2-CRYPTO: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-feature" "+sm4" "-target-feature" "+sha3" "-target-feature" "+sha2" "-target-feature" "+aes"
 
 // RUN: %clang -target aarch64_be -mcpu=cortex-a57 -### -c %s 2>&1 | FileCheck -check-prefix=CA57-BE %s
 // RUN: %clang -target aarch64 -mbig-endian -mcpu=cortex-a57 -### -c %s 2>&1 | FileCheck -check-prefix=CA57-BE %s

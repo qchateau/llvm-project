@@ -106,12 +106,7 @@ void ProcessWindows::Initialize() {
 
 void ProcessWindows::Terminate() {}
 
-lldb_private::ConstString ProcessWindows::GetPluginNameStatic() {
-  static ConstString g_name("windows");
-  return g_name;
-}
-
-const char *ProcessWindows::GetPluginDescriptionStatic() {
+llvm::StringRef ProcessWindows::GetPluginDescriptionStatic() {
   return "Process plugin for Windows";
 }
 
@@ -606,8 +601,8 @@ Status ProcessWindows::DoDeallocateMemory(lldb::addr_t ptr) {
   return ProcessDebugger::DeallocateMemory(ptr);
 }
 
-Status ProcessWindows::GetMemoryRegionInfo(lldb::addr_t vm_addr,
-                                           MemoryRegionInfo &info) {
+Status ProcessWindows::DoGetMemoryRegionInfo(lldb::addr_t vm_addr,
+                                             MemoryRegionInfo &info) {
   return ProcessDebugger::GetMemoryRegionInfo(vm_addr, info);
 }
 

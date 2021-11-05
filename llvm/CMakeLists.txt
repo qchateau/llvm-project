@@ -76,6 +76,12 @@ foreach(proj ${LLVM_ENABLE_PROJECTS})
      MESSAGE(FATAL_ERROR "${proj} isn't a known project: ${LLVM_KNOWN_PROJECTS}")
   endif()
 endforeach()
+foreach(proj "libcxx" "libcxxabi" "libunwind")
+  if (${proj} IN_LIST LLVM_ENABLE_PROJECTS)
+    message(WARNING "Using LLVM_ENABLE_PROJECTS=${proj} is deprecated now, please use -DLLVM_ENABLE_RUNTIMES=${proj} or "
+                    "see the instructions at https://libcxx.llvm.org/BuildingLibcxx.html for building the runtimes.")
+  endif()
+endforeach()
 
 if( LLVM_ENABLE_PROJECTS STREQUAL "all" )
   set( LLVM_ENABLE_PROJECTS ${LLVM_ALL_PROJECTS})
@@ -352,6 +358,14 @@ if(LLVM_ENABLE_CRASH_OVERRIDES)
 endif()
 
 option(LLVM_ENABLE_CRASH_DUMPS "Turn on memory dumps on crashes. Currently only implemented on Windows." OFF)
+
+set(WINDOWS_PREFER_FORWARD_SLASH_DEFAULT OFF)
+if (MINGW)
+  # Cygwin doesn't identify itself as Windows, and thus gets path::Style::posix
+  # as native path style, regardless of what this is set to.
+  set(WINDOWS_PREFER_FORWARD_SLASH_DEFAULT ON)
+endif()
+option(LLVM_WINDOWS_PREFER_FORWARD_SLASH "Prefer path names with forward slashes on Windows." ${WINDOWS_PREFER_FORWARD_SLASH_DEFAULT})
 
 option(LLVM_ENABLE_FFI "Use libffi to call external functions from the interpreter" OFF)
 set(FFI_LIBRARY_DIR "" CACHE PATH "Additional directory, where CMake should search for libffi.so")

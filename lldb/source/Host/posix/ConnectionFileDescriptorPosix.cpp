@@ -169,8 +169,11 @@ ConnectionFileDescriptor::Connect(llvm::StringRef path,
 #endif
             .Default(nullptr);
 
-    if (method)
+    if (method) {
+      if (error_ptr)
+        *error_ptr = Status();
       return (this->*method)(path, socket_id_callback, error_ptr);
+    }
   }
 
   if (error_ptr)

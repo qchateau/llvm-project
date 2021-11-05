@@ -131,8 +131,17 @@ public:
     assert(i < RISCV::NUM_TARGET_REGS && "Register out of range");
     return UserReservedRegister[i];
   }
+
+  // Vector codegen related methods.
+  bool hasVInstructions() const { return HasStdExtV; }
+  bool hasVInstructionsI64() const { return HasStdExtV; }
+  bool hasVInstructionsF16() const { return HasStdExtV && hasStdExtZfh(); }
+  bool hasVInstructionsF32() const { return HasStdExtV && hasStdExtF(); }
+  bool hasVInstructionsF64() const { return HasStdExtV && hasStdExtD(); }
+  // F16 and F64 both require F32.
+  bool hasVInstructionsAnyF() const { return hasVInstructionsF32(); }
   unsigned getMaxInterleaveFactor() const {
-    return hasStdExtV() ? MaxInterleaveFactor : 1;
+    return hasVInstructions() ? MaxInterleaveFactor : 1;
   }
 
 protected:

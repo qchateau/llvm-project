@@ -48,12 +48,7 @@ using namespace lldb_private;
 
 LLDB_PLUGIN_DEFINE(ProcessMachCore)
 
-ConstString ProcessMachCore::GetPluginNameStatic() {
-  static ConstString g_name("mach-o-core");
-  return g_name;
-}
-
-const char *ProcessMachCore::GetPluginDescriptionStatic() {
+llvm::StringRef ProcessMachCore::GetPluginDescriptionStatic() {
   return "Mach-O core file debugging plug-in.";
 }
 
@@ -638,8 +633,8 @@ size_t ProcessMachCore::DoReadMemory(addr_t addr, void *buf, size_t size,
   return bytes_read;
 }
 
-Status ProcessMachCore::GetMemoryRegionInfo(addr_t load_addr,
-                                            MemoryRegionInfo &region_info) {
+Status ProcessMachCore::DoGetMemoryRegionInfo(addr_t load_addr,
+                                              MemoryRegionInfo &region_info) {
   region_info.Clear();
   const VMRangeToPermissions::Entry *permission_entry =
       m_core_range_infos.FindEntryThatContainsOrFollows(load_addr);

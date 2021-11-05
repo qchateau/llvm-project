@@ -1369,7 +1369,7 @@ def TSTART : TMSystemI<0b0000, "tstart",
 def TCOMMIT : TMSystemINoOperand<0b0000, "tcommit", [(int_aarch64_tcommit)]>;
 
 def TCANCEL : TMSystemException<0b011, "tcancel",
-                                [(int_aarch64_tcancel i64_imm0_65535:$imm)]>;
+                                [(int_aarch64_tcancel timm64_0_65535:$imm)]>;
 
 def TTEST : TMSystemI<0b0001, "ttest", [(set GPR64:$Rt, (int_aarch64_ttest))]> {
   let mayLoad = 0;
@@ -1388,12 +1388,12 @@ let PostEncoderMethod = "fixMOVZ" in
 defm MOVZ : MoveImmediate<0b10, "movz">;
 
 // First group of aliases covers an implicit "lsl #0".
-def : InstAlias<"movk $dst, $imm", (MOVKWi GPR32:$dst, i32_imm0_65535:$imm, 0), 0>;
-def : InstAlias<"movk $dst, $imm", (MOVKXi GPR64:$dst, i32_imm0_65535:$imm, 0), 0>;
-def : InstAlias<"movn $dst, $imm", (MOVNWi GPR32:$dst, i32_imm0_65535:$imm, 0)>;
-def : InstAlias<"movn $dst, $imm", (MOVNXi GPR64:$dst, i32_imm0_65535:$imm, 0)>;
-def : InstAlias<"movz $dst, $imm", (MOVZWi GPR32:$dst, i32_imm0_65535:$imm, 0)>;
-def : InstAlias<"movz $dst, $imm", (MOVZXi GPR64:$dst, i32_imm0_65535:$imm, 0)>;
+def : InstAlias<"movk $dst, $imm", (MOVKWi GPR32:$dst, timm32_0_65535:$imm, 0), 0>;
+def : InstAlias<"movk $dst, $imm", (MOVKXi GPR64:$dst, timm32_0_65535:$imm, 0), 0>;
+def : InstAlias<"movn $dst, $imm", (MOVNWi GPR32:$dst, timm32_0_65535:$imm, 0)>;
+def : InstAlias<"movn $dst, $imm", (MOVNXi GPR64:$dst, timm32_0_65535:$imm, 0)>;
+def : InstAlias<"movz $dst, $imm", (MOVZWi GPR32:$dst, timm32_0_65535:$imm, 0)>;
+def : InstAlias<"movz $dst, $imm", (MOVZXi GPR64:$dst, timm32_0_65535:$imm, 0)>;
 
 // Next, we have various ELF relocations with the ":XYZ_g0:sym" syntax.
 def : InstAlias<"movz $Rd, $sym", (MOVZXi GPR64:$Rd, movw_symbol_g3:$sym, 48)>;
@@ -5753,7 +5753,7 @@ def : Pat<(i32 (vector_extract (v8i16 (insert_subvector undef,
             (v4i16 (AArch64uaddv (v4i16 (AArch64uaddlp (v8i8 V64:$op))))),
             (i64 0))), (i64 0))),
           (EXTRACT_SUBREG (INSERT_SUBREG (v4i16 (IMPLICIT_DEF)),
-           (UADDLVv4i16v V64:$op), ssub), ssub)>;
+           (UADDLVv8i8v V64:$op), hsub), ssub)>;
 def : Pat<(i32 (vector_extract (v8i16 (AArch64uaddv (v8i16 (AArch64uaddlp
            (v16i8 V128:$op))))), (i64 0))),
           (EXTRACT_SUBREG (INSERT_SUBREG (v8i16 (IMPLICIT_DEF)),

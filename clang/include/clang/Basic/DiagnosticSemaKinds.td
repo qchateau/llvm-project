@@ -1643,6 +1643,9 @@ def warn_weak_vtable : Warning<
   "%0 has no out-of-line virtual method definitions; its vtable will be "
   "emitted in every translation unit">,
   InGroup<DiagGroup<"weak-vtables">>, DefaultIgnore;
+def warn_weak_template_vtable : Warning<
+  "this warning is no longer in use and will be removed in the next release">,
+  InGroup<DiagGroup<"weak-template-vtables">>, DefaultIgnore;
 
 def ext_using_undefined_std : ExtWarn<
   "using directive refers to implicitly-defined namespace 'std'">;
@@ -6789,7 +6792,7 @@ def warn_taking_address_of_packed_member : Warning<
   "taking address of packed member %0 of class or structure %q1 may result in an unaligned pointer value">,
   InGroup<DiagGroup<"address-of-packed-member">>;
 def warn_param_mismatched_alignment : Warning<
-  "passing %0-byte aligned argument to %1-byte aligned parameter %2 of %3 may result in an unaligned pointer access">,
+  "passing %0-byte aligned argument to %1-byte aligned parameter %2%select{| of %4}3 may result in an unaligned pointer access">,
   InGroup<DiagGroup<"align-mismatch">>;
 
 def err_objc_object_assignment : Error<
@@ -9799,6 +9802,8 @@ def err_ppc_builtin_only_on_arch : Error<
   "this builtin is only valid on POWER%0 or later CPUs">;
 def err_ppc_builtin_requires_vsx : Error<
   "this builtin requires VSX to be enabled">;
+def err_ppc_builtin_requires_abi : Error<
+  "this builtin requires ABI -mabi=%0">;
 def err_ppc_invalid_use_mma_type : Error<
   "invalid use of PPC MMA type">;
 def err_ppc_invalid_test_data_class_type : Error<
@@ -10711,8 +10716,8 @@ def err_omp_invariant_or_linear_dependency : Error<
 def err_omp_wrong_dependency_iterator_type : Error<
   "expected an integer or a pointer type of the outer loop counter '%0' for non-rectangular nests">;
 def err_target_unsupported_type
-    : Error<"%0 requires %select{|%2 bit size}1 %3 type support, but target "
-            "'%4' does not support it">;
+    : Error<"%0 requires %select{|%2 bit size}1 %3 %select{|return }4type support,"
+            " but target '%5' does not support it">;
 def err_omp_lambda_capture_in_declare_target_not_to : Error<
   "variable captured in declare target region must appear in a to clause">;
 def err_omp_device_type_mismatch : Error<
@@ -10800,6 +10805,9 @@ def note_omp_protected_structured_block
     : Note<"jump bypasses OpenMP structured block">;
 def note_omp_exits_structured_block
     : Note<"jump exits scope of OpenMP structured block">;
+def err_omp_lastprivate_loop_var_non_loop_iteration : Error<
+  "only loop iteration variables are allowed in 'lastprivate' clause in "
+  "'omp loop' directives">;
 def err_omp_interop_variable_expected : Error<
   "expected%select{| non-const}0 variable of type 'omp_interop_t'">;
 def err_omp_interop_variable_wrong_type : Error<
@@ -10995,19 +11003,25 @@ def err_coroutine_invalid_func_context : Error<
   "|a function with a deduced return type|a varargs function"
   "|a consteval function}0">;
 def err_implied_coroutine_type_not_found : Error<
-  "%0 type was not found; include <experimental/coroutine> before defining "
-  "a coroutine">;
+  "%0 type was not found; include <coroutine> before defining "
+  "a coroutine; include <experimental/coroutine> if your version "
+  "of libcxx is less than 14.0">;
+def err_mixed_use_std_and_experimental_namespace_for_coroutine : Error <
+  "Found mixed use of std namespace and std::experimental namespace for "
+  "coroutine, which is disallowed. The coroutine components in "
+  "std::experimental namespace is deprecated. Please use coroutine components "
+  "under std namespace.">;
 def err_implicit_coroutine_std_nothrow_type_not_found : Error<
   "std::nothrow was not found; include <new> before defining a coroutine which "
   "uses get_return_object_on_allocation_failure()">;
 def err_malformed_std_nothrow : Error<
   "std::nothrow must be a valid variable declaration">;
 def err_malformed_std_coroutine_handle : Error<
-  "std::experimental::coroutine_handle must be a class template">;
+  "std::coroutine_handle isn't a class template">;
 def err_coroutine_handle_missing_member : Error<
-  "std::experimental::coroutine_handle missing a member named '%0'">;
+  "std::coroutine_handle must have a member named '%0'">;
 def err_malformed_std_coroutine_traits : Error<
-  "'std::experimental::coroutine_traits' must be a class template">;
+  "std::coroutine_traits isn't a class template">;
 def err_implied_std_coroutine_traits_promise_type_not_found : Error<
   "this function cannot be a coroutine: %q0 has no member named 'promise_type'">;
 def err_implied_std_coroutine_traits_promise_type_not_class : Error<
@@ -11307,7 +11321,7 @@ def err_builtin_invalid_arg_type: Error <
   "%ordinal0 argument must be a "
   "%select{vector, integer or floating point type|matrix|"
    "pointer to a valid matrix element type|"
-   "signed integer or floating point type}1 (was %2)">;
+   "signed integer or floating point type|vector type}1 (was %2)">;
 
 def err_builtin_matrix_disabled: Error<
   "matrix types extension is disabled. Pass -fenable-matrix to enable it">;
