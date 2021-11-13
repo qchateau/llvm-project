@@ -3621,6 +3621,76 @@ InstructionCost X86TTIImpl::getScalarizationOverhead(VectorType *Ty,
   return Cost;
 }
 
+InstructionCost X86TTIImpl::getReplicationShuffleCost(
+    Type *EltTy, int ReplicationFactor, int VF,
+    const APInt &DemandedReplicatedElts, TTI::TargetCostKind CostKind) {
+  const unsigned EltTyBits = DL.getTypeSizeInBits(EltTy);
+
+  auto bailout = [&]() {
+    return BaseT::getReplicationShuffleCost(EltTy, ReplicationFactor, VF,
+                                            DemandedReplicatedElts, CostKind);
+  };
+
+  // For now, only deal with AVX512 cases.
+  if (!ST->hasAVX512())
+    return bailout();
+
+  switch (EltTyBits) {
+  case 32:
+  case 64:
+    break; // AVX512F.
+  case 16:
+    if (!ST->hasBWI())
+      return bailout();
+    break;
+  case 8:
+    if (!ST->hasVBMI())
+      return bailout();
+    break;
+  default:
+    return bailout();
+  }
+
+  auto *SrcVecTy = FixedVectorType::get(EltTy, VF);
+  int NumReplicatedElements = VF * ReplicationFactor;
+  auto *ReplicatedVecTy = FixedVectorType::get(EltTy, NumReplicatedElements);
+
+  // Legalize the types.
+  MVT LegalSrcVecTy = TLI->getTypeLegalizationCost(DL, SrcVecTy).second;
+  MVT LegalReplicatedVecTy =
+      TLI->getTypeLegalizationCost(DL, ReplicatedVecTy).second;
+
+  // They both should have legalized into vector types.
+  if (!LegalSrcVecTy.isVector() || !LegalReplicatedVecTy.isVector())
+    return bailout();
+
+  assert(LegalSrcVecTy.getScalarSizeInBits() == EltTyBits &&
+         LegalSrcVecTy.getScalarType() ==
+             LegalReplicatedVecTy.getScalarType() &&
+         "We expect that the legalization doesn't affect the element width, "
+         "doesn't coalesce/split elements.");
+
+  unsigned NumEltsPerReplicatedVec =
+      LegalReplicatedVecTy.getVectorNumElements();
+  unsigned NumReplicatedVectors =
+      divideCeil(ReplicatedVecTy->getNumElements(), NumEltsPerReplicatedVec);
+
+  auto *SingleReplicatedVecTy =
+      FixedVectorType::get(EltTy, NumEltsPerReplicatedVec);
+
+  APInt DemandedReplicatedVectors = APIntOps::ScaleBitMask(
+      DemandedReplicatedElts.zextOrSelf(NumReplicatedVectors *
+                                        NumEltsPerReplicatedVec),
+      NumReplicatedVectors);
+  unsigned NumReplicatedVectorsDemanded =
+      DemandedReplicatedVectors.countPopulation();
+
+  InstructionCost SingleShuffleCost =
+      getShuffleCost(TTI::SK_PermuteSingleSrc, SingleReplicatedVecTy,
+                     /*Mask=*/None, /*Index=*/0, /*SubTp=*/nullptr);
+  return NumReplicatedVectorsDemanded * SingleShuffleCost;
+}
+
 InstructionCost X86TTIImpl::getMemoryOpCost(unsigned Opcode, Type *Src,
                                             MaybeAlign Alignment,
                                             unsigned AddressSpace,
@@ -5074,37 +5144,23 @@ InstructionCost X86TTIImpl::getInterleavedMemoryOpCostAVX512(
         DemandedLoadStoreElts.setBit(Index + Elm * Factor);
     }
 
-    Type *I1Type = Type::getInt1Ty(VecTy->getContext());
-    auto *MaskVT = FixedVectorType::get(I1Type, VecTy->getNumElements());
-    auto *MaskSubVT = FixedVectorType::get(I1Type, VF);
+    Type *I8Type = Type::getInt8Ty(VecTy->getContext());
 
-    // The Mask shuffling cost is extract all the elements of the Mask
-    // and insert each of them Factor times into the wide vector:
-    //
-    // E.g. an interleaved group with factor 3:
-    //    %mask = icmp ult <8 x i32> %vec1, %vec2
-    //    %interleaved.mask = shufflevector <8 x i1> %mask, <8 x i1> undef,
-    //        <24 x i32> <0,0,0,1,1,1,2,2,2,3,3,3,4,4,4,5,5,5,6,6,6,7,7,7>
-    // The cost is estimated as extract all mask elements from the <8xi1> mask
-    // vector and insert them factor times into the <24xi1> shuffled mask
-    // vector.
-    MaskCost += getScalarizationOverhead(
-        MaskSubVT, APInt::getAllOnes(MaskSubVT->getNumElements()),
-        /*Insert*/ false, /*Extract*/ true);
-    MaskCost += getScalarizationOverhead(
-        MaskVT,
+    MaskCost = getReplicationShuffleCost(
+        I8Type, Factor, VF,
         UseMaskForGaps ? DemandedLoadStoreElts
                        : APInt::getAllOnes(VecTy->getNumElements()),
-        /*Insert*/ true,
-        /*Extract*/ false);
+        CostKind);
 
     // The Gaps mask is invariant and created outside the loop, therefore the
     // cost of creating it is not accounted for here. However if we have both
     // a MaskForGaps and some other mask that guards the execution of the
     // memory access, we need to account for the cost of And-ing the two masks
     // inside the loop.
-    if (UseMaskForGaps)
+    if (UseMaskForGaps) {
+      auto *MaskVT = FixedVectorType::get(I8Type, VecTy->getNumElements());
       MaskCost += getArithmeticInstrCost(BinaryOperator::And, MaskVT, CostKind);
+    }
   }
 
   if (Opcode == Instruction::Load) {

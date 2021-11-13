@@ -10,6 +10,7 @@
 #define LLVM_TOOLS_LLVM_PROFGEN_PROFILEDBINARY_H
 
 #include "CallContext.h"
+#include "ErrorHandling.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
@@ -64,8 +65,8 @@ struct InstructionPointer {
   uint64_t Index = 0;
   InstructionPointer(const ProfiledBinary *Binary, uint64_t Address,
                      bool RoundToNext = false);
-  void advance();
-  void backward();
+  bool advance();
+  bool backward();
   void update(uint64_t Addr);
 };
 
@@ -73,6 +74,7 @@ using RangesTy = std::vector<std::pair<uint64_t, uint64_t>>;
 
 struct BinaryFunction {
   StringRef FuncName;
+  // End of range is an exclusive bound.
   RangesTy Ranges;
 };
 
@@ -80,7 +82,7 @@ struct BinaryFunction {
 // non-continuous ranges, each range corresponds to one FuncRange.
 struct FuncRange {
   uint64_t StartOffset;
-  // EndOffset is a exclusive bound.
+  // EndOffset is an exclusive bound.
   uint64_t EndOffset;
   // Function the range belongs to
   BinaryFunction *Func;
@@ -105,7 +107,8 @@ struct PrologEpilogTracker {
     for (auto I : FuncStartOffsetMap) {
       PrologEpilogSet.insert(I.first);
       InstructionPointer IP(Binary, I.first);
-      IP.advance();
+      if (!IP.advance())
+        break;
       PrologEpilogSet.insert(IP.Offset);
     }
   }
@@ -115,7 +118,8 @@ struct PrologEpilogTracker {
     for (auto Addr : RetAddrs) {
       PrologEpilogSet.insert(Addr);
       InstructionPointer IP(Binary, Addr);
-      IP.backward();
+      if (!IP.backward())
+        break;
       PrologEpilogSet.insert(IP.Offset);
     }
   }
@@ -258,6 +262,9 @@ class ProfiledBinary {
   // function and also set false to the non-function label.
   void setIsFuncEntry(uint64_t Offset, StringRef RangeSymName);
 
+  // Warn if no entry range exists in the function.
+  void warnNoFuncEntry();
+
   /// Dissassemble the text section and build various address maps.
   void disassemble(const ELFObjectFileBase *O);
 
@@ -335,6 +342,8 @@ public:
   uint64_t getAddressforIndex(uint64_t Index) const {
     return offsetToVirtualAddr(CodeAddrOffsets[Index]);
   }
+
+  size_t getCodeOffsetsSize() const { return CodeAddrOffsets.size(); }
 
   bool usePseudoProbes() const { return UsePseudoProbes; }
   // Get the index in CodeAddrOffsets for the address

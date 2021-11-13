@@ -906,16 +906,13 @@ let hasSideEffects = 0 in {
   // Rounding Instructions respecting current rounding mode
   def XSRDPIC : XX2Form<60, 107,
                       (outs vsfrc:$XT), (ins vsfrc:$XB),
-                      "xsrdpic $XT, $XB", IIC_VecFP,
-                      [(set f64:$XT, (fnearbyint f64:$XB))]>;
+                      "xsrdpic $XT, $XB", IIC_VecFP, []>;
   def XVRDPIC : XX2Form<60, 235,
                       (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrdpic $XT, $XB", IIC_VecFP,
-                      [(set v2f64:$XT, (fnearbyint v2f64:$XB))]>;
+                      "xvrdpic $XT, $XB", IIC_VecFP, []>;
   def XVRSPIC : XX2Form<60, 171,
                       (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrspic $XT, $XB", IIC_VecFP,
-                      [(set v4f32:$XT, (fnearbyint v4f32:$XB))]>;
+                      "xvrspic $XT, $XB", IIC_VecFP, []>;
   // Max/Min Instructions
   let isCommutable = 1 in {
   def XSMAXDP : XX3Form<60, 160,
@@ -1066,6 +1063,14 @@ let hasSideEffects = 0 in {
                        [(set v2i64:$XT, (PPCxxpermdi v2i64:$XA, v2i64:$XB,
                          imm32SExt16:$DM))]>;
   let isCodeGenOnly = 1 in
+  // Note that the input register class for `$XA` of XXPERMDIs is `vsfrc` which
+  // is not the same with the input register class(`vsrc`) of XXPERMDI instruction.
+  // We did this on purpose because:
+  // 1: The input is primarily for loads that load a partial vector(LFIWZX,
+  //    etc.), no need for SUBREG_TO_REG.
+  // 2: With `vsfrc` register class, in the final assembly, float registers
+  //    like `f0` are used instead of vector scalar register like `vs0`. This
+  //    helps readability.
   def XXPERMDIs : XX3Form_2s<60, 10, (outs vsrc:$XT), (ins vsfrc:$XA, u2imm:$DM),
                              "xxpermdi $XT, $XA, $XA, $DM", IIC_VecPerm, []>;
   def XXSEL : XX4Form<60, 3,
@@ -2775,9 +2780,6 @@ def : Pat<(v2f64 (int_ppc_vsx_lxvd2x_be ForceXForm:$src)), (LXVD2X ForceXForm:$s
 def : Pat<(f32 (any_fround f32:$S)),
           (f32 (COPY_TO_REGCLASS (XSRDPI
                                    (COPY_TO_REGCLASS $S, VSFRC)), VSSRC))>;
-def : Pat<(f32 (fnearbyint f32:$S)),
-          (f32 (COPY_TO_REGCLASS (XSRDPIC
-                                   (COPY_TO_REGCLASS $S, VSFRC)), VSSRC))>;
 def : Pat<(f32 (any_ffloor f32:$S)),
           (f32 (COPY_TO_REGCLASS (XSRDPIM
                                    (COPY_TO_REGCLASS $S, VSFRC)), VSSRC))>;
@@ -2795,6 +2797,19 @@ def : Pat<(v4f32 (any_frint v4f32:$S)), (v4f32 (XVRSPIC $S))>;
 // Rounding for double precision.
 def : Pat<(f64 (any_frint f64:$S)), (f64 (XSRDPIC $S))>;
 def : Pat<(v2f64 (any_frint v2f64:$S)), (v2f64 (XVRDPIC $S))>;
+
+// Rounding without exceptions (nearbyint). Due to strange tblgen behaviour,
+// these need to be defined after the any_frint versions so ISEL will correctly
+// add the chain to the strict versions.
+def : Pat<(f32 (fnearbyint f32:$S)),
+          (f32 (COPY_TO_REGCLASS (XSRDPIC
+                                   (COPY_TO_REGCLASS $S, VSFRC)), VSSRC))>;
+def : Pat<(f64 (fnearbyint f64:$S)),
+          (f64 (XSRDPIC $S))>;
+def : Pat<(v2f64 (fnearbyint v2f64:$S)),
+          (v2f64 (XVRDPIC $S))>;
+def : Pat<(v4f32 (fnearbyint v4f32:$S)),
+          (v4f32 (XVRSPIC $S))>;
 
 // Materialize a zero-vector of long long
 def : Pat<(v2i64 immAllZerosV),
