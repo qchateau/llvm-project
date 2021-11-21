@@ -49,10 +49,71 @@ using namespace lld::elf;
 
 LinkerScript *elf::script;
 
+static bool isSectionPrefix(StringRef prefix, StringRef name) {
+  return name.startswith(prefix) || name == prefix.drop_back();
+}
+
 static uint64_t getOutputSectionVA(SectionBase *sec) {
   OutputSection *os = sec->getOutputSection();
   assert(os && "input section has no output section assigned");
   return os ? os->addr : 0;
+}
+
+static StringRef getOutputSectionName(const InputSectionBase *s) {
+  if (config->relocatable)
+    return s->name;
+
+  // This is for --emit-relocs. If .text.foo is emitted as .text.bar, we want
+  // to emit .rela.text.foo as .rela.text.bar for consistency (this is not
+  // technically required, but not doing it is odd). This code guarantees that.
+  if (auto *isec = dyn_cast<InputSection>(s)) {
+    if (InputSectionBase *rel = isec->getRelocatedSection()) {
+      OutputSection *out = rel->getOutputSection();
+      if (s->type == SHT_RELA)
+        return saver.save(".rela" + out->name);
+      return saver.save(".rel" + out->name);
+    }
+  }
+
+  // A BssSection created for a common symbol is identified as "COMMON" in
+  // linker scripts. It should go to .bss section.
+  if (s->name == "COMMON")
+    return ".bss";
+
+  if (script->hasSectionsCommand)
+    return s->name;
+
+  // When no SECTIONS is specified, emulate GNU ld's internal linker scripts
+  // by grouping sections with certain prefixes.
+
+  // GNU ld places text sections with prefix ".text.hot.", ".text.unknown.",
+  // ".text.unlikely.", ".text.startup." or ".text.exit." before others.
+  // We provide an option -z keep-text-section-prefix to group such sections
+  // into separate output sections. This is more flexible. See also
+  // sortISDBySectionOrder().
+  // ".text.unknown" means the hotness of the section is unknown. When
+  // SampleFDO is used, if a function doesn't have sample, it could be very
+  // cold or it could be a new function never being sampled. Those functions
+  // will be kept in the ".text.unknown" section.
+  // ".text.split." holds symbols which are split out from functions in other
+  // input sections. For example, with -fsplit-machine-functions, placing the
+  // cold parts in .text.split instead of .text.unlikely mitigates against poor
+  // profile inaccuracy. Techniques such as hugepage remapping can make
+  // conservative decisions at the section granularity.
+  if (config->zKeepTextSectionPrefix)
+    for (StringRef v : {".text.hot.", ".text.unknown.", ".text.unlikely.",
+                        ".text.startup.", ".text.exit.", ".text.split."})
+      if (isSectionPrefix(v, s->name))
+        return v.drop_back();
+
+  for (StringRef v :
+       {".text.", ".rodata.", ".data.rel.ro.", ".data.", ".bss.rel.ro.",
+        ".bss.", ".init_array.", ".fini_array.", ".ctors.", ".dtors.", ".tbss.",
+        ".gcc_except_table.", ".tdata.", ".ARM.exidx.", ".ARM.extab."})
+    if (isSectionPrefix(v, s->name))
+      return v.drop_back();
+
+  return s->name;
 }
 
 uint64_t ExprValue::getValue() const {
@@ -976,12 +1037,16 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
   // reuse previous lmaOffset; otherwise, reset lmaOffset to 0. This emulates
   // heuristics described in
   // https://sourceware.org/binutils/docs/ld/Output-Section-LMA.html
-  if (sec->lmaExpr)
+  if (sec->lmaExpr) {
     ctx->lmaOffset = sec->lmaExpr().getValue() - dot;
-  else if (MemoryRegion *mr = sec->lmaRegion)
-    ctx->lmaOffset = alignTo(mr->curPos, sec->alignment) - dot;
-  else if (!sameMemRegion || !prevLMARegionIsDefault)
+  } else if (MemoryRegion *mr = sec->lmaRegion) {
+    uint64_t lmaStart = alignTo(mr->curPos, sec->alignment);
+    if (mr->curPos < lmaStart)
+      expandMemoryRegion(mr, lmaStart - mr->curPos, mr->name, sec->name);
+    ctx->lmaOffset = lmaStart - dot;
+  } else if (!sameMemRegion || !prevLMARegionIsDefault) {
     ctx->lmaOffset = 0;
+  }
 
   // Propagate ctx->lmaOffset to the first "non-header" section.
   if (PhdrEntry *l = ctx->outSec->ptLoad)
@@ -1030,7 +1095,7 @@ void LinkerScript::assignOffsets(OutputSection *sec) {
   }
 }
 
-static bool isDiscardable(OutputSection &sec) {
+static bool isDiscardable(const OutputSection &sec) {
   if (sec.name == "/DISCARD/")
     return true;
 
@@ -1057,6 +1122,11 @@ static bool isDiscardable(OutputSection &sec) {
       return false;
   }
   return true;
+}
+
+bool LinkerScript::isDiscarded(const OutputSection *sec) const {
+  return hasSectionsCommand && (getFirstInputSection(sec) == nullptr) &&
+         isDiscardable(*sec);
 }
 
 static void maybePropagatePhdrs(OutputSection &sec,

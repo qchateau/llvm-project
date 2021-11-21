@@ -603,7 +603,7 @@ DeduceTemplateSpecArguments(Sema &S, TemplateParameterList *TemplateParams,
                                  /*NumberOfArgumentsMustMatch=*/true);
 }
 
-static bool IsPossiblyOpaquelyQualifiedType(const Type *T) {
+static bool IsPossiblyOpaquelyQualifiedTypeInternal(const Type *T) {
   assert(T->isCanonicalUnqualified());
 
   switch (T->getTypeClass()) {
@@ -619,7 +619,7 @@ static bool IsPossiblyOpaquelyQualifiedType(const Type *T) {
   case Type::IncompleteArray:
   case Type::VariableArray:
   case Type::DependentSizedArray:
-    return IsPossiblyOpaquelyQualifiedType(
+    return IsPossiblyOpaquelyQualifiedTypeInternal(
         cast<ArrayType>(T)->getElementType().getTypePtr());
 
   default:
@@ -630,7 +630,7 @@ static bool IsPossiblyOpaquelyQualifiedType(const Type *T) {
 /// Determines whether the given type is an opaque type that
 /// might be more qualified when instantiated.
 static bool IsPossiblyOpaquelyQualifiedType(QualType T) {
-  return IsPossiblyOpaquelyQualifiedType(
+  return IsPossiblyOpaquelyQualifiedTypeInternal(
       T->getCanonicalTypeInternal().getTypePtr());
 }
 
@@ -1337,6 +1337,13 @@ static Sema::TemplateDeductionResult DeduceTemplateArgumentsByTypeMatch(
     TemplateDeductionInfo &Info,
     SmallVectorImpl<DeducedTemplateArgument> &Deduced, unsigned TDF,
     bool PartialOrdering, bool DeducedFromArrayBound) {
+
+  // If the argument type is a pack expansion, look at its pattern.
+  // This isn't explicitly called out
+  if (const auto *AExp = dyn_cast<PackExpansionType>(A))
+    A = AExp->getPattern();
+  assert(!isa<PackExpansionType>(A.getCanonicalType()));
+
   if (PartialOrdering) {
     // C++11 [temp.deduct.partial]p5:
     //   Before the partial ordering is done, certain transformations are
