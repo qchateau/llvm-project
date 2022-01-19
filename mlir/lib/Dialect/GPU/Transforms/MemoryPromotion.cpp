@@ -24,18 +24,6 @@
 using namespace mlir;
 using namespace mlir::gpu;
 
-/// Returns the textual name of a GPU dimension.
-static StringRef getDimName(unsigned dim) {
-  if (dim == 0)
-    return "x";
-  if (dim == 1)
-    return "y";
-  if (dim == 2)
-    return "z";
-
-  llvm_unreachable("dimension ID overflow");
-}
-
 /// Emits the (imperfect) loop nest performing the copy between "from" and "to"
 /// values using the bounds derived from the "from" value. Emits at least
 /// GPUDialect::getNumWorkgroupDimensions() loops, completing the nest with
@@ -71,10 +59,9 @@ static void insertCopyLoops(ImplicitLocOpBuilder &b, Value from, Value to) {
   // Obtain thread identifiers and block sizes, necessary to map to them.
   auto indexType = b.getIndexType();
   SmallVector<Value, 3> threadIds, blockDims;
-  for (unsigned i = 0; i < 3; ++i) {
-    auto dimName = b.getStringAttr(getDimName(i));
-    threadIds.push_back(b.create<gpu::ThreadIdOp>(indexType, dimName));
-    blockDims.push_back(b.create<gpu::BlockDimOp>(indexType, dimName));
+  for (auto dim : {gpu::Dimension::x, gpu::Dimension::y, gpu::Dimension::z}) {
+    threadIds.push_back(b.create<gpu::ThreadIdOp>(indexType, dim));
+    blockDims.push_back(b.create<gpu::BlockDimOp>(indexType, dim));
   }
 
   // Produce the loop nest with copies.
@@ -89,7 +76,7 @@ static void insertCopyLoops(ImplicitLocOpBuilder &b, Value from, Value to) {
       });
 
   // Map the innermost loops to threads in reverse order.
-  for (auto en :
+  for (const auto &en :
        llvm::enumerate(llvm::reverse(llvm::makeArrayRef(ivs).take_back(
            GPUDialect::getNumWorkgroupDimensions())))) {
     Value v = en.value();

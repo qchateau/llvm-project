@@ -26,6 +26,7 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Transforms/InliningUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -102,6 +103,20 @@ bool GPUDialect::isKernel(Operation *op) {
   return static_cast<bool>(isKernelAttr);
 }
 
+namespace {
+/// This class defines the interface for handling inlining with gpu
+/// operations.
+struct GPUInlinerInterface : public DialectInlinerInterface {
+  using DialectInlinerInterface::DialectInlinerInterface;
+
+  /// All gpu dialect ops can be inlined.
+  bool isLegalToInline(Operation *, Region *, bool,
+                       BlockAndValueMapping &) const final {
+    return true;
+  }
+};
+} // namespace
+
 void GPUDialect::initialize() {
   addTypes<AsyncTokenType>();
   addTypes<MMAMatrixType>();
@@ -109,6 +124,11 @@ void GPUDialect::initialize() {
 #define GET_OP_LIST
 #include "mlir/Dialect/GPU/GPUOps.cpp.inc"
       >();
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "mlir/Dialect/GPU/GPUOpsAttributes.cpp.inc"
+      >();
+  addInterfaces<GPUInlinerInterface>();
 }
 
 Type GPUDialect::parseType(DialectAsmParser &parser) const {
@@ -277,54 +297,36 @@ static LogicalResult verifyAllReduce(gpu::AllReduceOp allReduce) {
     if (yieldCount == 0)
       return allReduce.emitError("expected gpu.yield op in region");
   } else {
-    StringRef opName = *allReduce.op();
-    if ((opName == "and" || opName == "or" || opName == "xor") &&
+    gpu::AllReduceOperation opName = *allReduce.op();
+    if ((opName == gpu::AllReduceOperation::AND ||
+         opName == gpu::AllReduceOperation::OR ||
+         opName == gpu::AllReduceOperation::XOR) &&
         !allReduce.getType().isa<IntegerType>()) {
       return allReduce.emitError()
-             << '`' << opName << '`'
+             << '`' << gpu::stringifyAllReduceOperation(opName) << '`'
              << " accumulator is only compatible with Integer type";
     }
   }
   return success();
 }
 
-static LogicalResult verifyShuffleOp(gpu::ShuffleOp shuffleOp) {
-  auto type = shuffleOp.value().getType();
-  if (shuffleOp.result().getType() != type) {
-    return shuffleOp.emitOpError()
-           << "requires the same type for value operand and result";
-  }
-  if (!type.isSignlessIntOrFloat() || type.getIntOrFloatBitWidth() != 32) {
-    return shuffleOp.emitOpError()
-           << "requires value operand type to be f32 or i32";
+// TODO: Support optional custom attributes (without dialect prefix).
+static ParseResult parseAllReduceOperation(AsmParser &parser,
+                                           AllReduceOperationAttr &attr) {
+  StringRef enumStr;
+  if (!parser.parseOptionalKeyword(&enumStr)) {
+    Optional<AllReduceOperation> op = gpu::symbolizeAllReduceOperation(enumStr);
+    if (!op)
+      return parser.emitError(parser.getCurrentLocation(), "invalid op kind");
+    attr = AllReduceOperationAttr::get(parser.getContext(), *op);
   }
   return success();
 }
 
-static void printShuffleOp(OpAsmPrinter &p, ShuffleOp op) {
-  p << ' ' << op.getOperands() << ' ' << stringifyEnum(op.mode()) << " : "
-    << op.value().getType();
-}
-
-static ParseResult parseShuffleOp(OpAsmParser &parser, OperationState &state) {
-  SmallVector<OpAsmParser::OperandType, 3> operandInfo;
-  if (parser.parseOperandList(operandInfo, 3))
-    return failure();
-
-  StringRef mode;
-  if (parser.parseKeyword(&mode))
-    return failure();
-  state.addAttribute("mode", parser.getBuilder().getStringAttr(mode));
-
-  Type valueType;
-  Type int32Type = parser.getBuilder().getIntegerType(32);
-  Type int1Type = parser.getBuilder().getI1Type();
-  if (parser.parseColonType(valueType) ||
-      parser.resolveOperands(operandInfo, {valueType, int32Type, int32Type},
-                             parser.getCurrentLocation(), state.operands) ||
-      parser.addTypesToList({valueType, int1Type}, state.types))
-    return failure();
-  return success();
+static void printAllReduceOperation(AsmPrinter &printer, Operation *op,
+                                    AllReduceOperationAttr attr) {
+  if (attr)
+    attr.print(printer);
 }
 
 //===----------------------------------------------------------------------===//
@@ -459,6 +461,7 @@ static void printLaunchOp(OpAsmPrinter &p, LaunchOp op) {
     p << ' ' << op.getDynamicSharedMemorySizeKeyword() << ' '
       << op.dynamicSharedMemorySize();
 
+  p << ' ';
   p.printRegion(op.body(), /*printEntryBlockArgs=*/false);
   p.printOptionalAttrDict(op->getAttrs());
 }
@@ -669,7 +672,7 @@ parseLaunchFuncOperands(OpAsmParser &parser,
     return success();
   SmallVector<NamedAttrList, 4> argAttrs;
   bool isVariadic = false;
-  return function_like_impl::parseFunctionArgumentList(
+  return function_interface_impl::parseFunctionArgumentList(
       parser, /*allowAttributes=*/false,
       /*allowVariadic=*/false, argNames, argTypes, argAttrs, isVariadic);
 }
@@ -787,7 +790,7 @@ static ParseResult parseGPUFuncOp(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   auto signatureLocation = parser.getCurrentLocation();
-  if (failed(function_like_impl::parseFunctionSignature(
+  if (failed(function_interface_impl::parseFunctionSignature(
           parser, /*allowVariadic=*/false, entryArgs, argTypes, argAttrs,
           isVariadic, resultTypes, resultAttrs)))
     return failure();
@@ -826,8 +829,8 @@ static ParseResult parseGPUFuncOp(OpAsmParser &parser, OperationState &result) {
   // Parse attributes.
   if (failed(parser.parseOptionalAttrDictWithKeyword(result.attributes)))
     return failure();
-  function_like_impl::addArgAndResultAttrs(builder, result, argAttrs,
-                                           resultAttrs);
+  function_interface_impl::addArgAndResultAttrs(builder, result, argAttrs,
+                                                resultAttrs);
 
   // Parse the region. If no argument names were provided, take all names
   // (including those of attributions) from the entry block.
@@ -852,7 +855,7 @@ static void printGPUFuncOp(OpAsmPrinter &p, GPUFuncOp op) {
   p.printSymbolName(op.getName());
 
   FunctionType type = op.getType();
-  function_like_impl::printFunctionSignature(
+  function_interface_impl::printFunctionSignature(
       p, op.getOperation(), type.getInputs(),
       /*isVariadic=*/false, type.getResults());
 
@@ -861,14 +864,14 @@ static void printGPUFuncOp(OpAsmPrinter &p, GPUFuncOp op) {
   if (op.isKernel())
     p << ' ' << op.getKernelKeyword();
 
-  function_like_impl::printFunctionAttributes(
+  function_interface_impl::printFunctionAttributes(
       p, op.getOperation(), type.getNumInputs(), type.getNumResults(),
       {op.getNumWorkgroupAttributionsAttrName(),
        GPUDialect::getKernelFuncAttrName()});
+  p << ' ';
   p.printRegion(op.getBody(), /*printEntryBlockArgs=*/false);
 }
 
-/// Hook for FunctionLike verifier.
 LogicalResult GPUFuncOp::verifyType() {
   Type type = getTypeAttr().getValue();
   if (!type.isa<FunctionType>())
@@ -940,7 +943,7 @@ static LogicalResult verify(gpu::ReturnOp returnOp) {
         .attachNote(function.getLoc())
         .append("return type declared here");
 
-  for (auto pair : llvm::enumerate(
+  for (const auto &pair : llvm::enumerate(
            llvm::zip(function.getType().getResults(), returnOp.operands()))) {
     Type type;
     Value operand;
@@ -989,6 +992,7 @@ static void print(OpAsmPrinter &p, GPUModuleOp op) {
   p.printSymbolName(op.getName());
   p.printOptionalAttrDictWithKeyword(op->getAttrs(),
                                      {SymbolTable::getSymbolAttrName()});
+  p << ' ';
   p.printRegion(op->getRegion(0), /*printEntryBlockArgs=*/false,
                 /*printBlockTerminators=*/false);
 }
@@ -1177,7 +1181,7 @@ struct SimplifyDimOfAllocOp : public OpRewritePattern<memref::DimOp> {
   }
 };
 
-} // end anonymous namespace.
+} // namespace
 
 void AllocOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
@@ -1186,6 +1190,9 @@ void AllocOp::getCanonicalizationPatterns(RewritePatternSet &results,
 
 #include "mlir/Dialect/GPU/GPUOpInterfaces.cpp.inc"
 #include "mlir/Dialect/GPU/GPUOpsEnums.cpp.inc"
+
+#define GET_ATTRDEF_CLASSES
+#include "mlir/Dialect/GPU/GPUOpsAttributes.cpp.inc"
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/GPU/GPUOps.cpp.inc"

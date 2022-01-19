@@ -1167,11 +1167,13 @@ void SIFrameLowering::processFunctionBeforeFrameFinalized(
   if (SpillVGPRToAGPR) {
     // To track the spill frame indices handled in this pass.
     BitVector SpillFIs(MFI.getObjectIndexEnd(), false);
+    BitVector NonVGPRSpillFIs(MFI.getObjectIndexEnd(), false);
 
     bool SeenDbgInstr = false;
 
     for (MachineBasicBlock &MBB : MF) {
       for (MachineInstr &MI : llvm::make_early_inc_range(MBB)) {
+        int FrameIndex;
         if (MI.isDebugInstr())
           SeenDbgInstr = true;
 
@@ -1191,9 +1193,17 @@ void SIFrameLowering::processFunctionBeforeFrameFinalized(
             SpillFIs.set(FI);
             continue;
           }
-        }
+        } else if (TII->isStoreToStackSlot(MI, FrameIndex) ||
+                   TII->isLoadFromStackSlot(MI, FrameIndex))
+          NonVGPRSpillFIs.set(FrameIndex);
       }
     }
+
+    // Stack slot coloring may assign different objets to the same stack slot.
+    // If not, then the VGPR to AGPR spill slot is dead.
+    for (unsigned FI : SpillFIs.set_bits())
+      if (!NonVGPRSpillFIs.test(FI))
+        FuncInfo->setVGPRToAGPRSpillDead(FI);
 
     for (MachineBasicBlock &MBB : MF) {
       for (MCPhysReg Reg : FuncInfo->getVGPRSpillAGPRs())
@@ -1310,16 +1320,14 @@ void SIFrameLowering::determineCalleeSavesSGPR(MachineFunction &MF,
   const BitVector AllSavedRegs = SavedRegs;
   SavedRegs.clearBitsInMask(TRI->getAllVectorRegMask());
 
-  // If clearing VGPRs changed the mask, we will have some CSR VGPR spills.
-  const bool HaveAnyCSRVGPR = SavedRegs != AllSavedRegs;
-
   // We have to anticipate introducing CSR VGPR spills or spill of caller
   // save VGPR reserved for SGPR spills as we now always create stack entry
-  // for it, if we don't have any stack objects already, since we require
-  // an FP if there is a call and stack.
+  // for it, if we don't have any stack objects already, since we require a FP
+  // if there is a call and stack. We will allocate a VGPR for SGPR spills if
+  // there are any SGPR spills. Whether they are CSR spills or otherwise.
   MachineFrameInfo &FrameInfo = MF.getFrameInfo();
   const bool WillHaveFP =
-      FrameInfo.hasCalls() && (HaveAnyCSRVGPR || MFI->VGPRReservedForSGPRSpill);
+      FrameInfo.hasCalls() && (AllSavedRegs.any() || MFI->hasSpilledSGPRs());
 
   // FP will be specially managed like SP.
   if (WillHaveFP || hasFP(MF))
@@ -1362,6 +1370,34 @@ bool SIFrameLowering::assignCalleeSavedSpillSlots(
   }
 
   return false;
+}
+
+bool SIFrameLowering::allocateScavengingFrameIndexesNearIncomingSP(
+  const MachineFunction &MF) const {
+
+  const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  uint64_t EstStackSize = MFI.estimateStackSize(MF);
+  uint64_t MaxOffset = EstStackSize - 1;
+
+  // We need the emergency stack slots to be allocated in range of the
+  // MUBUF/flat scratch immediate offset from the base register, so assign these
+  // first at the incoming SP position.
+  //
+  // TODO: We could try sorting the objects to find a hole in the first bytes
+  // rather than allocating as close to possible. This could save a lot of space
+  // on frames with alignment requirements.
+  if (ST.enableFlatScratch()) {
+    const SIInstrInfo *TII = ST.getInstrInfo();
+    if (TII->isLegalFLATOffset(MaxOffset, AMDGPUAS::PRIVATE_ADDRESS,
+                               SIInstrFlags::FlatScratch))
+      return false;
+  } else {
+    if (SIInstrInfo::isLegalMUBUFImmOffset(MaxOffset))
+      return false;
+  }
+
+  return true;
 }
 
 MachineBasicBlock::iterator SIFrameLowering::eliminateCallFramePseudoInstr(

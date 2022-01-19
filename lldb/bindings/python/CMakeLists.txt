@@ -52,20 +52,6 @@ function(create_python_package swig_target working_dir pkg_dir)
     WORKING_DIRECTORY ${working_dir})
 endfunction()
 
-function(create_relative_symlink swig_target dest_file output_dir output_name)
-  get_filename_component(dest_file ${dest_file} ABSOLUTE)
-  get_filename_component(output_dir ${output_dir} ABSOLUTE)
-  file(RELATIVE_PATH rel_dest_file ${output_dir} ${dest_file})
-  if(CMAKE_HOST_UNIX)
-    set(LLVM_LINK_OR_COPY create_symlink)
-  else()
-    set(LLVM_LINK_OR_COPY copy)
-  endif()
-  add_custom_command(TARGET ${swig_target} POST_BUILD VERBATIM
-    COMMAND ${CMAKE_COMMAND} -E ${LLVM_LINK_OR_COPY} ${rel_dest_file} ${output_name}
-    WORKING_DIRECTORY ${output_dir})
-endfunction()
-
 function(finish_swig_python swig_target lldb_python_bindings_dir lldb_python_target_dir)
   # Add a Post-Build Event to copy over Python files and create the symlink to
   # liblldb.so for the Python API(hardlink on Windows).
@@ -172,7 +158,7 @@ function(finish_swig_python swig_target lldb_python_bindings_dir lldb_python_tar
 
   # Install the LLDB python module
   if(LLDB_BUILD_FRAMEWORK)
-    set(LLDB_PYTHON_INSTALL_PATH ${LLDB_FRAMEWORK_INSTALL_DIR}/LLDB.framework/Resources/Python)
+    set(LLDB_PYTHON_INSTALL_PATH ${LLDB_FRAMEWORK_INSTALL_DIR}/LLDB.framework/Versions/${LLDB_FRAMEWORK_VERSION}/Resources/Python)
   else()
     set(LLDB_PYTHON_INSTALL_PATH ${LLDB_PYTHON_RELATIVE_PATH})
   endif()

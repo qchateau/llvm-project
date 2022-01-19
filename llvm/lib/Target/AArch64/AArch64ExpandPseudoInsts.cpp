@@ -102,9 +102,8 @@ INITIALIZE_PASS(AArch64ExpandPseudo, "aarch64-expand-pseudo",
 static void transferImpOps(MachineInstr &OldMI, MachineInstrBuilder &UseMI,
                            MachineInstrBuilder &DefMI) {
   const MCInstrDesc &Desc = OldMI.getDesc();
-  for (unsigned i = Desc.getNumOperands(), e = OldMI.getNumOperands(); i != e;
-       ++i) {
-    const MachineOperand &MO = OldMI.getOperand(i);
+  for (const MachineOperand &MO :
+       llvm::drop_begin(OldMI.operands(), Desc.getNumOperands())) {
     assert(MO.isReg() && MO.getReg());
     if (MO.isUse())
       UseMI.add(MO);
@@ -444,7 +443,7 @@ bool AArch64ExpandPseudo::expand_DestructiveOp(
   uint64_t FalseLanes = MI.getDesc().TSFlags & AArch64::FalseLanesMask;
   bool FalseZero = FalseLanes == AArch64::FalseLanesZero;
 
-  unsigned DstReg = MI.getOperand(0).getReg();
+  Register DstReg = MI.getOperand(0).getReg();
   bool DstIsDead = MI.getOperand(0).isDead();
 
   if (DType == AArch64::DestructiveBinary)
@@ -733,8 +732,9 @@ bool AArch64ExpandPseudo::expandCALL_RVMARKER(
         MOP.getReg(), /*Def=*/false, /*Implicit=*/true));
     RegMaskStartIdx++;
   }
-  for (; RegMaskStartIdx < MI.getNumOperands(); ++RegMaskStartIdx)
-    OriginalCall->addOperand(MI.getOperand(RegMaskStartIdx));
+  for (const MachineOperand &MO :
+       llvm::drop_begin(MI.operands(), RegMaskStartIdx))
+    OriginalCall->addOperand(MO);
 
   auto *Marker = BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(AArch64::ORRXrs))
                      .addReg(AArch64::FP, RegState::Define)
@@ -989,7 +989,7 @@ bool AArch64ExpandPseudo::expandMI(MachineBasicBlock &MBB,
                    .addReg(DstReg, RegState::Kill)
                    .addReg(DstReg, DstFlags | RegState::Implicit);
       } else {
-        unsigned DstReg = MI.getOperand(0).getReg();
+        Register DstReg = MI.getOperand(0).getReg();
         MIB2 = BuildMI(MBB, MBBI, DL, TII->get(AArch64::LDRXui))
                    .add(MI.getOperand(0))
                    .addUse(DstReg, RegState::Kill);

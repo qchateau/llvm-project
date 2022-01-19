@@ -96,6 +96,7 @@ bool EditIntegerInput(
   std::optional<char32_t> next;
   bool negate{ScanNumericPrefix(io, edit, next, remaining)};
   common::UnsignedInt128 value;
+  bool any{false};
   for (; next; next = io.NextInField(remaining)) {
     char32_t ch{*next};
     if (ch == ' ' || ch == '\t') {
@@ -115,12 +116,15 @@ bool EditIntegerInput(
     }
     value *= 10;
     value += digit;
+    any = true;
   }
-  if (negate) {
-    value = -value;
+  if (any) {
+    if (negate) {
+      value = -value;
+    }
+    std::memcpy(n, &value, kind);
   }
-  std::memcpy(n, &value, kind);
-  return true;
+  return any;
 }
 
 // Parses a REAL input number from the input source as a normalized
@@ -303,15 +307,15 @@ static bool TryFastPathRealInput(
   for (; p < limit && (*p == ' ' || *p == '\t'); ++p) {
   }
   if (edit.descriptor == DataEdit::ListDirectedImaginaryPart) {
-    // Need a trailing ')'
+    // Need to consume a trailing ')' and any white space after
     if (p >= limit || *p != ')') {
       return false;
     }
-    for (++ ++p; p < limit && (*p == ' ' || *p == '\t'); ++p) {
+    for (++p; p < limit && (*p == ' ' || *p == '\t'); ++p) {
     }
   }
-  if (p < limit) {
-    return false; // unconverted characters remain in field
+  if (edit.width && p < str + *edit.width) {
+    return false; // unconverted characters remain in fixed width field
   }
   // Success on the fast path!
   // TODO: raise converted.flags as exceptions?

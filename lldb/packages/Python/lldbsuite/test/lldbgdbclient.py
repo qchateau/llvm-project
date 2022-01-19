@@ -19,7 +19,7 @@ class GDBRemoteTestBase(TestBase):
 
     def setUp(self):
         TestBase.setUp(self)
-        self.server = MockGDBServer(socket_class=self.server_socket_class)
+        self.server = MockGDBServer(self.server_socket_class())
         self.server.start()
 
     def tearDown(self):
@@ -58,7 +58,7 @@ class GDBRemoteTestBase(TestBase):
         self.assertTrue(process, PROCESS_IS_VALID)
         return process
 
-    def assertPacketLogContains(self, packets):
+    def assertPacketLogContains(self, packets, log=None):
         """
         Assert that the mock server's packet log contains the given packets.
 
@@ -69,9 +69,10 @@ class GDBRemoteTestBase(TestBase):
         The check does not require that the packets be consecutive, but does
         require that they are ordered in the log as they ordered in the arg.
         """
+        if log is None:
+            log = self.server.responder.packetLog
         i = 0
         j = 0
-        log = self.server.responder.packetLog
 
         while i < len(packets) and j < len(log):
             if log[j] == packets[i]:

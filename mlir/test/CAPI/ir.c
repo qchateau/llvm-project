@@ -276,8 +276,10 @@ int collectStats(MlirOperation operation) {
 
   do {
     int retval = collectStatsSingle(head, &stats);
-    if (retval)
+    if (retval) {
+      free(head);
       return retval;
+    }
     OpListNode *next = head->next;
     free(head);
     head = next;
@@ -461,7 +463,7 @@ static void printFirstOfEach(MlirContext ctx, MlirOperation operation) {
   mlirOperationPrintWithFlags(operation, flags, printToStderr, NULL);
   fprintf(stderr, "\n");
   // clang-format off
-  // CHECK: Op print with all flags: %{{.*}} = "arith.constant"() {elts = opaque<"_", "0xDEADBEEF"> : tensor<4xi32>, value = 0 : index} : () -> index loc(unknown)
+  // CHECK: Op print with all flags: %{{.*}} = "arith.constant"() {elts = opaque<"elided_large_const", "0xDEADBEEF"> : tensor<4xi32>, value = 0 : index} : () -> index loc(unknown)
   // clang-format on
 
   mlirOpPrintingFlagsDestroy(flags);

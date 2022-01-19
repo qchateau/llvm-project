@@ -152,11 +152,7 @@ define void @insert_v4i32_undef_v2i32_0(<4 x i32>* %vp, <2 x i32>* %svp) {
 ; CHECK-NEXT:    vsetivli zero, 2, e32, mf2, ta, mu
 ; CHECK-NEXT:    vle32.v v8, (a1)
 ; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; CHECK-NEXT:    vmv.v.i v9, 0
-; CHECK-NEXT:    vsetivli zero, 2, e32, m1, tu, mu
-; CHECK-NEXT:    vslideup.vi v9, v8, 0
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; CHECK-NEXT:    vse32.v v9, (a0)
+; CHECK-NEXT:    vse32.v v8, (a0)
 ; CHECK-NEXT:    ret
   %sv = load <2 x i32>, <2 x i32>* %svp
   %v = call <4 x i32> @llvm.experimental.vector.insert.v2i32.v4i32(<4 x i32> undef, <2 x i32> %sv, i64 0)
@@ -320,7 +316,7 @@ define void @insert_v4i16_v2i16_2(<4 x i16>* %vp, <2 x i16>* %svp) {
 define void @insert_v32i1_v8i1_0(<32 x i1>* %vp, <8 x i1>* %svp) {
 ; LMULMAX2-LABEL: insert_v32i1_v8i1_0:
 ; LMULMAX2:       # %bb.0:
-; LMULMAX2-NEXT:    addi a2, zero, 32
+; LMULMAX2-NEXT:    li a2, 32
 ; LMULMAX2-NEXT:    vsetvli zero, a2, e8, m2, ta, mu
 ; LMULMAX2-NEXT:    vlm.v v8, (a0)
 ; LMULMAX2-NEXT:    vsetivli zero, 8, e8, mf2, ta, mu
@@ -352,7 +348,7 @@ define void @insert_v32i1_v8i1_0(<32 x i1>* %vp, <8 x i1>* %svp) {
 define void @insert_v32i1_v8i1_16(<32 x i1>* %vp, <8 x i1>* %svp) {
 ; LMULMAX2-LABEL: insert_v32i1_v8i1_16:
 ; LMULMAX2:       # %bb.0:
-; LMULMAX2-NEXT:    addi a2, zero, 32
+; LMULMAX2-NEXT:    li a2, 32
 ; LMULMAX2-NEXT:    vsetvli zero, a2, e8, m2, ta, mu
 ; LMULMAX2-NEXT:    vlm.v v8, (a0)
 ; LMULMAX2-NEXT:    vsetivli zero, 8, e8, mf2, ta, mu

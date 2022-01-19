@@ -131,9 +131,8 @@ const char *AMDGCN::OpenMPLinker::constructLLVMLinkCommand(
   }
 
   AddStaticDeviceLibsLinking(C, *this, JA, Inputs, Args, CmdArgs, "amdgcn",
-                      SubArchName,
-                      /* bitcode SDL?*/ true,
-                      /* PostClang Link? */ false);
+                             SubArchName, /*isBitCodeSDL=*/true,
+                             /*postClangLink=*/false);
   // Add an intermediate output file.
   CmdArgs.push_back("-o");
   const char *OutputFileName =
@@ -267,7 +266,7 @@ void AMDGPUOpenMPToolChain::addClangTargetOptions(
 
   std::string BitcodeSuffix;
   if (DriverArgs.hasFlag(options::OPT_fopenmp_target_new_runtime,
-                         options::OPT_fno_openmp_target_new_runtime, false))
+                         options::OPT_fno_openmp_target_new_runtime, true))
     BitcodeSuffix = "new-amdgpu-" + GPUArch;
   else
     BitcodeSuffix = "amdgcn-" + GPUArch;
@@ -286,10 +285,22 @@ llvm::opt::DerivedArgList *AMDGPUOpenMPToolChain::TranslateArgs(
 
   const OptTable &Opts = getDriver().getOpts();
 
-  if (DeviceOffloadKind != Action::OFK_OpenMP) {
-    for (Arg *A : Args) {
-      DAL->append(A);
+  if (DeviceOffloadKind == Action::OFK_OpenMP) {
+    for (Arg *A : Args)
+      if (!llvm::is_contained(*DAL, A))
+        DAL->append(A);
+
+    std::string Arch = DAL->getLastArgValue(options::OPT_march_EQ).str();
+    if (Arch.empty()) {
+      checkSystemForAMDGPU(Args, *this, Arch);
+      DAL->AddJoinedArg(nullptr, Opts.getOption(options::OPT_march_EQ), Arch);
     }
+
+    return DAL;
+  }
+
+  for (Arg *A : Args) {
+    DAL->append(A);
   }
 
   if (!BoundArch.empty()) {

@@ -74,6 +74,12 @@ WhitespaceManager::addReplacement(const tooling::Replacement &Replacement) {
   return Replaces.add(Replacement);
 }
 
+bool WhitespaceManager::inputUsesCRLF(StringRef Text, bool DefaultToCRLF) {
+  size_t LF = Text.count('\n');
+  size_t CR = Text.count('\r') * 2;
+  return LF == CR ? DefaultToCRLF : CR > LF;
+}
+
 void WhitespaceManager::replaceWhitespaceInToken(
     const FormatToken &Tok, unsigned Offset, unsigned ReplaceChars,
     StringRef PreviousPostfix, StringRef CurrentPrefix, bool InPPDirective,
@@ -304,7 +310,7 @@ AlignTokenSequence(const FormatStyle &Style, unsigned Start, unsigned End,
     unsigned PreviousNonComment = i - 1;
     while (PreviousNonComment > Start &&
            Changes[PreviousNonComment].Tok->is(tok::comment))
-      PreviousNonComment--;
+      --PreviousNonComment;
     if (i != Start && Changes[i].indentAndNestingLevel() >
                           Changes[PreviousNonComment].indentAndNestingLevel())
       ScopeStack.push_back(i);
@@ -362,6 +368,13 @@ AlignTokenSequence(const FormatStyle &Style, unsigned Start, unsigned End,
             Changes[i].Tok->Previous->is(TT_ConditionalExpr))
           return true;
 
+        // Continued braced list.
+        if (ScopeStart > Start + 1 &&
+            Changes[ScopeStart - 2].Tok->isNot(tok::identifier) &&
+            Changes[ScopeStart - 1].Tok->is(tok::l_brace) &&
+            Changes[i].Tok->isNot(tok::r_brace))
+          return true;
+
         return false;
       };
 
@@ -371,8 +384,6 @@ AlignTokenSequence(const FormatStyle &Style, unsigned Start, unsigned End,
 
     if (ContinuedStringLiteral)
       Changes[i].Spaces += Shift;
-
-    assert(Shift >= 0);
 
     Changes[i].StartOfTokenColumn += Shift;
     if (i + 1 != Changes.size())
@@ -720,6 +731,11 @@ void WhitespaceManager::alignConsecutiveAssignments() {
         if (&C != &Changes.back() && (&C + 1)->NewlinesBefore > 0)
           return false;
 
+        // Do not align operator= overloads.
+        FormatToken *Previous = C.Tok->getPreviousNonComment();
+        if (Previous && Previous->is(tok::kw_operator))
+          return false;
+
         return C.Tok->is(tok::equal);
       },
       Changes, /*StartAt=*/0, Style.AlignConsecutiveAssignments);
@@ -915,7 +931,8 @@ void WhitespaceManager::alignTrailingComments(unsigned Start, unsigned End,
               Changes[i].StartOfBlockComment->StartOfTokenColumn -
               Changes[i].StartOfTokenColumn;
     }
-    assert(Shift >= 0);
+    if (Shift < 0)
+      continue;
     Changes[i].Spaces += Shift;
     if (i + 1 != Changes.size())
       Changes[i + 1].PreviousEndOfTokenColumn += Shift;
@@ -1161,7 +1178,7 @@ WhitespaceManager::CellDescriptions WhitespaceManager::getCells(unsigned Start,
           NextNonComment = NextNonComment->getNextNonComment();
         auto j = i;
         while (Changes[j].Tok != NextNonComment && j < End)
-          j++;
+          ++j;
         if (j < End && Changes[j].NewlinesBefore == 0 &&
             Changes[j].Tok->isNot(tok::r_brace)) {
           Changes[j].NewlinesBefore = 1;
@@ -1270,10 +1287,10 @@ WhitespaceManager::linkCells(CellDescriptions &&CellDesc) {
 void WhitespaceManager::generateChanges() {
   for (unsigned i = 0, e = Changes.size(); i != e; ++i) {
     const Change &C = Changes[i];
-    if (i > 0) {
-      assert(Changes[i - 1].OriginalWhitespaceRange.getBegin() !=
-                 C.OriginalWhitespaceRange.getBegin() &&
-             "Generating two replacements for the same location");
+    if (i > 0 && Changes[i - 1].OriginalWhitespaceRange.getBegin() ==
+                     C.OriginalWhitespaceRange.getBegin()) {
+      // Do not generate two replacements for the same location.
+      continue;
     }
     if (C.CreateReplacement) {
       std::string ReplacementText = C.PreviousLinePostfix;
@@ -1283,9 +1300,12 @@ void WhitespaceManager::generateChanges() {
                                  C.EscapedNewlineColumn);
       else
         appendNewlineText(ReplacementText, C.NewlinesBefore);
+      // FIXME: This assert should hold if we computed the column correctly.
+      // assert((int)C.StartOfTokenColumn >= C.Spaces);
       appendIndentText(
           ReplacementText, C.Tok->IndentLevel, std::max(0, C.Spaces),
-          C.StartOfTokenColumn - std::max(0, C.Spaces), C.IsAligned);
+          std::max((int)C.StartOfTokenColumn, C.Spaces) - std::max(0, C.Spaces),
+          C.IsAligned);
       ReplacementText.append(C.CurrentLinePrefix);
       storeReplacement(C.OriginalWhitespaceRange, ReplacementText);
     }

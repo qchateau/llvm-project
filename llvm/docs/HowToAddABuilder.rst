@@ -80,7 +80,7 @@ Here are the steps you can follow to do so:
    to authenticate your buildbot-worker.
 
 #. Create a buildbot-worker in context of that buildbot-worker account. Point it
-   to the **lab.llvm.org** port **9990** (see `Buildbot documentation,
+   to the **lab.llvm.org** port **9994** (see `Buildbot documentation,
    Creating a worker
    <http://docs.buildbot.net/current/tutorial/firstrun.html#creating-a-worker>`_
    for more details) by running the following command:
@@ -88,12 +88,14 @@ Here are the steps you can follow to do so:
     .. code-block:: bash
 
        $ buildbot-worker create-worker <buildbot-worker-root-directory> \
-                    lab.llvm.org:9990 \
+                    lab.llvm.org:9994 \
                     <buildbot-worker-access-name> \
                     <buildbot-worker-access-password>
 
-   To point a worker to silent master please use lab.llvm.org:9994 instead
-   of lab.llvm.org:9990.
+   This will cause your new worker to connect to the staging buildmaster
+   which is silent by default.  Only once a new worker is stable, and
+   approval from Galina has been received (see last step) should it
+   be pointed at the main buildmaster.
 
 #. Fill the buildbot-worker description and admin name/e-mail.  Here is an
    example of the buildbot-worker description::
@@ -140,13 +142,25 @@ Here are the steps you can follow to do so:
    will let you know that your changes are applied and buildmaster is
    reconfigured.
 
-#. Check the status of your buildbot-worker on the `Waterfall Display
-   <http://lab.llvm.org/buildbot/#/waterfall>`_ to make sure it is connected,
-   and the `Workers Display <http://lab.llvm.org/buildbot/#/workers>`_ to see if
-   administrator contact and worker information are correct.
+#. Check the status of your buildbot-worker on the `Waterfall Display (Staging)
+   <http://lab.llvm.org/staging/#/waterfall>`_ to make sure it is
+   connected, and the `Workers Display (Staging)
+   <http://lab.llvm.org/staging/#/workers>`_ to see if administrator
+   contact and worker information are correct.
 
-#. Wait for the first build to succeed and enjoy.
+#. At this point, you have a working builder connected to the staging
+   buildmaster.  You can now make sure it is reliably green and keeps
+   up with the build queue.  No notifications will be sent, so you can
+   keep an unstable builder connected to staging indefinitely.
 
+#. (Optional) Once the builder is stable on the staging buildmaster with
+   several days of green history, you can chose to move it to the production
+   buildmaster to enable developer notifications.  Please email `Galina
+   Kistanova <mailto:gkistanova@gmail.com>`_ for review and approval.
+
+   To move a worker to production (once approved), stop your worker, edit the
+   buildbot.tac file to change the port number from 9994 to 9990 and start it
+   again.
 
 Best Practices for Configuring a Fast Builder
 =============================================
@@ -191,17 +205,22 @@ Restrict what you build and test
   if you want to both a) confirm that all of LLVM builds with your host
   compiler, and b) want to do a multi-stage clang build on your target, you
   may be better off with two separate bots.  Splitting increases resource
-  consumption, but makes it easy for each bot to keep up with commit flow.  
+  consumption, but makes it easy for each bot to keep up with commit flow.
+  Additionally, splitting bots may assist in triage by narrowing attention to
+  relevant parts of the failing configuration.
 
   In general, we recommend Release build types with Assertions enabled.  This
   generally provides a good balance between build times and bug detection for
-  most buildbots.
+  most buildbots.  There may be room for including some debug info (e.g. with
+  `-gmlt`), but in general the balance between debug info quality and build
+  times is a delicate one.
 
 Use Ninja & LLD
   Ninja really does help build times over Make, particularly for highly
-  parallel builds.  LLD helps to reduce link times significantly.  With
-  a build machine with sufficient parallism, link times tend to dominate
-  critical path of the build, and are thus worth optimizing.
+  parallel builds.  LLD helps to reduce both link times and memory usage
+  during linking significantly.  With a build machine with sufficient
+  parallism, link times tend to dominate critical path of the build, and are
+  thus worth optimizing.
 
 Use CCache and NOT incremental builds
   Using ccache materially improves average build times.  Incremental builds
@@ -220,6 +239,12 @@ Use CCache and NOT incremental builds
   between the workers.  Experience to date indicates this is difficult to
   well, and that having local per-worker caches gets most of the benefit
   anyways.  We don't currently recommend shared caches.
+
+  CCache does depend on the builder hardware having sufficient IO to access
+  the cache with reasonable access times - i.e. a fast disk, or enough memory
+  for a RAM cache, etc..  For builders without, incremental may be your best
+  option, but is likely to require higher ongoing involvement from the
+  sponsor.
 
 Enable batch builds
   As a last resort, you can configure your builder to batch build requests.

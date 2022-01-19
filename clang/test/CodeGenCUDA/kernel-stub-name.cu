@@ -28,8 +28,8 @@
 // GNU: @[[HDKERN:_Z11kernel_declv]] = external constant void ()*, align 8
 
 // MSVC: @[[HCKERN:ckernel]] = dso_local constant void ()* @[[CSTUB:__device_stub__ckernel]], align 8
-// MSVC: @[[HNSKERN:"\?nskernel@ns@@YAXXZ.*"]] = dso_local constant void ()* @[[NSSTUB:"\?nskernel@ns@@YAXXZ"]], align 8
-// MSVC: @[[HTKERN:"\?\?\$kernelfunc@H@@YAXXZ.*"]] = linkonce_odr dso_local constant void ()* @[[TSTUB:"\?\?\$kernelfunc@H@@YAXXZ.*"]], comdat, align 8
+// MSVC: @[[HNSKERN:"\?nskernel@ns@@YAXXZ.*"]] = dso_local constant void ()* @[[NSSTUB:"\?__device_stub__nskernel@ns@@YAXXZ"]], align 8
+// MSVC: @[[HTKERN:"\?\?\$kernelfunc@H@@YAXXZ.*"]] = linkonce_odr dso_local constant void ()* @[[TSTUB:"\?\?\$__device_stub__kernelfunc@H@@YAXXZ.*"]], comdat, align 8
 // MSVC: @[[HDKERN:"\?kernel_decl@@YAXXZ.*"]] = external dso_local constant void ()*, align 8
 
 extern "C" __global__ void ckernel() {}
@@ -69,7 +69,7 @@ extern "C" void launch(void *kern);
 // CHECK: call void @[[NSSTUB]]()
 // CHECK: call void @[[TSTUB]]()
 // GNU: call void @[[DSTUB:_Z26__device_stub__kernel_declv]]()
-// MSVC: call void @[[DSTUB:"\?kernel_decl@@YAXXZ"]]()
+// MSVC: call void @[[DSTUB:"\?__device_stub__kernel_decl@@YAXXZ"]]()
 
 extern "C" void fun1(void) {
   ckernel<<<1, 1>>>();
@@ -120,7 +120,7 @@ extern "C" void fun3() {
 
 // CHECK-LABEL: define{{.*}}@fun4()
 // CHECK:  store void ()* bitcast (void ()** @[[HCKERN]] to void ()*), void ()** @kernel_ptr
-// CHECK:  call i32 @{{.*hipConfigureCall}}
+// CHECK:  call noundef i32 @{{.*hipConfigureCall}}
 // CHECK:  %[[HANDLE:.*]] = load void ()*, void ()** @kernel_ptr, align 8
 // CHECK:  %[[CAST:.*]] = bitcast void ()* %[[HANDLE]] to void ()**
 // CHECK:  %[[STUB:.*]] = load void ()*, void ()** %[[CAST]], align 8
@@ -136,7 +136,7 @@ extern "C" void fun4() {
 // CHECK:  store void ()* bitcast (void ()** @[[HCKERN]] to void ()*), void ()** @kernel_ptr
 // CHECK:  %[[HANDLE:.*]] = load void ()*, void ()** @kernel_ptr, align 8
 // CHECK:  %[[CAST:.*]] = bitcast void ()* %[[HANDLE]] to i8*
-// CHECK:  call void @launch(i8* %[[CAST]])
+// CHECK:  call void @launch(i8* noundef %[[CAST]])
 extern "C" void fun5() {
   kernel_ptr = ckernel;
   launch((void *)kernel_ptr);

@@ -92,7 +92,7 @@ void Region::cloneInto(Region *dest, Region::iterator destPos,
     // argument to the cloned block.
     for (auto arg : block.getArguments())
       if (!mapper.contains(arg))
-        mapper.map(arg, newBlock->addArgument(arg.getType()));
+        mapper.map(arg, newBlock->addArgument(arg.getType(), arg.getLoc()));
 
     // Clone and remap the operations within this block.
     for (auto &op : block)
@@ -152,10 +152,10 @@ void Region::dropAllReferences() {
 }
 
 Region *llvm::ilist_traits<::mlir::Block>::getParentRegion() {
-  size_t Offset(
+  size_t offset(
       size_t(&((Region *)nullptr->*Region::getSublistAccess(nullptr))));
-  iplist<Block> *Anchor(static_cast<iplist<Block> *>(this));
-  return reinterpret_cast<Region *>(reinterpret_cast<char *>(Anchor) - Offset);
+  iplist<Block> *anchor(static_cast<iplist<Block> *>(this));
+  return reinterpret_cast<Region *>(reinterpret_cast<char *>(anchor) - offset);
 }
 
 /// This is a trait method invoked when a basic block is added to a region.
