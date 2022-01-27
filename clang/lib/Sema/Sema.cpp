@@ -332,9 +332,12 @@ void Sema::Initialize() {
         Context.getTargetInfo().getSupportedOpenCLOpts(), getLangOpts());
     addImplicitTypedef("sampler_t", Context.OCLSamplerTy);
     addImplicitTypedef("event_t", Context.OCLEventTy);
-    if (getLangOpts().getOpenCLCompatibleVersion() >= 200) {
-      addImplicitTypedef("clk_event_t", Context.OCLClkEventTy);
-      addImplicitTypedef("queue_t", Context.OCLQueueTy);
+    auto OCLCompatibleVersion = getLangOpts().getOpenCLCompatibleVersion();
+    if (OCLCompatibleVersion >= 200) {
+      if (getLangOpts().OpenCLCPlusPlus || getLangOpts().Blocks) {
+        addImplicitTypedef("clk_event_t", Context.OCLClkEventTy);
+        addImplicitTypedef("queue_t", Context.OCLQueueTy);
+      }
       if (getLangOpts().OpenCLPipes)
         addImplicitTypedef("reserve_id_t", Context.OCLReserveIDTy);
       addImplicitTypedef("atomic_int", Context.getAtomicType(Context.IntTy));
@@ -401,7 +404,6 @@ void Sema::Initialize() {
         }
       }
     }
-
 
 #define EXT_OPAQUE_TYPE(ExtType, Id, Ext)                                      \
   if (getOpenCLOptions().isSupported(#Ext, getLangOpts())) {                   \
@@ -2552,6 +2554,11 @@ static bool IsCPUDispatchCPUSpecificMultiVersion(const Expr *E) {
 bool Sema::tryToRecoverWithCall(ExprResult &E, const PartialDiagnostic &PD,
                                 bool ForceComplain,
                                 bool (*IsPlausibleResult)(QualType)) {
+  if (isSFINAEContext()) {
+    // If this is a SFINAE context, don't try anything that might trigger ADL
+    // prematurely.
+    return false;
+  }
   SourceLocation Loc = E.get()->getExprLoc();
   SourceRange Range = E.get()->getSourceRange();
 
