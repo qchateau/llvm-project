@@ -9,27 +9,24 @@
 #ifndef LLVM_LIBC_SRC_SUPPORT_FPUTIL_GENERIC_SQRT_H
 #define LLVM_LIBC_SRC_SUPPORT_FPUTIL_GENERIC_SQRT_H
 
+#include "sqrt_80_bit_long_double.h"
 #include "src/__support/CPP/TypeTraits.h"
 #include "src/__support/FPUtil/FEnvImpl.h"
 #include "src/__support/FPUtil/FPBits.h"
 #include "src/__support/FPUtil/PlatformDefs.h"
-
-#if defined(SPECIAL_X86_LONG_DOUBLE)
-#include "sqrt_80_bit_long_double.h"
-#endif // SPECIAL_X86_LONG_DOUBLE
 
 namespace __llvm_libc {
 namespace fputil {
 
 namespace internal {
 
-#if defined(SPECIAL_X86_LONG_DOUBLE)
-struct SpecialLongDouble {
-  static constexpr bool VALUE = true;
-};
-#else
-struct SpecialLongDouble {
+template <typename T> struct SpecialLongDouble {
   static constexpr bool VALUE = false;
+};
+
+#if defined(SPECIAL_X86_LONG_DOUBLE)
+template <> struct SpecialLongDouble<long double> {
+  static constexpr bool VALUE = true;
 };
 #endif // SPECIAL_X86_LONG_DOUBLE
 
@@ -111,8 +108,7 @@ template <typename T>
 static inline cpp::EnableIfType<cpp::IsFloatingPointType<T>::Value, T>
 sqrt(T x) {
 
-  if constexpr (cpp::IsSameV<T, long double> &&
-                internal::SpecialLongDouble::VALUE) {
+  if constexpr (internal::SpecialLongDouble<T>::VALUE) {
     // Special 80-bit long double.
     return x86::sqrt(x);
   } else {

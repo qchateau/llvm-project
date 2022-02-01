@@ -49,4 +49,12 @@
 #define S_ISUID 04000
 #define S_ISGID 02000
 
+// Special directory FD to indicate that the path argument to
+// openat is relative to the current directory.
+#define AT_FDCWD -100
+
+// Special flag to the function unlinkat to indicate that it
+// has to perform the equivalent of "rmdir" on the path argument.
+#define AT_REMOVEDIR 0x200
+
 #endif // __LLVM_LIBC_MACROS_LINUX_FCNTL_MACROS_H
