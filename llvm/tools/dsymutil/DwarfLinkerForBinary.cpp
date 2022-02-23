@@ -331,7 +331,7 @@ static bool binaryHasSwiftReflectionSections(const DebugMap &Map,
       }
       NameOrErr->consume_back("__TEXT");
       if (Object->mapReflectionSectionNameToEnumValue(*NameOrErr) !=
-          llvm::swift::Swift5ReflectionSectionKind::unknown) {
+          llvm::binaryformat::Swift5ReflectionSectionKind::unknown) {
         return true;
       }
     }
@@ -391,6 +391,7 @@ bool DwarfLinkerForBinary::link(const DebugMap &Map) {
 
   GeneralLinker.setVerbosity(Options.Verbose);
   GeneralLinker.setStatistics(Options.Statistics);
+  GeneralLinker.setVerifyInputDWARF(Options.VerifyInputDWARF);
   GeneralLinker.setNoOutput(Options.NoOutput);
   GeneralLinker.setNoODR(Options.NoODR);
   GeneralLinker.setUpdate(Options.Update);

@@ -68,7 +68,7 @@ bool DwarfStreamer::init(Triple TheTriple,
   if (!MII)
     return error("no instr info info for target " + TripleName, Context), false;
 
-  MCE = TheTarget->createMCCodeEmitter(*MII, *MRI, *MC);
+  MCE = TheTarget->createMCCodeEmitter(*MII, *MC);
   if (!MCE)
     return error("no code emitter for target " + TripleName, Context), false;
 
@@ -305,8 +305,8 @@ void DwarfStreamer::emitSwiftAST(StringRef Buffer) {
 }
 
 void DwarfStreamer::emitSwiftReflectionSection(
-    llvm::swift::Swift5ReflectionSectionKind ReflSectionKind, StringRef Buffer,
-    uint32_t Alignment, uint32_t Size) {
+    llvm::binaryformat::Swift5ReflectionSectionKind ReflSectionKind,
+    StringRef Buffer, uint32_t Alignment, uint32_t Size) {
   MCSection *ReflectionSection =
       MOFI->getSwift5ReflectionSection(ReflSectionKind);
   if (ReflectionSection == nullptr)

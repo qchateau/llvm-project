@@ -99,8 +99,8 @@ static cl::opt<std::string>
 
 static cl::list<std::string>
     PtxasArgs("ptxas-args", cl::ZeroOrMore,
-                cl::desc("Argument to pass to the ptxas invocation"),
-                cl::cat(ClangLinkerWrapperCategory));
+              cl::desc("Argument to pass to the ptxas invocation"),
+              cl::cat(ClangLinkerWrapperCategory));
 
 static cl::opt<bool> Verbose("v", cl::ZeroOrMore,
                              cl::desc("Verbose output from tools"),
@@ -118,6 +118,10 @@ static cl::opt<bool> SaveTemps("save-temps", cl::ZeroOrMore,
                                cl::desc("Save intermediary results."),
                                cl::cat(ClangLinkerWrapperCategory));
 
+static cl::opt<std::string> CudaPath("cuda-path", cl::ZeroOrMore,
+                                     cl::desc("Save intermediary results."),
+                                     cl::cat(ClangLinkerWrapperCategory));
+
 // Do not parse linker options.
 static cl::list<std::string>
     HostLinkerArgs(cl::Positional,
@@ -128,6 +132,9 @@ static const char *LinkerExecutable;
 
 /// Filename of the executable being created.
 static StringRef ExecutableName;
+
+/// Binary path for the CUDA installation.
+static std::string CudaBinaryPath;
 
 /// Temporary files created by the linker wrapper.
 static SmallVector<std::string, 16> TempFiles;
@@ -165,6 +172,12 @@ static StringRef getDeviceFileExtension(StringRef DeviceTriple,
   if (TheTriple.isNVPTX())
     return "cubin";
   return "o";
+}
+
+std::string getMainExecutable(const char *Name) {
+  void *Ptr = (void *)(intptr_t)&getMainExecutable;
+  auto COWPath = sys::fs::getMainExecutable(Name, Ptr);
+  return sys::path::parent_path(COWPath).str();
 }
 
 /// Extract the device file from the string '<triple>-<arch>=<library>.bc'.
@@ -303,10 +316,12 @@ extractFromBinary(const ObjectFile &Obj,
 
   // We will use llvm-strip to remove the now unneeded section containing the
   // offloading code.
-  ErrorOr<std::string> StripPath = sys::findProgramByName("llvm-strip");
+  ErrorOr<std::string> StripPath =
+      sys::findProgramByName("llvm-strip", {getMainExecutable("llvm-strip")});
   if (!StripPath)
-    return createStringError(StripPath.getError(),
-                             "Unable to find 'llvm-strip' in path");
+    StripPath = sys::findProgramByName("llvm-strip");
+  if (!StripPath)
+    return None;
 
   SmallString<128> TempFile;
   if (Error Err = createOutputFile(Prefix + "-host", Extension, TempFile))
@@ -499,7 +514,7 @@ extractFromBuffer(std::unique_ptr<MemoryBuffer> Buffer,
     return extractFromArchive(*LibFile->get(), DeviceFiles);
   }
   default:
-    return errorCodeToError(object_error::invalid_file_type);
+    return None;
   }
 }
 
@@ -507,9 +522,9 @@ extractFromBuffer(std::unique_ptr<MemoryBuffer> Buffer,
 namespace nvptx {
 Expected<std::string> assemble(StringRef InputFile, Triple TheTriple,
                                StringRef Arch) {
-  // NVPTX uses the nvlink binary to link device object files.
+  // NVPTX uses the ptxas binary to create device object files.
   ErrorOr<std::string> PtxasPath =
-      sys::findProgramByName("ptxas", sys::path::parent_path(LinkerExecutable));
+      sys::findProgramByName("ptxas", {CudaBinaryPath});
   if (!PtxasPath)
     PtxasPath = sys::findProgramByName("ptxas");
   if (!PtxasPath)
@@ -554,7 +569,10 @@ Expected<std::string> assemble(StringRef InputFile, Triple TheTriple,
 Expected<std::string> link(ArrayRef<std::string> InputFiles, Triple TheTriple,
                            StringRef Arch) {
   // NVPTX uses the nvlink binary to link device object files.
-  ErrorOr<std::string> NvlinkPath = sys::findProgramByName("nvlink");
+  ErrorOr<std::string> NvlinkPath =
+      sys::findProgramByName("nvlink", {CudaBinaryPath});
+  if (!NvlinkPath)
+    NvlinkPath = sys::findProgramByName("nvlink");
   if (!NvlinkPath)
     return createStringError(NvlinkPath.getError(),
                              "Unable to find 'nvlink' in path");
@@ -592,9 +610,9 @@ Expected<std::string> link(ArrayRef<std::string> InputFiles, Triple TheTriple,
 namespace amdgcn {
 Expected<std::string> link(ArrayRef<std::string> InputFiles, Triple TheTriple,
                            StringRef Arch) {
-  // AMDGPU uses the lld binary to link device object files.
+  // AMDGPU uses lld to link device object files.
   ErrorOr<std::string> LLDPath =
-      sys::findProgramByName("lld", sys::path::parent_path(LinkerExecutable));
+      sys::findProgramByName("lld", {getMainExecutable("lld")});
   if (!LLDPath)
     LLDPath = sys::findProgramByName("lld");
   if (!LLDPath)
@@ -628,6 +646,83 @@ Expected<std::string> link(ArrayRef<std::string> InputFiles, Triple TheTriple,
 }
 } // namespace amdgcn
 
+namespace generic {
+
+const char *getLDMOption(const llvm::Triple &T) {
+  switch (T.getArch()) {
+  case llvm::Triple::x86:
+    if (T.isOSIAMCU())
+      return "elf_iamcu";
+    return "elf_i386";
+  case llvm::Triple::aarch64:
+    return "aarch64linux";
+  case llvm::Triple::aarch64_be:
+    return "aarch64linuxb";
+  case llvm::Triple::ppc64:
+    return "elf64ppc";
+  case llvm::Triple::ppc64le:
+    return "elf64lppc";
+  case llvm::Triple::x86_64:
+    if (T.isX32())
+      return "elf32_x86_64";
+    return "elf_x86_64";
+  case llvm::Triple::ve:
+    return "elf64ve";
+  default:
+    return nullptr;
+  }
+}
+
+Expected<std::string> link(ArrayRef<std::string> InputFiles, Triple TheTriple,
+                           StringRef Arch) {
+  // Create a new file to write the linked device image to.
+  SmallString<128> TempFile;
+  if (Error Err = createOutputFile(sys::path::filename(ExecutableName) + "-" +
+                                       TheTriple.getArchName() + "-" + Arch,
+                                   "out", TempFile))
+    return std::move(Err);
+
+  // Use the host linker to perform generic offloading. Use the same libraries
+  // and paths as the host application does.
+  SmallVector<StringRef, 16> CmdArgs;
+  CmdArgs.push_back(LinkerUserPath);
+  CmdArgs.push_back("-m");
+  CmdArgs.push_back(getLDMOption(TheTriple));
+  CmdArgs.push_back("-shared");
+  for (auto AI = HostLinkerArgs.begin(), AE = HostLinkerArgs.end(); AI != AE;
+       ++AI) {
+    StringRef Arg = *AI;
+    if (Arg.startswith("-L"))
+      CmdArgs.push_back(Arg);
+    else if (Arg.startswith("-l"))
+      CmdArgs.push_back(Arg);
+    else if (Arg.startswith("--as-needed"))
+      CmdArgs.push_back(Arg);
+    else if (Arg.startswith("--no-as-needed"))
+      CmdArgs.push_back(Arg);
+    else if (Arg.startswith("-rpath")) {
+      CmdArgs.push_back(Arg);
+      CmdArgs.push_back(*(AI + 1));
+    } else if (Arg.startswith("-dynamic-linker")) {
+      CmdArgs.push_back(Arg);
+      CmdArgs.push_back(*(AI + 1));
+    }
+  }
+  CmdArgs.push_back("-Bsymbolic");
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(TempFile);
+
+  // Add extracted input files.
+  for (StringRef Input : InputFiles)
+    CmdArgs.push_back(Input);
+
+  if (sys::ExecuteAndWait(LinkerUserPath, CmdArgs))
+    return createStringError(inconvertibleErrorCode(), "'linker' failed");
+
+  return static_cast<std::string>(TempFile);
+}
+} // namespace generic
+
 Expected<std::string> linkDevice(ArrayRef<std::string> InputFiles,
                                  Triple TheTriple, StringRef Arch) {
   switch (TheTriple.getArch()) {
@@ -638,7 +733,11 @@ Expected<std::string> linkDevice(ArrayRef<std::string> InputFiles,
     return amdgcn::link(InputFiles, TheTriple, Arch);
   case Triple::x86:
   case Triple::x86_64:
-    // TODO: x86 linking support.
+  case Triple::aarch64:
+  case Triple::aarch64_be:
+  case Triple::ppc64:
+  case Triple::ppc64le:
+    return generic::link(InputFiles, TheTriple, Arch);
   default:
     return createStringError(inconvertibleErrorCode(),
                              TheTriple.getArchName() +
@@ -762,8 +861,10 @@ Error linkBitcodeFiles(SmallVectorImpl<std::string> &InputFiles,
   SmallVector<std::unique_ptr<MemoryBuffer>, 4> SavedBuffers;
   SmallVector<std::unique_ptr<lto::InputFile>, 4> BitcodeFiles;
   SmallVector<std::string, 4> NewInputFiles;
-  StringMap<bool> UsedInRegularObj;
-  StringMap<bool> UsedInSharedLib;
+  DenseSet<StringRef> UsedInRegularObj;
+  DenseSet<StringRef> UsedInSharedLib;
+  BumpPtrAllocator Alloc;
+  StringSaver Saver(Alloc);
 
   // Search for bitcode files in the input and create an LTO input file. If it
   // is not a bitcode file, scan its symbol table for symbols we need to
@@ -789,9 +890,9 @@ Error linkBitcodeFiles(SmallVectorImpl<std::string> &InputFiles,
 
         // Record if we've seen these symbols in any object or shared libraries.
         if ((*ObjFile)->isRelocatableObject())
-          UsedInRegularObj[*Name] = true;
+          UsedInRegularObj.insert(Saver.save(*Name));
         else
-          UsedInSharedLib[*Name] = true;
+          UsedInSharedLib.insert(Saver.save(*Name));
       }
     } else {
       Expected<std::unique_ptr<lto::InputFile>> InputFileOrErr =
@@ -851,14 +952,15 @@ Error linkBitcodeFiles(SmallVectorImpl<std::string> &InputFiles,
       // We will use this as the prevailing symbol definition in LTO unless
       // it is undefined or another definition has already been used.
       Res.Prevailing =
-          !Sym.isUndefined() && PrevailingSymbols.insert(Sym.getName()).second;
+          !Sym.isUndefined() &&
+          PrevailingSymbols.insert(Saver.save(Sym.getName())).second;
 
       // We need LTO to preseve the following global symbols:
       // 1) Symbols used in regular objects.
       // 2) Sections that will be given a __start/__stop symbol.
-      // 3) Prevailing symbols that are needed visibile to external libraries.
+      // 3) Prevailing symbols that are needed visible to external libraries.
       Res.VisibleToRegularObj =
-          UsedInRegularObj[Sym.getName()] ||
+          UsedInRegularObj.contains(Sym.getName()) ||
           isValidCIdentifier(Sym.getSectionName()) ||
           (Res.Prevailing &&
            (Sym.getVisibility() != GlobalValue::HiddenVisibility &&
@@ -868,7 +970,7 @@ Error linkBitcodeFiles(SmallVectorImpl<std::string> &InputFiles,
       // referenced by other files.
       Res.ExportDynamic =
           Sym.getVisibility() != GlobalValue::HiddenVisibility &&
-          (UsedInSharedLib[Sym.getName()] ||
+          (UsedInSharedLib.contains(Sym.getName()) ||
            !Sym.canBeOmittedFromSymbolTable());
 
       // The final definition will reside in this linkage unit if the symbol is
@@ -1097,6 +1199,9 @@ int main(int argc, const char **argv) {
     return EXIT_FAILURE;
   };
 
+  if (!CudaPath.empty())
+    CudaBinaryPath = CudaPath + "/bin";
+
   ExecutableName = *(llvm::find(HostLinkerArgs, "-o") + 1);
   SmallVector<std::string, 16> LinkerArgs;
   for (const std::string &Arg : HostLinkerArgs)
@@ -1120,8 +1225,7 @@ int main(int argc, const char **argv) {
     if (Optional<std::string> Library = searchLibrary(Arg, LibraryPaths))
       Filename = *Library;
 
-    if ((sys::path::extension(Filename) == ".o" ||
-         sys::path::extension(Filename) == ".a")) {
+    if (sys::fs::exists(Filename) && !sys::fs::is_directory(Filename)) {
       ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
           MemoryBuffer::getFileOrSTDIN(Filename);
       if (std::error_code EC = BufferOrErr.getError())

@@ -24,7 +24,7 @@
 #include "lld/Common/Filesystem.h"
 #include "lld/Common/Strings.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/SHA1.h"
@@ -165,11 +165,10 @@ void elf::combineEhSections() {
 static Defined *addOptionalRegular(StringRef name, SectionBase *sec,
                                    uint64_t val, uint8_t stOther = STV_HIDDEN) {
   Symbol *s = symtab->find(name);
-  if (!s || s->isDefined())
+  if (!s || s->isDefined() || s->isCommon())
     return nullptr;
 
-  s->resolve(Defined{/*file=*/nullptr, name, STB_GLOBAL, stOther, STT_NOTYPE,
-                     val,
+  s->resolve(Defined{nullptr, StringRef(), STB_GLOBAL, stOther, STT_NOTYPE, val,
                      /*size=*/0, sec});
   return cast<Defined>(s);
 }
@@ -232,7 +231,7 @@ void elf::addReservedSymbols() {
     if (config->emachine == EM_PPC64)
       gotOff = 0x8000;
 
-    s->resolve(Defined{/*file=*/nullptr, gotSymName, STB_GLOBAL, STV_HIDDEN,
+    s->resolve(Defined{/*file=*/nullptr, StringRef(), STB_GLOBAL, STV_HIDDEN,
                        STT_NOTYPE, gotOff, /*size=*/0, Out::elfHeader});
     ElfSym::globalOffsetTable = cast<Defined>(s);
   }
@@ -619,12 +618,8 @@ template <class ELFT> static void markUsedLocalSymbols() {
   // See MarkLive<ELFT>::resolveReloc().
   if (config->gcSections)
     return;
-  // Without --gc-sections, the field is initialized with "true".
-  // Drop the flag first and then rise for symbols referenced in relocations.
   for (ELFFileBase *file : objectFiles) {
     ObjFile<ELFT> *f = cast<ObjFile<ELFT>>(file);
-    for (Symbol *b : f->getLocalSymbols())
-      b->used = false;
     for (InputSectionBase *s : f->getSections()) {
       InputSection *isec = dyn_cast_or_null<InputSection>(s);
       if (!isec)
@@ -643,7 +638,7 @@ static bool shouldKeepInSymtab(const Defined &sym) {
 
   // If --emit-reloc or -r is given, preserve symbols referenced by relocations
   // from live sections.
-  if (config->copyRelocs && sym.used)
+  if (sym.used)
     return true;
 
   // Exclude local symbols pointing to .ARM.exidx sections.
@@ -679,16 +674,11 @@ static bool includeInSymtab(const Symbol &b) {
     if (!sec)
       return true;
 
-    // Exclude symbols pointing to garbage-collected sections.
-    if (isa<InputSectionBase>(sec) && !sec->isLive())
-      return false;
-
     if (auto *s = dyn_cast<MergeInputSection>(sec))
-      if (!s->getSectionPiece(d->value)->live)
-        return false;
-    return true;
+      return s->getSectionPiece(d->value)->live;
+    return sec->isLive();
   }
-  return b.used;
+  return b.used || !config->gcSections;
 }
 
 // Local symbols are not in the linker's symbol table. This function scans
@@ -1429,22 +1419,19 @@ template <class ELFT> void Writer<ELFT>::sortInputSections() {
 
 template <class ELFT> void Writer<ELFT>::sortSections() {
   llvm::TimeTraceScope timeScope("Sort sections");
-  script->adjustSectionsBeforeSorting();
 
   // Don't sort if using -r. It is not necessary and we want to preserve the
   // relative order for SHF_LINK_ORDER sections.
-  if (config->relocatable)
+  if (config->relocatable) {
+    script->adjustOutputSections();
     return;
+  }
 
   sortInputSections();
 
-  for (SectionCommand *cmd : script->sectionCommands) {
-    auto *os = dyn_cast<OutputSection>(cmd);
-    if (!os)
-      continue;
-    os->sortRank = getSectionRank(os);
-  }
-
+  for (SectionCommand *cmd : script->sectionCommands)
+    if (auto *osec = dyn_cast_or_null<OutputSection>(cmd))
+      osec->sortRank = getSectionRank(osec);
   if (!script->hasSectionsCommand) {
     // We know that all the OutputSections are contiguous in this case.
     auto isSection = [](SectionCommand *cmd) {
@@ -1454,14 +1441,15 @@ template <class ELFT> void Writer<ELFT>::sortSections() {
         llvm::find_if(script->sectionCommands, isSection),
         llvm::find_if(llvm::reverse(script->sectionCommands), isSection).base(),
         compareSections);
-
-    // Process INSERT commands. From this point onwards the order of
-    // script->sectionCommands is fixed.
-    script->processInsertCommands();
-    return;
   }
 
+  // Process INSERT commands and update output section attributes. From this
+  // point onwards the order of script->sectionCommands is fixed.
   script->processInsertCommands();
+  script->adjustOutputSections();
+
+  if (!script->hasSectionsCommand)
+    return;
 
   // Orphan sections are sections present in the input files which are
   // not explicitly placed into the output file by the linker script.
@@ -1570,8 +1558,8 @@ template <class ELFT> void Writer<ELFT>::resolveShfLinkOrder() {
 
     // Link order may be distributed across several InputSectionDescriptions.
     // Sorting is performed separately.
-    std::vector<InputSection **> scriptSections;
-    std::vector<InputSection *> sections;
+    SmallVector<InputSection **, 0> scriptSections;
+    SmallVector<InputSection *, 0> sections;
     for (SectionCommand *cmd : sec->commands) {
       auto *isd = dyn_cast<InputSectionDescription>(cmd);
       if (!isd)
@@ -1707,7 +1695,7 @@ static void fixSymbolsAfterShrinking() {
       if (!inputSec || !inputSec->bytesDropped)
         return;
 
-      const size_t OldSize = inputSec->data().size();
+      const size_t OldSize = inputSec->rawData.size();
       const size_t NewSize = OldSize - inputSec->bytesDropped;
 
       if (def->value > NewSize && def->value <= OldSize) {
@@ -1873,7 +1861,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     // define _TLS_MODULE_BASE_ relative to the first TLS section.
     Symbol *s = symtab->find("_TLS_MODULE_BASE_");
     if (s && s->isUndefined()) {
-      s->resolve(Defined{/*file=*/nullptr, s->getName(), STB_GLOBAL, STV_HIDDEN,
+      s->resolve(Defined{/*file=*/nullptr, StringRef(), STB_GLOBAL, STV_HIDDEN,
                          STT_TLS, /*value=*/0, 0,
                          /*section=*/nullptr});
       ElfSym::tlsModuleBase = cast<Defined>(s);
@@ -1922,7 +1910,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
             scanRelocations<ELFT>(*sec);
       }
 
-      reportUndefinedSymbols<ELFT>();
+      reportUndefinedSymbols();
       postScanRelocations();
     }
   }

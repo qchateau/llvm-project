@@ -19,10 +19,9 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Instruction.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
@@ -122,9 +121,9 @@ public:
   /// Return the type of the value returned by the call underlying the
   /// statepoint.
   Type *getActualReturnType() const {
-    auto *CalleeTy =
-        getActualCalledOperand()->getType()->getPointerElementType();
-    return cast<FunctionType>(CalleeTy)->getReturnType();
+    auto *FT = cast<FunctionType>(
+        getAttributes().getParamElementType(CalledFunctionPos));
+    return FT->getReturnType();
   }
 
 

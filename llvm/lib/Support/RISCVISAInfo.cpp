@@ -48,8 +48,15 @@ static const RISCVSupportedExtension SupportedExtensions[] = {
     {"d", RISCVExtensionVersion{2, 0}},
     {"c", RISCVExtensionVersion{2, 0}},
 
+    {"zihintpause", RISCVExtensionVersion{2, 0}},
+
     {"zfhmin", RISCVExtensionVersion{1, 0}},
     {"zfh", RISCVExtensionVersion{1, 0}},
+
+    {"zfinx", RISCVExtensionVersion{1, 0}},
+    {"zdinx", RISCVExtensionVersion{1, 0}},
+    {"zhinxmin", RISCVExtensionVersion{1, 0}},
+    {"zhinx", RISCVExtensionVersion{1, 0}},
 
     {"zba", RISCVExtensionVersion{1, 0}},
     {"zbb", RISCVExtensionVersion{1, 0}},
@@ -686,11 +693,11 @@ Error RISCVISAInfo::checkDependency() {
   bool HasE = Exts.count("e") != 0;
   bool HasD = Exts.count("d") != 0;
   bool HasF = Exts.count("f") != 0;
-  bool HasZve32x = Exts.count("zve32x") != 0;
+  bool HasZfinx = Exts.count("zfinx") != 0;
+  bool HasZdinx = Exts.count("zdinx") != 0;
+  bool HasVector = Exts.count("zve32x") != 0;
   bool HasZve32f = Exts.count("zve32f") != 0;
   bool HasZve64d = Exts.count("zve64d") != 0;
-  bool HasV = Exts.count("v") != 0;
-  bool HasVector = HasZve32x || HasV;
   bool HasZvl = MinVLen != 0;
 
   if (HasE && !IsRv32)
@@ -706,28 +713,20 @@ Error RISCVISAInfo::checkDependency() {
     return createStringError(errc::invalid_argument,
                              "d requires f extension to also be specified");
 
-  // FIXME: Consider Zfinx in the future
-  if (HasZve32f && !HasF)
+  if (HasZve32f && !HasF && !HasZfinx)
     return createStringError(
         errc::invalid_argument,
-        "zve32f requires f extension to also be specified");
+        "zve32f requires f or zfinx extension to also be specified");
 
-  // FIXME: Consider Zdinx in the future
-  if (HasZve64d && !HasD)
+  if (HasZve64d && !HasD && !HasZdinx)
     return createStringError(
         errc::invalid_argument,
-        "zve64d requires d extension to also be specified");
+        "zve64d requires d or zdinx extension to also be specified");
 
   if (HasZvl && !HasVector)
     return createStringError(
         errc::invalid_argument,
         "zvl*b requires v or zve* extension to also be specified");
-
-  // Could not implement Zve* extension and the V extension at the same time.
-  if (HasZve32x && HasV)
-    return createStringError(
-        errc::invalid_argument,
-        "It is illegal to specify the v extension with zve* extensions");
 
   // Additional dependency checks.
   // TODO: The 'q' extension requires rv64.
@@ -736,9 +735,12 @@ Error RISCVISAInfo::checkDependency() {
   return Error::success();
 }
 
-static const char *ImpliedExtsV[] = {"zvl128b", "f", "d"};
+static const char *ImpliedExtsV[] = {"zvl128b", "zve64d", "f", "d"};
 static const char *ImpliedExtsZfhmin[] = {"f"};
 static const char *ImpliedExtsZfh[] = {"f"};
+static const char *ImpliedExtsZdinx[] = {"zfinx"};
+static const char *ImpliedExtsZhinxmin[] = {"zfinx"};
+static const char *ImpliedExtsZhinx[] = {"zfinx"};
 static const char *ImpliedExtsZve64d[] = {"zve64f"};
 static const char *ImpliedExtsZve64f[] = {"zve64x", "zve32f"};
 static const char *ImpliedExtsZve64x[] = {"zve32x", "zvl64b"};
@@ -770,10 +772,14 @@ struct ImpliedExtsEntry {
   bool operator<(StringRef Other) const { return Name < Other; }
 };
 
+// Note: The table needs to be sorted by name.
 static constexpr ImpliedExtsEntry ImpliedExts[] = {
     {{"v"}, {ImpliedExtsV}},
+    {{"zdinx"}, {ImpliedExtsZdinx}},
     {{"zfh"}, {ImpliedExtsZfh}},
     {{"zfhmin"}, {ImpliedExtsZfhmin}},
+    {{"zhinx"}, {ImpliedExtsZhinx}},
+    {{"zhinxmin"}, {ImpliedExtsZhinxmin}},
     {{"zk"}, {ImpliedExtsZk}},
     {{"zkn"}, {ImpliedExtsZkn}},
     {{"zks"}, {ImpliedExtsZks}},
@@ -867,11 +873,6 @@ void RISCVISAInfo::updateMaxELen() {
       ExtName.getAsInteger(10, ZveELen);
       MaxELen = std::max(MaxELen, ZveELen);
     }
-    if (ExtName == "v") {
-      MaxELenFp = 64;
-      MaxELen = 64;
-      return;
-    }
   }
 }
 
@@ -916,4 +917,19 @@ RISCVISAInfo::postProcessAndChecking(std::unique_ptr<RISCVISAInfo> &&ISAInfo) {
   if (Error Result = ISAInfo->checkDependency())
     return std::move(Result);
   return std::move(ISAInfo);
+}
+
+StringRef RISCVISAInfo::computeDefaultABI() const {
+  if (XLen == 32) {
+    if (hasExtension("d"))
+      return "ilp32d";
+    if (hasExtension("e"))
+      return "ilp32e";
+    return "ilp32";
+  } else if (XLen == 64) {
+    if (hasExtension("d"))
+      return "lp64d";
+    return "lp64";
+  }
+  llvm_unreachable("Invalid XLEN");
 }

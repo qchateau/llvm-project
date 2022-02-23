@@ -22,7 +22,6 @@
 #include "MarkLive.h"
 #include "InputSection.h"
 #include "LinkerScript.h"
-#include "OutputSections.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
@@ -32,7 +31,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Support/TimeProfiler.h"
-#include <functional>
 #include <vector>
 
 using namespace llvm;
@@ -76,7 +74,7 @@ private:
 template <class ELFT>
 static uint64_t getAddend(InputSectionBase &sec,
                           const typename ELFT::Rel &rel) {
-  return target->getImplicitAddend(sec.data().begin() + rel.r_offset,
+  return target->getImplicitAddend(sec.rawData.begin() + rel.r_offset,
                                    rel.getType(config->isMips64EL));
 }
 

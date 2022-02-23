@@ -57,6 +57,8 @@ public:
     bpfeb,          // eBPF or extended BPF or 64-bit BPF (big endian)
     csky,           // CSKY: csky
     hexagon,        // Hexagon: hexagon
+    loongarch32,    // LoongArch (32-bit): loongarch32
+    loongarch64,    // LoongArch (64-bit): loongarch64
     m68k,           // M68k: Motorola 680x0 family
     mips,           // MIPS: mips, mipsallegrex, mipsr6
     mipsel,         // MIPSEL: mipsel, mipsallegrexe, mipsr6el
@@ -198,6 +200,7 @@ public:
     ELFIAMCU,
     TvOS,       // Apple tvOS
     WatchOS,    // Apple watchOS
+    DriverKit,  // Apple DriverKit
     Mesa3D,
     Contiki,
     AMDPAL,     // AMD PAL Runtime
@@ -360,6 +363,9 @@ public:
   /// with WatchOS or generic triples.
   VersionTuple getWatchOSVersion() const;
 
+  /// Parse the version number as with getOSVersion.
+  VersionTuple getDriverKitVersion() const;
+
   /// @}
   /// @name Direct Component Access
   /// @{
@@ -462,11 +468,14 @@ public:
     return getSubArch() == Triple::ARMSubArch_v7k;
   }
 
+  /// Is this an Apple DriverKit triple.
+  bool isDriverKit() const { return getOS() == Triple::DriverKit; }
+
   bool isOSzOS() const { return getOS() == Triple::ZOS; }
 
   /// Is this a "Darwin" OS (macOS, iOS, tvOS or watchOS).
   bool isOSDarwin() const {
-    return isMacOSX() || isiOS() || isWatchOS();
+    return isMacOSX() || isiOS() || isWatchOS() || isDriverKit();
   }
 
   bool isSimulatorEnvironment() const {
@@ -772,6 +781,11 @@ public:
                    getEnvironment() == Triple::GNUILP32
                ? PointerWidth == 32
                : PointerWidth == 64;
+  }
+
+  /// Tests whether the target is LoongArch (32- and 64-bit).
+  bool isLoongArch() const {
+    return getArch() == Triple::loongarch32 || getArch() == Triple::loongarch64;
   }
 
   /// Tests whether the target is MIPS 32-bit (little and big endian).

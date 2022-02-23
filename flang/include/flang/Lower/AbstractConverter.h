@@ -57,6 +57,7 @@ struct Variable;
 
 using SomeExpr = Fortran::evaluate::Expr<Fortran::evaluate::SomeType>;
 using SymbolRef = Fortran::common::Reference<const Fortran::semantics::Symbol>;
+class StatementContext;
 
 //===----------------------------------------------------------------------===//
 // AbstractConverter interface
@@ -78,25 +79,33 @@ public:
   // Expressions
   //===--------------------------------------------------------------------===//
 
+  /// Generate the address of the location holding the expression, someExpr.
+  virtual fir::ExtendedValue genExprAddr(const SomeExpr &, StatementContext &,
+                                         mlir::Location *loc = nullptr) = 0;
   /// Generate the address of the location holding the expression, someExpr
-  virtual mlir::Value genExprAddr(const SomeExpr &,
-                                  mlir::Location *loc = nullptr) = 0;
-  /// Generate the address of the location holding the expression, someExpr
-  mlir::Value genExprAddr(const SomeExpr *someExpr, mlir::Location loc) {
-    return genExprAddr(*someExpr, &loc);
+  fir::ExtendedValue genExprAddr(const SomeExpr *someExpr,
+                                 StatementContext &stmtCtx,
+                                 mlir::Location loc) {
+    return genExprAddr(*someExpr, stmtCtx, &loc);
   }
 
   /// Generate the computations of the expression to produce a value
-  virtual mlir::Value genExprValue(const SomeExpr &,
-                                   mlir::Location *loc = nullptr) = 0;
+  virtual fir::ExtendedValue genExprValue(const SomeExpr &, StatementContext &,
+                                          mlir::Location *loc = nullptr) = 0;
   /// Generate the computations of the expression, someExpr, to produce a value
-  mlir::Value genExprValue(const SomeExpr *someExpr, mlir::Location loc) {
-    return genExprValue(*someExpr, &loc);
+  fir::ExtendedValue genExprValue(const SomeExpr *someExpr,
+                                  StatementContext &stmtCtx,
+                                  mlir::Location loc) {
+    return genExprValue(*someExpr, stmtCtx, &loc);
   }
 
   /// Get FoldingContext that is required for some expression
   /// analysis.
   virtual Fortran::evaluate::FoldingContext &getFoldingContext() = 0;
+
+  /// Host associated variables are grouped as a tuple. This returns that value,
+  /// which is itself a reference. Use bindTuple() to set this value.
+  virtual mlir::Value hostAssocTupleValue() = 0;
 
   //===--------------------------------------------------------------------===//
   // Types

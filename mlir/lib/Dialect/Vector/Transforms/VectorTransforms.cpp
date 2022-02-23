@@ -10,6 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
+
 #include <type_traits>
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -17,10 +19,8 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/SCF.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
-
-#include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
+#include "mlir/Dialect/Vector/Utils/VectorUtils.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -205,7 +205,7 @@ public:
 
     // Scalar to any vector can use splat.
     if (!srcType) {
-      rewriter.replaceOpWithNewOp<SplatOp>(op, dstType, op.source());
+      rewriter.replaceOpWithNewOp<vector::SplatOp>(op, dstType, op.source());
       return success();
     }
 
@@ -220,7 +220,7 @@ public:
         ext = rewriter.create<vector::ExtractElementOp>(loc, op.source());
       else
         ext = rewriter.create<vector::ExtractOp>(loc, op.source(), 0);
-      rewriter.replaceOpWithNewOp<SplatOp>(op, dstType, ext);
+      rewriter.replaceOpWithNewOp<vector::SplatOp>(op, dstType, ext);
       return success();
     }
 
@@ -515,40 +515,11 @@ private:
     if (!acc)
       return Optional<Value>(mul);
 
-    Value combinedResult;
-    switch (kind) {
-    case CombiningKind::ADD:
-      combinedResult = rewriter.create<arith::AddIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MUL:
-      combinedResult = rewriter.create<arith::MulIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MINUI:
-      combinedResult = rewriter.create<arith::MinUIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MINSI:
-      combinedResult = rewriter.create<arith::MinSIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MAXUI:
-      combinedResult = rewriter.create<arith::MaxUIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MAXSI:
-      combinedResult = rewriter.create<arith::MaxSIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::AND:
-      combinedResult = rewriter.create<arith::AndIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::OR:
-      combinedResult = rewriter.create<arith::OrIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::XOR:
-      combinedResult = rewriter.create<arith::XOrIOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MINF: // Only valid for floating point types.
-    case CombiningKind::MAXF: // Only valid for floating point types.
+    if (kind == CombiningKind::MINF || kind == CombiningKind::MAXF)
+      // Only valid for floating point types.
       return Optional<Value>();
-    }
-    return Optional<Value>(combinedResult);
+
+    return makeArithReduction(rewriter, loc, kind, mul, acc);
   }
 
   static Optional<Value> genMultF(Location loc, Value x, Value y, Value acc,
@@ -566,28 +537,14 @@ private:
     if (!acc)
       return Optional<Value>(mul);
 
-    Value combinedResult;
-    switch (kind) {
-    case CombiningKind::MUL:
-      combinedResult = rewriter.create<arith::MulFOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MINF:
-      combinedResult = rewriter.create<arith::MinFOp>(loc, mul, acc);
-      break;
-    case CombiningKind::MAXF:
-      combinedResult = rewriter.create<arith::MaxFOp>(loc, mul, acc);
-      break;
-    case CombiningKind::ADD:   // Already handled this special case above.
-    case CombiningKind::AND:   // Only valid for integer types.
-    case CombiningKind::MINUI: // Only valid for integer types.
-    case CombiningKind::MINSI: // Only valid for integer types.
-    case CombiningKind::MAXUI: // Only valid for integer types.
-    case CombiningKind::MAXSI: // Only valid for integer types.
-    case CombiningKind::OR:    // Only valid for integer types.
-    case CombiningKind::XOR:   // Only valid for integer types.
+    if (kind == CombiningKind::ADD || kind == CombiningKind::AND ||
+        kind == CombiningKind::MINUI || kind == CombiningKind::MINSI ||
+        kind == CombiningKind::MAXUI || kind == CombiningKind::MAXSI ||
+        kind == CombiningKind::OR || kind == CombiningKind::XOR)
+      // Already handled or only valid for integer types.
       return Optional<Value>();
-    }
-    return Optional<Value>(combinedResult);
+
+    return makeArithReduction(rewriter, loc, kind, mul, acc);
   }
 };
 
@@ -699,7 +656,7 @@ public:
           rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(d));
       Value val = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                  bnd, idx);
-      Value sel = rewriter.create<SelectOp>(loc, val, trueVal, falseVal);
+      Value sel = rewriter.create<arith::SelectOp>(loc, val, trueVal, falseVal);
       auto pos = rewriter.getI64ArrayAttr(d);
       result =
           rewriter.create<vector::InsertOp>(loc, dstType, sel, result, pos);
@@ -1093,7 +1050,7 @@ ContractionOpToMatmulOpLowering::matchAndRewrite(vector::ContractionOp op,
   bindDims(rew.getContext(), m, n, k);
   // LHS must be A(m, k) or A(k, m).
   Value lhs = op.lhs();
-  auto lhsMap = op.indexing_maps()[0].cast<AffineMapAttr>().getValue();
+  auto lhsMap = op.indexing_maps()[0];
   if (lhsMap == AffineMap::get(3, 0, {k, m}, ctx))
     lhs = rew.create<vector::TransposeOp>(loc, lhs, ArrayRef<int64_t>{1, 0});
   else if (lhsMap != AffineMap::get(3, 0, {m, k}, ctx))
@@ -1101,7 +1058,7 @@ ContractionOpToMatmulOpLowering::matchAndRewrite(vector::ContractionOp op,
 
   // RHS must be B(k, n) or B(n, k).
   Value rhs = op.rhs();
-  auto rhsMap = op.indexing_maps()[1].cast<AffineMapAttr>().getValue();
+  auto rhsMap = op.indexing_maps()[1];
   if (rhsMap == AffineMap::get(3, 0, {n, k}, ctx))
     rhs = rew.create<vector::TransposeOp>(loc, rhs, ArrayRef<int64_t>{1, 0});
   else if (rhsMap != AffineMap::get(3, 0, {k, n}, ctx))
@@ -1131,7 +1088,7 @@ ContractionOpToMatmulOpLowering::matchAndRewrite(vector::ContractionOp op,
       mul);
 
   // ACC must be C(m, n) or C(n, m).
-  auto accMap = op.indexing_maps()[2].cast<AffineMapAttr>().getValue();
+  auto accMap = op.indexing_maps()[2];
   if (accMap == AffineMap::get(3, 0, {n, m}, ctx))
     mul = rew.create<vector::TransposeOp>(loc, mul, ArrayRef<int64_t>{1, 0});
   else if (accMap != AffineMap::get(3, 0, {m, n}, ctx))
@@ -1428,8 +1385,7 @@ ContractionOpToDotLowering::matchAndRewrite(vector::ContractionOp op,
                     : rewriter.create<vector::ExtractOp>(op.getLoc(), rhs, c);
       Value m = createMul(op.getLoc(), a, b, isInt, rewriter);
       Value reduced = rewriter.create<vector::ReductionOp>(
-          op.getLoc(), dstType.getElementType(), rewriter.getStringAttr("add"),
-          m, ValueRange{});
+          op.getLoc(), vector::CombiningKind::ADD, m);
 
       SmallVector<int64_t, 2> pos = rank == 1 ? SmallVector<int64_t, 2>{r}
                                               : SmallVector<int64_t, 2>{r, c};
@@ -1609,9 +1565,8 @@ Value ContractionOpLowering::lowerReduction(vector::ContractionOp op,
   if (lhsType.getRank() == 1) {
     assert(rhsType.getRank() == 1 && "corrupt contraction");
     Value m = createMul(loc, op.lhs(), op.rhs(), isInt, rewriter);
-    StringAttr kind = rewriter.getStringAttr("add");
-    Value res = rewriter.create<vector::ReductionOp>(loc, resType, kind, m,
-                                                     ValueRange{});
+    auto kind = vector::CombiningKind::ADD;
+    Value res = rewriter.create<vector::ReductionOp>(loc, kind, m);
     if (auto acc = op.acc())
       res = createAdd(op.getLoc(), res, acc, isInt, rewriter);
     return res;
@@ -1735,7 +1690,7 @@ struct TransferReadToVectorLoadLowering
     // Create vector load op.
     Operation *loadOp;
     if (read.mask()) {
-      Value fill = rewriter.create<SplatOp>(
+      Value fill = rewriter.create<vector::SplatOp>(
           read.getLoc(), unbroadcastedVectorType, read.padding());
       loadOp = rewriter.create<vector::MaskedLoadOp>(
           read.getLoc(), unbroadcastedVectorType, read.source(), read.indices(),
@@ -2168,12 +2123,13 @@ static Value buildVectorComparison(PatternRewriter &rewriter, Operation *op,
   // Add in an offset if requested.
   if (off) {
     Value o = createCastToIndexLike(rewriter, loc, idxType, *off);
-    Value ov = rewriter.create<SplatOp>(loc, indices.getType(), o);
+    Value ov = rewriter.create<vector::SplatOp>(loc, indices.getType(), o);
     indices = rewriter.create<arith::AddIOp>(loc, ov, indices);
   }
   // Construct the vector comparison.
   Value bound = createCastToIndexLike(rewriter, loc, idxType, b);
-  Value bounds = rewriter.create<SplatOp>(loc, indices.getType(), bound);
+  Value bounds =
+      rewriter.create<vector::SplatOp>(loc, indices.getType(), bound);
   return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, indices,
                                         bounds);
 }

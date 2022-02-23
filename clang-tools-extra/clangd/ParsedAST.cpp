@@ -227,10 +227,6 @@ private:
           /*Imported=*/nullptr, Inc.FileKind);
       if (File)
         Delegate->FileSkipped(*File, SynthesizedFilenameTok, Inc.FileKind);
-      else {
-        llvm::SmallString<1> UnusedRecovery;
-        Delegate->FileNotFound(WrittenFilename, UnusedRecovery);
-      }
     }
   }
 

@@ -18,6 +18,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -88,7 +89,7 @@ public:
 
   /// Emit the swift reflection section stored in \p Buffer.
   void emitSwiftReflectionSection(
-      llvm::swift::Swift5ReflectionSectionKind ReflSectionKind,
+      llvm::binaryformat::Swift5ReflectionSectionKind ReflSectionKind,
       StringRef Buffer, uint32_t Alignment, uint32_t Size);
 
   /// Emit debug_ranges for \p FuncRange by translating the

@@ -8,25 +8,20 @@
 
 #include "InputSection.h"
 #include "Config.h"
-#include "EhFrame.h"
 #include "InputFiles.h"
-#include "LinkerScript.h"
 #include "OutputSections.h"
 #include "Relocations.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
 #include "Target.h"
-#include "Thunks.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/Endian.h"
-#include "llvm/Support/Threading.h"
 #include "llvm/Support/xxhash.h"
 #include <algorithm>
 #include <mutex>
-#include <set>
 #include <vector>
 
 using namespace llvm;
@@ -83,22 +78,7 @@ InputSectionBase::InputSectionBase(InputFile *file, uint64_t flags,
     if (!zlib::isAvailable())
       error(toString(file) + ": contains a compressed section, " +
             "but zlib is not available");
-    switch (config->ekind) {
-    case ELF32LEKind:
-      parseCompressedHeader<ELF32LE>();
-      break;
-    case ELF32BEKind:
-      parseCompressedHeader<ELF32BE>();
-      break;
-    case ELF64LEKind:
-      parseCompressedHeader<ELF64LE>();
-      break;
-    case ELF64BEKind:
-      parseCompressedHeader<ELF64BE>();
-      break;
-    default:
-      llvm_unreachable("unknown ELFT");
-    }
+    invokeELFT(parseCompressedHeader);
   }
 }
 
@@ -387,6 +367,7 @@ template <class ELFT, class RelTy>
 void InputSection::copyRelocations(uint8_t *buf, ArrayRef<RelTy> rels) {
   const TargetInfo &target = *elf::target;
   InputSectionBase *sec = getRelocatedSection();
+  (void)sec->data(); // uncompress if needed
 
   for (const RelTy &rel : rels) {
     RelType type = rel.getType(config->isMips64EL);
@@ -439,7 +420,7 @@ void InputSection::copyRelocations(uint8_t *buf, ArrayRef<RelTy> rels) {
       }
 
       int64_t addend = getAddend<ELFT>(rel);
-      const uint8_t *bufLoc = sec->data().begin() + rel.r_offset;
+      const uint8_t *bufLoc = sec->rawData.begin() + rel.r_offset;
       if (!RelTy::IsRela)
         addend = target.getImplicitAddend(bufLoc, type);
 
@@ -1040,6 +1021,14 @@ void InputSectionBase::relocateAlloc(uint8_t *buf, uint8_t *bufEnd) {
       }
       target.relocate(bufLoc, rel, targetVA);
       break;
+    case R_AARCH64_PAGE_PC:
+      if (i + 1 < size && aarch64relaxer.tryRelaxAdrpAdd(
+                              rel, relocations[i + 1], secAddr, buf)) {
+        ++i;
+        continue;
+      }
+      target.relocate(bufLoc, rel, targetVA);
+      break;
     case R_PPC64_RELAX_GOT_PC: {
       // The R_PPC64_PCREL_OPT relocation must appear immediately after
       // R_PPC64_GOT_PCREL34 in the relocations table at the same offset.
@@ -1126,7 +1115,8 @@ void InputSectionBase::relocateAlloc(uint8_t *buf, uint8_t *bufEnd) {
 // For each function-defining prologue, find any calls to __morestack,
 // and replace them with calls to __morestack_non_split.
 static void switchMorestackCallsToMorestackNonSplit(
-    DenseSet<Defined *> &prologues, std::vector<Relocation *> &morestackCalls) {
+    DenseSet<Defined *> &prologues,
+    SmallVector<Relocation *, 0> &morestackCalls) {
 
   // If the target adjusted a function's prologue, all calls to
   // __morestack inside that function should be switched to
@@ -1176,7 +1166,7 @@ template <class ELFT>
 void InputSectionBase::adjustSplitStackFunctionPrologues(uint8_t *buf,
                                                          uint8_t *end) {
   DenseSet<Defined *> prologues;
-  std::vector<Relocation *> morestackCalls;
+  SmallVector<Relocation *, 0> morestackCalls;
 
   for (Relocation &rel : relocations) {
     // Ignore calls into the split-stack api.
@@ -1434,7 +1424,7 @@ void MergeInputSection::splitIntoPieces() {
 }
 
 SectionPiece *MergeInputSection::getSectionPiece(uint64_t offset) {
-  if (this->data().size() <= offset)
+  if (this->rawData.size() <= offset)
     fatal(toString(this) + ": offset is outside the section");
 
   // If Offset is not at beginning of a section piece, it is not in the map.
