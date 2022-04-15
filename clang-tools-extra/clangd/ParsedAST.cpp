@@ -10,7 +10,6 @@
 #include "../clang-tidy/ClangTidyCheck.h"
 #include "../clang-tidy/ClangTidyDiagnosticConsumer.h"
 #include "../clang-tidy/ClangTidyModuleRegistry.h"
-#include "../clang-tidy/NoLintDirectiveHandler.h"
 #include "AST.h"
 #include "Compiler.h"
 #include "Config.h"
@@ -48,7 +47,6 @@
 #include "clang/Tooling/Syntax/Tokens.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include <algorithm>
@@ -214,7 +212,6 @@ private:
       SynthesizedFilenameTok.setKind(tok::header_name);
       SynthesizedFilenameTok.setLiteralData(Inc.Written.data());
 
-      const FileEntry *FE = File ? &File->getFileEntry() : nullptr;
       llvm::StringRef WrittenFilename =
           llvm::StringRef(Inc.Written).drop_front().drop_back();
       Delegate->InclusionDirective(
@@ -223,7 +220,7 @@ private:
           syntax::FileRange(SM, SynthesizedFilenameTok.getLocation(),
                             SynthesizedFilenameTok.getEndLoc())
               .toCharRange(SM),
-          FE, "SearchPath", "RelPath",
+          File, "SearchPath", "RelPath",
           /*Imported=*/nullptr, Inc.FileKind);
       if (File)
         Delegate->FileSkipped(*File, SynthesizedFilenameTok, Inc.FileKind);
@@ -522,7 +519,7 @@ ParsedAST::build(llvm::StringRef Filename, const ParseInputs &Inputs,
           if (IsInsideMainFile && CTContext->shouldSuppressDiagnostic(
                                       DiagLevel, Info, TidySuppressedErrors,
                                       /*AllowIO=*/false,
-                                      /*EnableNolintBlocks=*/false)) {
+                                      /*EnableNolintBlocks=*/true)) {
             // FIXME: should we expose the suppression error (invalid use of
             // NOLINT comments)?
             return DiagnosticsEngine::Ignored;
@@ -691,6 +688,8 @@ ASTContext &ParsedAST::getASTContext() { return Clang->getASTContext(); }
 const ASTContext &ParsedAST::getASTContext() const {
   return Clang->getASTContext();
 }
+
+Sema &ParsedAST::getSema() { return Clang->getSema(); }
 
 Preprocessor &ParsedAST::getPreprocessor() { return Clang->getPreprocessor(); }
 
