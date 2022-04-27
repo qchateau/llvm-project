@@ -4479,6 +4479,14 @@ public:
                                 SelectionDAG &DAG,
                                 SmallVectorImpl<SDNode *> &Created) const;
 
+  /// Targets may override this function to provide custom SREM lowering for
+  /// power-of-2 denominators.  If the target returns an empty SDValue, LLVM
+  /// assumes SREM is expensive and replaces it with a series of other integer
+  /// operations.
+  virtual SDValue BuildSREMPow2(SDNode *N, const APInt &Divisor,
+                                SelectionDAG &DAG,
+                                SmallVectorImpl<SDNode *> &Created) const;
+
   /// Indicate whether this target prefers to combine FDIVs with the same
   /// divisor. If the transform should never be done, return zero. If the
   /// transform should be done, return the minimum number of divisor uses
@@ -4629,6 +4637,16 @@ public:
   /// \param N Node to expand
   /// \returns The expansion result
   SDValue expandFP_TO_INT_SAT(SDNode *N, SelectionDAG &DAG) const;
+
+  /// Expand check for floating point class.
+  /// \param ResultVT The type of intrinsic call result.
+  /// \param Op The tested value.
+  /// \param Test The test to perform.
+  /// \param Flags The optimization flags.
+  /// \returns The expansion result or SDValue() if it fails.
+  SDValue expandIS_FPCLASS(EVT ResultVT, SDValue Op, unsigned Test,
+                           SDNodeFlags Flags, const SDLoc &DL,
+                           SelectionDAG &DAG) const;
 
   /// Expand CTPOP nodes. Expands vector/scalar CTPOP nodes,
   /// vector nodes can only succeed if all operations are legal/custom.

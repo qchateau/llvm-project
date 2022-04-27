@@ -465,6 +465,7 @@ ParsedAST::build(llvm::StringRef Filename, const ParseInputs &Inputs,
     CTContext->setDiagnosticsEngine(&Clang->getDiagnostics());
     CTContext->setASTContext(&Clang->getASTContext());
     CTContext->setCurrentFile(Filename);
+    CTContext->setSelfContainedDiags(true);
     CTChecks = CTFactories.createChecks(CTContext.getPointer());
     llvm::erase_if(CTChecks, [&](const auto &Check) {
       return !Check->isLanguageVersionSupported(CTContext->getLangOpts());
@@ -480,7 +481,8 @@ ParsedAST::build(llvm::StringRef Filename, const ParseInputs &Inputs,
     // this is an error. (The actual typo correction is nice too).
     // We restore the original severity in the level adjuster.
     // FIXME: It would be better to have a real API for this, but what?
-    for (auto ID : {diag::ext_implicit_function_decl,
+    for (auto ID : {diag::ext_implicit_function_decl_c99,
+                    diag::ext_implicit_lib_function_decl_c99,
                     diag::warn_implicit_function_decl}) {
       OverriddenSeverity.try_emplace(
           ID, Clang->getDiagnostics().getDiagnosticLevel(ID, SourceLocation()));
@@ -608,6 +610,12 @@ ParsedAST::build(llvm::StringRef Filename, const ParseInputs &Inputs,
 
   // Collect tokens of the main file.
   syntax::TokenCollector CollectTokens(Clang->getPreprocessor());
+
+  // To remain consistent with preamble builds, these callbacks must be called
+  // exactly here, after preprocessor is initialized and BeginSourceFile() was
+  // called already.
+  for (const auto &L : ASTListeners)
+    L->beforeExecute(*Clang);
 
   if (llvm::Error Err = Action->Execute())
     log("Execute() failed when building AST for {0}: {1}", MainInput.getFile(),

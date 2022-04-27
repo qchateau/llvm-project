@@ -465,15 +465,14 @@ Value Importer::processConstant(llvm::Constant *c) {
     if (!type)
       return nullptr;
     if (auto symbolRef = attr.dyn_cast<FlatSymbolRefAttr>())
-      return instMap[c] = bEntry.create<AddressOfOp>(unknownLoc, type,
-                                                     symbolRef.getValue());
-    return instMap[c] = bEntry.create<ConstantOp>(unknownLoc, type, attr);
+      return bEntry.create<AddressOfOp>(unknownLoc, type, symbolRef.getValue());
+    return bEntry.create<ConstantOp>(unknownLoc, type, attr);
   }
   if (auto *cn = dyn_cast<llvm::ConstantPointerNull>(c)) {
     Type type = processType(cn->getType());
     if (!type)
       return nullptr;
-    return instMap[c] = bEntry.create<NullOp>(unknownLoc, type);
+    return bEntry.create<NullOp>(unknownLoc, type);
   }
   if (auto *gv = dyn_cast<llvm::GlobalVariable>(c))
     return bEntry.create<AddressOfOp>(UnknownLoc::get(context),
@@ -487,17 +486,61 @@ Value Importer::processConstant(llvm::Constant *c) {
       return nullptr;
     assert(instMap.count(i));
 
+    // If we don't remove entry of `i` here, it's totally possible that the
+    // next time llvm::ConstantExpr::getAsInstruction is called again, which
+    // always allocates a new Instruction, memory address of the newly
+    // created Instruction might be the same as `i`. Making processInstruction
+    // falsely believe that the new Instruction has been processed before
+    // and raised an assertion error.
+    Value value = instMap[i];
+    instMap.erase(i);
     // Remove this zombie LLVM instruction now, leaving us only with the MLIR
     // op.
     i->deleteValue();
-    return instMap[c] = instMap[i];
+    return value;
   }
   if (auto *ue = dyn_cast<llvm::UndefValue>(c)) {
     Type type = processType(ue->getType());
     if (!type)
       return nullptr;
-    return instMap[c] = bEntry.create<UndefOp>(UnknownLoc::get(context), type);
+    return bEntry.create<UndefOp>(UnknownLoc::get(context), type);
   }
+
+  if (isa<llvm::ConstantAggregate>(c) || isa<llvm::ConstantAggregateZero>(c)) {
+    unsigned numElements = c->getNumOperands();
+    std::function<llvm::Constant *(unsigned)> getElement =
+        [&](unsigned index) -> llvm::Constant * {
+      return c->getAggregateElement(index);
+    };
+    // llvm::ConstantAggregateZero doesn't take any operand
+    // so its getNumOperands is always zero.
+    if (auto *caz = dyn_cast<llvm::ConstantAggregateZero>(c)) {
+      numElements = caz->getElementCount().getFixedValue();
+      // We want to capture the pointer rather than reference
+      // to the pointer since the latter will become dangling upon
+      // exiting the scope.
+      getElement = [=](unsigned index) -> llvm::Constant * {
+        return caz->getElementValue(index);
+      };
+    }
+
+    // Generate a llvm.undef as the root value first.
+    Type rootType = processType(c->getType());
+    if (!rootType)
+      return nullptr;
+    Value root = bEntry.create<UndefOp>(unknownLoc, rootType);
+    for (unsigned i = 0; i < numElements; ++i) {
+      llvm::Constant *element = getElement(i);
+      Value elementValue = processConstant(element);
+      if (!elementValue)
+        return nullptr;
+      ArrayAttr indexAttr = bEntry.getI32ArrayAttr({static_cast<int32_t>(i)});
+      root = bEntry.create<InsertValueOp>(UnknownLoc::get(context), rootType,
+                                          root, elementValue, indexAttr);
+    }
+    return root;
+  }
+
   emitError(unknownLoc) << "unhandled constant: " << diag(*c);
   return nullptr;
 }
@@ -671,7 +714,6 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
   case llvm::Instruction::And:
   case llvm::Instruction::Or:
   case llvm::Instruction::Xor:
-  case llvm::Instruction::Alloca:
   case llvm::Instruction::Load:
   case llvm::Instruction::Store:
   case llvm::Instruction::Ret:
@@ -709,6 +751,17 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
     Operation *op = b.create(state);
     if (!inst->getType()->isVoidTy())
       v = op->getResult(0);
+    return success();
+  }
+  case llvm::Instruction::Alloca: {
+    Value size = processValue(inst->getOperand(0));
+    if (!size)
+      return failure();
+
+    auto *allocaInst = cast<llvm::AllocaInst>(inst);
+    v = b.create<AllocaOp>(loc, processType(inst->getType()),
+                           processType(allocaInst->getAllocatedType()), size,
+                           allocaInst->getAlign().value());
     return success();
   }
   case llvm::Instruction::ICmp: {
@@ -859,18 +912,34 @@ LogicalResult Importer::processInstruction(llvm::Instruction *inst) {
   case llvm::Instruction::GetElementPtr: {
     // FIXME: Support inbounds GEPs.
     llvm::GetElementPtrInst *gep = cast<llvm::GetElementPtrInst>(inst);
-    SmallVector<Value, 4> ops;
-    for (auto *op : gep->operand_values()) {
-      Value value = processValue(op);
-      if (!value)
-        return failure();
-      ops.push_back(value);
+    Value basePtr = processValue(gep->getOperand(0));
+    SmallVector<int32_t> staticIndices;
+    SmallVector<Value> dynamicIndices;
+    Type sourceElementType = processType(gep->getSourceElementType());
+    SmallVector<unsigned> staticIndexPositions;
+    GEPOp::findKnownStructIndices(sourceElementType, staticIndexPositions);
+
+    for (const auto &en :
+         llvm::enumerate(llvm::drop_begin(gep->operand_values()))) {
+      llvm::Value *operand = en.value();
+      if (llvm::find(staticIndexPositions, en.index()) ==
+          staticIndexPositions.end()) {
+        staticIndices.push_back(GEPOp::kDynamicIndex);
+        dynamicIndices.push_back(processValue(operand));
+        if (!dynamicIndices.back())
+          return failure();
+      } else {
+        auto *constantInt = cast<llvm::ConstantInt>(operand);
+        staticIndices.push_back(
+            static_cast<int32_t>(constantInt->getValue().getZExtValue()));
+      }
     }
+
     Type type = processType(inst->getType());
     if (!type)
       return failure();
-    v = b.create<GEPOp>(loc, type, ops[0],
-                        llvm::makeArrayRef(ops).drop_front());
+    v = b.create<GEPOp>(loc, type, sourceElementType, basePtr, dynamicIndices,
+                        staticIndices);
     return success();
   }
   }

@@ -598,8 +598,8 @@ void CodeGenModule::Release() {
     llvm::ArrayType *ATy = llvm::ArrayType::get(Int8PtrTy, UsedArray.size());
 
     auto *GV = new llvm::GlobalVariable(
-        getModule(), ATy, false, llvm::GlobalValue::AppendingLinkage,
-        llvm::ConstantArray::get(ATy, UsedArray), "gpu.used.external");
+        getModule(), ATy, false, llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantArray::get(ATy, UsedArray), "__clang_gpu_used_external");
     addCompilerUsedGlobal(GV);
   }
 
@@ -4615,7 +4615,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
         T = D->getType();
 
       if (getLangOpts().CPlusPlus) {
-        if (!InitDecl->getFlexibleArrayInitChars(getContext()).isZero())
+        if (InitDecl->hasFlexibleArrayInit(getContext()))
           ErrorUnsupported(D, "flexible array initializer");
         Init = EmitNullConstant(T);
         NeedsGlobalCtor = true;
@@ -4631,17 +4631,12 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
       if (getLangOpts().CPlusPlus && !NeedsGlobalDtor)
         DelayedCXXInitPosition.erase(D);
 
-#if 0
-      // FIXME: The following check doesn't handle flexible array members
-      // inside tail padding (which don't actually increase the size of
-      // the struct).
 #ifndef NDEBUG
       CharUnits VarSize = getContext().getTypeSizeInChars(ASTTy) +
                           InitDecl->getFlexibleArrayInitChars(getContext());
       CharUnits CstSize = CharUnits::fromQuantity(
           getDataLayout().getTypeAllocSize(Init->getType()));
       assert(VarSize == CstSize && "Emitted constant has unexpected size");
-#endif
 #endif
     }
   }
@@ -5507,12 +5502,11 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   switch (Triple.getObjectFormat()) {
   case llvm::Triple::UnknownObjectFormat:
     llvm_unreachable("unknown file format");
-  case llvm::Triple::GOFF:
-    llvm_unreachable("GOFF is not yet implemented");
-  case llvm::Triple::XCOFF:
-    llvm_unreachable("XCOFF is not yet implemented");
   case llvm::Triple::DXContainer:
-    llvm_unreachable("DXContainer is not yet implemented");
+  case llvm::Triple::GOFF:
+  case llvm::Triple::SPIRV:
+  case llvm::Triple::XCOFF:
+    llvm_unreachable("unimplemented");
   case llvm::Triple::COFF:
   case llvm::Triple::ELF:
   case llvm::Triple::Wasm:
@@ -6815,6 +6809,12 @@ bool CodeGenModule::stopAutoInit() {
 
 void CodeGenModule::printPostfixForExternalizedDecl(llvm::raw_ostream &OS,
                                                     const Decl *D) const {
-  OS << (isa<VarDecl>(D) ? "__static__" : ".anon.")
-     << getContext().getCUIDHash();
+  StringRef Tag;
+  // ptxas does not allow '.' in symbol names. On the other hand, HIP prefers
+  // postfix beginning with '.' since the symbol name can be demangled.
+  if (LangOpts.HIP)
+    Tag = (isa<VarDecl>(D) ? ".static." : ".intern.");
+  else
+    Tag = (isa<VarDecl>(D) ? "__static__" : "__intern__");
+  OS << Tag << getContext().getCUIDHash();
 }

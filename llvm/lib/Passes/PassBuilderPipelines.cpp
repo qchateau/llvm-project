@@ -713,6 +713,12 @@ ModuleInlinerWrapperPass
 PassBuilder::buildInlinerPipeline(OptimizationLevel Level,
                                   ThinOrFullLTOPhase Phase) {
   InlineParams IP = getInlineParamsFromOptLevel(Level);
+  // For PreLinkThinLTO + SamplePGO, set hot-caller threshold to 0 to
+  // disable hot callsite inline (as much as possible [1]) because it makes
+  // profile annotation in the backend inaccurate.
+  //
+  // [1] Note the cost of a function could be below zero due to erased
+  // prologue / epilogue.
   if (Phase == ThinOrFullLTOPhase::ThinLTOPreLink && PGOOpt &&
       PGOOpt->Action == PGOOptions::SampleUse)
     IP.HotCallSiteThreshold = 0;
@@ -786,6 +792,12 @@ PassBuilder::buildModuleInlinerPipeline(OptimizationLevel Level,
   ModulePassManager MPM;
 
   InlineParams IP = getInlineParamsFromOptLevel(Level);
+  // For PreLinkThinLTO + SamplePGO, set hot-caller threshold to 0 to
+  // disable hot callsite inline (as much as possible [1]) because it makes
+  // profile annotation in the backend inaccurate.
+  //
+  // [1] Note the cost of a function could be below zero due to erased
+  // prologue / epilogue.
   if (Phase == ThinOrFullLTOPhase::ThinLTOPreLink && PGOOpt &&
       PGOOpt->Action == PGOOptions::SampleUse)
     IP.HotCallSiteThreshold = 0;
@@ -853,6 +865,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   // Do basic inference of function attributes from known properties of system
   // libraries and other oracles.
   MPM.addPass(InferFunctionAttrsPass());
+  MPM.addPass(CoroEarlyPass());
 
   // Create an early function pass manager to cleanup the output of the
   // frontend.
@@ -863,7 +876,6 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   EarlyFPM.addPass(SimplifyCFGPass());
   EarlyFPM.addPass(SROAPass());
   EarlyFPM.addPass(EarlyCSEPass());
-  EarlyFPM.addPass(CoroEarlyPass());
   if (Level == OptimizationLevel::O3)
     EarlyFPM.addPass(CallSiteSplittingPass());
 
@@ -1825,7 +1837,7 @@ ModulePassManager PassBuilder::buildO0DefaultPipeline(OptimizationLevel Level,
   }
 
   ModulePassManager CoroPM;
-  CoroPM.addPass(createModuleToFunctionPassAdaptor(CoroEarlyPass()));
+  CoroPM.addPass(CoroEarlyPass());
   CGSCCPassManager CGPM;
   CGPM.addPass(CoroSplitPass());
   CoroPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));

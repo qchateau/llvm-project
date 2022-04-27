@@ -526,6 +526,15 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::UMULO, MVT::i32, Custom);
   setOperationAction(ISD::UMULO, MVT::i64, Custom);
 
+  setOperationAction(ISD::ADDCARRY, MVT::i32, Custom);
+  setOperationAction(ISD::ADDCARRY, MVT::i64, Custom);
+  setOperationAction(ISD::SUBCARRY, MVT::i32, Custom);
+  setOperationAction(ISD::SUBCARRY, MVT::i64, Custom);
+  setOperationAction(ISD::SADDO_CARRY, MVT::i32, Custom);
+  setOperationAction(ISD::SADDO_CARRY, MVT::i64, Custom);
+  setOperationAction(ISD::SSUBO_CARRY, MVT::i32, Custom);
+  setOperationAction(ISD::SSUBO_CARRY, MVT::i64, Custom);
+
   setOperationAction(ISD::FSIN, MVT::f32, Expand);
   setOperationAction(ISD::FSIN, MVT::f64, Expand);
   setOperationAction(ISD::FCOS, MVT::f32, Expand);
@@ -1177,22 +1186,11 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
       setOperationAction(ISD::MSCATTER, VT, Custom);
     }
 
-    for (MVT VT : MVT::fp_scalable_vector_valuetypes()) {
-      for (MVT InnerVT : MVT::fp_scalable_vector_valuetypes()) {
-        // Avoid marking truncating FP stores as legal to prevent the
-        // DAGCombiner from creating unsupported truncating stores.
+    // Firstly, exclude all scalable vector extending loads/truncating stores,
+    // include both integer and floating scalable vector.
+    for (MVT VT : MVT::scalable_vector_valuetypes()) {
+      for (MVT InnerVT : MVT::scalable_vector_valuetypes()) {
         setTruncStoreAction(VT, InnerVT, Expand);
-        // SVE does not have floating-point extending loads.
-        setLoadExtAction(ISD::SEXTLOAD, VT, InnerVT, Expand);
-        setLoadExtAction(ISD::ZEXTLOAD, VT, InnerVT, Expand);
-        setLoadExtAction(ISD::EXTLOAD, VT, InnerVT, Expand);
-      }
-    }
-
-    // Firstly, exclude all scalable vector extending loads/truncating stores.
-    for (MVT VT : MVT::integer_scalable_vector_valuetypes()) {
-      for (MVT InnerVT : MVT::integer_scalable_vector_valuetypes()) {
-        // TODO: truncating stores should also be exclude
         setLoadExtAction(ISD::SEXTLOAD, VT, InnerVT, Expand);
         setLoadExtAction(ISD::ZEXTLOAD, VT, InnerVT, Expand);
         setLoadExtAction(ISD::EXTLOAD, VT, InnerVT, Expand);
@@ -1200,6 +1198,12 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
     }
 
     // Then, selectively enable those which we directly support.
+    setTruncStoreAction(MVT::nxv2i64, MVT::nxv2i8, Legal);
+    setTruncStoreAction(MVT::nxv2i64, MVT::nxv2i16, Legal);
+    setTruncStoreAction(MVT::nxv2i64, MVT::nxv2i32, Legal);
+    setTruncStoreAction(MVT::nxv4i32, MVT::nxv4i8, Legal);
+    setTruncStoreAction(MVT::nxv4i32, MVT::nxv4i16, Legal);
+    setTruncStoreAction(MVT::nxv8i16, MVT::nxv8i8, Legal);
     for (auto Op : {ISD::ZEXTLOAD, ISD::SEXTLOAD, ISD::EXTLOAD}) {
       setLoadExtAction(Op, MVT::nxv2i64, MVT::nxv2i8, Legal);
       setLoadExtAction(Op, MVT::nxv2i64, MVT::nxv2i16, Legal);
@@ -3304,6 +3308,62 @@ static SDValue LowerADDC_ADDE_SUBC_SUBE(SDValue Op, SelectionDAG &DAG) {
                      Op.getOperand(2));
 }
 
+// Sets 'C' bit of NZCV to 0 if value is 0, else sets 'C' bit to 1
+static SDValue valueToCarryFlag(SDValue Value, SelectionDAG &DAG) {
+  SDLoc DL(Value);
+  SDValue One = DAG.getConstant(1, DL, Value.getValueType());
+  SDValue Cmp =
+      DAG.getNode(AArch64ISD::SUBS, DL,
+                  DAG.getVTList(Value.getValueType(), MVT::Glue), Value, One);
+  return Cmp.getValue(1);
+}
+
+// Value is 1 if 'C' bit of NZCV is 1, else 0
+static SDValue carryFlagToValue(SDValue Flag, EVT VT, SelectionDAG &DAG) {
+  assert(Flag.getResNo() == 1);
+  SDLoc DL(Flag);
+  SDValue Zero = DAG.getConstant(0, DL, VT);
+  SDValue One = DAG.getConstant(1, DL, VT);
+  SDValue CC = DAG.getConstant(AArch64CC::HS, DL, MVT::i32);
+  return DAG.getNode(AArch64ISD::CSEL, DL, VT, One, Zero, CC, Flag);
+}
+
+// Value is 1 if 'V' bit of NZCV is 1, else 0
+static SDValue overflowFlagToValue(SDValue Flag, EVT VT, SelectionDAG &DAG) {
+  assert(Flag.getResNo() == 1);
+  SDLoc DL(Flag);
+  SDValue Zero = DAG.getConstant(0, DL, VT);
+  SDValue One = DAG.getConstant(1, DL, VT);
+  SDValue CC = DAG.getConstant(AArch64CC::VS, DL, MVT::i32);
+  return DAG.getNode(AArch64ISD::CSEL, DL, VT, One, Zero, CC, Flag);
+}
+
+// This lowering is inefficient, but it will get cleaned up by
+// `foldOverflowCheck`
+static SDValue lowerADDSUBCARRY(SDValue Op, SelectionDAG &DAG, unsigned Opcode,
+                                bool IsSigned) {
+  EVT VT0 = Op.getValue(0).getValueType();
+  EVT VT1 = Op.getValue(1).getValueType();
+
+  if (VT0 != MVT::i32 && VT0 != MVT::i64)
+    return SDValue();
+
+  SDValue OpLHS = Op.getOperand(0);
+  SDValue OpRHS = Op.getOperand(1);
+  SDValue OpCarryIn = valueToCarryFlag(Op.getOperand(2), DAG);
+
+  SDLoc DL(Op);
+  SDVTList VTs = DAG.getVTList(VT0, VT1);
+
+  SDValue Sum = DAG.getNode(Opcode, DL, DAG.getVTList(VT0, MVT::Glue), OpLHS,
+                            OpRHS, OpCarryIn);
+
+  SDValue OutFlag = IsSigned ? overflowFlagToValue(Sum.getValue(1), VT1, DAG)
+                             : carryFlagToValue(Sum.getValue(1), VT1, DAG);
+
+  return DAG.getNode(ISD::MERGE_VALUES, DL, VTs, Sum, OutFlag);
+}
+
 static SDValue LowerXALUO(SDValue Op, SelectionDAG &DAG) {
   // Let legalize expand this if it isn't a legal type yet.
   if (!DAG.getTargetLoweringInfo().isTypeLegal(Op.getValueType()))
@@ -3533,7 +3593,7 @@ AArch64TargetLowering::LowerVectorFP_TO_INT_SAT(SDValue Op,
          "Saturation width cannot exceed result width");
 
   // TODO: Consider lowering to SVE operations, as in LowerVectorFP_TO_INT.
-  // Currently, the `llvm.fpto[su]i.sat.*` instrinsics don't accept scalable
+  // Currently, the `llvm.fpto[su]i.sat.*` intrinsics don't accept scalable
   // types, so this is hard to reach.
   if (DstVT.isScalableVector())
     return SDValue();
@@ -5152,6 +5212,14 @@ SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
   case ISD::SUBC:
   case ISD::SUBE:
     return LowerADDC_ADDE_SUBC_SUBE(Op, DAG);
+  case ISD::ADDCARRY:
+    return lowerADDSUBCARRY(Op, DAG, AArch64ISD::ADCS, false /*unsigned*/);
+  case ISD::SUBCARRY:
+    return lowerADDSUBCARRY(Op, DAG, AArch64ISD::SBCS, false /*unsigned*/);
+  case ISD::SADDO_CARRY:
+    return lowerADDSUBCARRY(Op, DAG, AArch64ISD::ADCS, true /*signed*/);
+  case ISD::SSUBO_CARRY:
+    return lowerADDSUBCARRY(Op, DAG, AArch64ISD::SBCS, true /*signed*/);
   case ISD::SADDO:
   case ISD::UADDO:
   case ISD::SSUBO:
@@ -9750,8 +9818,12 @@ static SDValue tryFormConcatFromShuffle(SDValue Op, SelectionDAG &DAG) {
 }
 
 /// GeneratePerfectShuffle - Given an entry in the perfect-shuffle table, emit
-/// the specified operations to build the shuffle.
-static SDValue GeneratePerfectShuffle(unsigned PFEntry, SDValue LHS,
+/// the specified operations to build the shuffle. ID is the perfect-shuffle
+//ID, V1 and V2 are the original shuffle inputs. PFEntry is the Perfect shuffle
+//table entry and LHS/RHS are the immediate inputs for this stage of the
+//shuffle.
+static SDValue GeneratePerfectShuffle(unsigned ID, SDValue V1,
+                                      SDValue V2, unsigned PFEntry, SDValue LHS,
                                       SDValue RHS, SelectionDAG &DAG,
                                       const SDLoc &dl) {
   unsigned OpNum = (PFEntry >> 26) & 0x0F;
@@ -9768,12 +9840,13 @@ static SDValue GeneratePerfectShuffle(unsigned PFEntry, SDValue LHS,
     OP_VEXT1,
     OP_VEXT2,
     OP_VEXT3,
-    OP_VUZPL, // VUZP, left result
-    OP_VUZPR, // VUZP, right result
-    OP_VZIPL, // VZIP, left result
-    OP_VZIPR, // VZIP, right result
-    OP_VTRNL, // VTRN, left result
-    OP_VTRNR  // VTRN, right result
+    OP_VUZPL,  // VUZP, left result
+    OP_VUZPR,  // VUZP, right result
+    OP_VZIPL,  // VZIP, left result
+    OP_VZIPR,  // VZIP, right result
+    OP_VTRNL,  // VTRN, left result
+    OP_VTRNR,  // VTRN, right result
+    OP_MOVLANE // Move lane. RHSID is the lane to move into
   };
 
   if (OpNum == OP_COPY) {
@@ -9783,9 +9856,48 @@ static SDValue GeneratePerfectShuffle(unsigned PFEntry, SDValue LHS,
     return RHS;
   }
 
+  if (OpNum == OP_MOVLANE) {
+    // Decompose a PerfectShuffle ID to get the Mask for lane Elt
+    auto getPFIDLane = [](unsigned ID, int Elt) -> int {
+      assert(Elt < 4 && "Expected Perfect Lanes to be less than 4");
+      Elt = 3 - Elt;
+      while (Elt > 0) {
+        ID /= 9;
+        Elt--;
+      }
+      return (ID % 9 == 8) ? -1 : ID % 9;
+    };
+
+    // For OP_MOVLANE shuffles, the RHSID represents the lane to move into. We
+    // get the lane to move from from the PFID, which is always from the
+    // original vectors (V1 or V2).
+    SDValue OpLHS = GeneratePerfectShuffle(
+        LHSID, V1, V2, PerfectShuffleTable[LHSID], LHS, RHS, DAG, dl);
+    EVT VT = OpLHS.getValueType();
+    assert(RHSID < 8 && "Expected a lane index for RHSID!");
+    int MaskElt = getPFIDLane(ID, RHSID);
+    assert(MaskElt >= 0 && "Didn't expect an undef movlane index!");
+    unsigned ExtLane = MaskElt < 4 ? MaskElt : (MaskElt - 4);
+    SDValue Input = MaskElt < 4 ? V1 : V2;
+    // Be careful about creating illegal types. Use f16 instead of i16.
+    if (VT == MVT::v4i16) {
+      Input = DAG.getBitcast(MVT::v4f16, Input);
+      OpLHS = DAG.getBitcast(MVT::v4f16, OpLHS);
+    }
+    SDValue Ext = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl,
+                              Input.getValueType().getVectorElementType(),
+                              Input, DAG.getVectorIdxConstant(ExtLane, dl));
+    SDValue Ins =
+        DAG.getNode(ISD::INSERT_VECTOR_ELT, dl, Input.getValueType(), OpLHS,
+                    Ext, DAG.getVectorIdxConstant(RHSID & 0x3, dl));
+    return DAG.getBitcast(VT, Ins);
+  }
+
   SDValue OpLHS, OpRHS;
-  OpLHS = GeneratePerfectShuffle(PerfectShuffleTable[LHSID], LHS, RHS, DAG, dl);
-  OpRHS = GeneratePerfectShuffle(PerfectShuffleTable[RHSID], LHS, RHS, DAG, dl);
+  OpLHS = GeneratePerfectShuffle(LHSID, V1, V2, PerfectShuffleTable[LHSID], LHS,
+                                 RHS, DAG, dl);
+  OpRHS = GeneratePerfectShuffle(RHSID, V1, V2, PerfectShuffleTable[RHSID], LHS,
+                                 RHS, DAG, dl);
   EVT VT = OpLHS.getValueType();
 
   switch (OpNum) {
@@ -10244,7 +10356,8 @@ SDValue AArch64TargetLowering::LowerVECTOR_SHUFFLE(SDValue Op,
     unsigned PFTableIndex = PFIndexes[0] * 9 * 9 * 9 + PFIndexes[1] * 9 * 9 +
                             PFIndexes[2] * 9 + PFIndexes[3];
     unsigned PFEntry = PerfectShuffleTable[PFTableIndex];
-    return GeneratePerfectShuffle(PFEntry, V1, V2, DAG, dl);
+    return GeneratePerfectShuffle(PFTableIndex, V1, V2, PFEntry, V1, V2, DAG,
+                                  dl);
   }
 
   return GenerateTBL(Op, ShuffleMask, DAG);
@@ -11480,21 +11593,8 @@ bool AArch64TargetLowering::isShuffleMaskLegal(ArrayRef<int> M, EVT VT) const {
 
   if (VT.getVectorNumElements() == 4 &&
       (VT.is128BitVector() || VT.is64BitVector())) {
-    unsigned PFIndexes[4];
-    for (unsigned i = 0; i != 4; ++i) {
-      if (M[i] < 0)
-        PFIndexes[i] = 8;
-      else
-        PFIndexes[i] = M[i];
-    }
-
-    // Compute the index in the perfect shuffle table.
-    unsigned PFTableIndex = PFIndexes[0] * 9 * 9 * 9 + PFIndexes[1] * 9 * 9 +
-                            PFIndexes[2] * 9 + PFIndexes[3];
-    unsigned PFEntry = PerfectShuffleTable[PFTableIndex];
-    unsigned Cost = (PFEntry >> 30);
-
-    if (Cost <= 4)
+    unsigned Cost = getPerfectShuffleCost(M);
+    if (Cost <= 1)
       return true;
   }
 
@@ -13572,6 +13672,60 @@ AArch64TargetLowering::BuildSDIVPow2(SDNode *N, const APInt &Divisor,
   return DAG.getNode(ISD::SUB, DL, VT, DAG.getConstant(0, DL, VT), SRA);
 }
 
+SDValue
+AArch64TargetLowering::BuildSREMPow2(SDNode *N, const APInt &Divisor,
+                                     SelectionDAG &DAG,
+                                     SmallVectorImpl<SDNode *> &Created) const {
+  AttributeList Attr = DAG.getMachineFunction().getFunction().getAttributes();
+  if (isIntDivCheap(N->getValueType(0), Attr))
+    return SDValue(N, 0); // Lower SREM as SREM
+
+  EVT VT = N->getValueType(0);
+
+  // For scalable and fixed types, mark them as cheap so we can handle it much
+  // later. This allows us to handle larger than legal types.
+  if (VT.isScalableVector() || Subtarget->useSVEForFixedLengthVectors())
+    return SDValue(N, 0);
+
+  // fold (srem X, pow2)
+  if ((VT != MVT::i32 && VT != MVT::i64) ||
+      !(Divisor.isPowerOf2() || Divisor.isNegatedPowerOf2()))
+    return SDValue();
+
+  unsigned Lg2 = Divisor.countTrailingZeros();
+  if (Lg2 == 0)
+    return SDValue();
+
+  SDLoc DL(N);
+  SDValue N0 = N->getOperand(0);
+  SDValue Pow2MinusOne = DAG.getConstant((1ULL << Lg2) - 1, DL, VT);
+  SDValue Zero = DAG.getConstant(0, DL, VT);
+  SDValue CCVal, CSNeg;
+  if (Lg2 == 1) {
+    SDValue Cmp = getAArch64Cmp(N0, Zero, ISD::SETGE, CCVal, DAG, DL);
+    SDValue And = DAG.getNode(ISD::AND, DL, VT, N0, Pow2MinusOne);
+    CSNeg = DAG.getNode(AArch64ISD::CSNEG, DL, VT, And, And, CCVal, Cmp);
+
+    Created.push_back(Cmp.getNode());
+    Created.push_back(And.getNode());
+  } else {
+    SDValue CCVal = DAG.getConstant(AArch64CC::MI, DL, MVT_CC);
+    SDVTList VTs = DAG.getVTList(VT, MVT::i32);
+
+    SDValue Negs = DAG.getNode(AArch64ISD::SUBS, DL, VTs, Zero, N0);
+    SDValue AndPos = DAG.getNode(ISD::AND, DL, VT, N0, Pow2MinusOne);
+    SDValue AndNeg = DAG.getNode(ISD::AND, DL, VT, Negs, Pow2MinusOne);
+    CSNeg = DAG.getNode(AArch64ISD::CSNEG, DL, VT, AndPos, AndNeg, CCVal,
+                        Negs.getValue(1));
+
+    Created.push_back(Negs.getNode());
+    Created.push_back(AndPos.getNode());
+    Created.push_back(AndNeg.getNode());
+  }
+
+  return CSNeg;
+}
+
 static bool IsSVECntIntrinsic(SDValue S) {
   switch(getIntrinsicID(S.getNode())) {
   default:
@@ -15367,6 +15521,46 @@ static SDValue performAddSubLongCombine(SDNode *N,
   }
 
   return DAG.getNode(N->getOpcode(), SDLoc(N), VT, LHS, RHS);
+}
+
+static bool isCMP(SDValue Op) {
+  return Op.getOpcode() == AArch64ISD::SUBS &&
+         !Op.getNode()->hasAnyUseOfValue(0);
+}
+
+// (CSEL 1 0 CC Cond) => CC
+// (CSEL 0 1 CC Cond) => !CC
+static Optional<AArch64CC::CondCode> getCSETCondCode(SDValue Op) {
+  if (Op.getOpcode() != AArch64ISD::CSEL)
+    return None;
+  auto CC = static_cast<AArch64CC::CondCode>(Op.getConstantOperandVal(2));
+  if (CC == AArch64CC::AL || CC == AArch64CC::NV)
+    return None;
+  SDValue OpLHS = Op.getOperand(0);
+  SDValue OpRHS = Op.getOperand(1);
+  if (isOneConstant(OpLHS) && isNullConstant(OpRHS))
+    return CC;
+  if (isNullConstant(OpLHS) && isOneConstant(OpRHS))
+    return getInvertedCondCode(CC);
+
+  return None;
+}
+
+// (ADC{S} l r (CMP (CSET HS carry) 1)) => (ADC{S} l r carry)
+// (SBC{S} l r (CMP (CSET LO carry) 1)) => (SBC{S} l r carry)
+static SDValue foldOverflowCheck(SDNode *Op, SelectionDAG &DAG, bool IsAdd) {
+  SDValue CmpOp = Op->getOperand(2);
+  if (!(isCMP(CmpOp) && isOneConstant(CmpOp.getOperand(1))))
+    return SDValue();
+
+  SDValue CsetOp = CmpOp->getOperand(0);
+  auto CC = getCSETCondCode(CsetOp);
+  if (CC != (IsAdd ? AArch64CC::HS : AArch64CC::LO))
+    return SDValue();
+
+  return DAG.getNode(Op->getOpcode(), SDLoc(Op), Op->getVTList(),
+                     Op->getOperand(0), Op->getOperand(1),
+                     CsetOp.getOperand(3));
 }
 
 static SDValue performAddSubCombine(SDNode *N,
@@ -18576,6 +18770,12 @@ SDValue AArch64TargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::ADD:
   case ISD::SUB:
     return performAddSubCombine(N, DCI, DAG);
+  case AArch64ISD::ADC:
+  case AArch64ISD::ADCS:
+    return foldOverflowCheck(N, DAG, /* IsAdd */ true);
+  case AArch64ISD::SBC:
+  case AArch64ISD::SBCS:
+    return foldOverflowCheck(N, DAG, /* IsAdd */ false);
   case ISD::XOR:
     return performXorCombine(N, DAG, DCI, Subtarget);
   case ISD::MUL:
