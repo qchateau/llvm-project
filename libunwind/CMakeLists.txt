@@ -118,6 +118,7 @@ set(LIBUNWIND_TEST_CONFIG "${LIBUNWIND_DEFAULT_TEST_CONFIG}" CACHE STRING
 if (NOT IS_ABSOLUTE "${LIBUNWIND_TEST_CONFIG}")
   set(LIBUNWIND_TEST_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/test/configs/${LIBUNWIND_TEST_CONFIG}")
 endif()
+message(STATUS "Using libunwind testing configuration: ${LIBUNWIND_TEST_CONFIG}")
 set(LIBUNWIND_TEST_PARAMS "" CACHE STRING
     "A list of parameters to run the Lit test suite with.")
 
@@ -295,11 +296,11 @@ if (LIBUNWIND_ENABLE_ASSERTIONS)
 
   # On Release builds cmake automatically defines NDEBUG, so we
   # explicitly undefine it:
-  if (uppercase_CMAKE_BUILD_TYPE STREQUAL "RELEASE")
+  if (NOT uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG")
     add_compile_flags(-UNDEBUG)
   endif()
 else()
-  if (NOT uppercase_CMAKE_BUILD_TYPE STREQUAL "RELEASE")
+  if (uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG")
     add_compile_flags(-DNDEBUG)
   endif()
 endif()

@@ -3515,6 +3515,57 @@ static void emitScanBasedDirectiveDecls(
   }
 }
 
+/// Copies final inscan reductions values to the original variables.
+/// The code is the following:
+/// \code
+/// <orig_var> = buffer[num_iters-1];
+/// \endcode
+static void emitScanBasedDirectiveFinals(
+    CodeGenFunction &CGF, const OMPLoopDirective &S,
+    llvm::function_ref<llvm::Value *(CodeGenFunction &)> NumIteratorsGen) {
+  llvm::Value *OMPScanNumIterations = CGF.Builder.CreateIntCast(
+      NumIteratorsGen(CGF), CGF.SizeTy, /*isSigned=*/false);
+  SmallVector<const Expr *, 4> Shareds;
+  SmallVector<const Expr *, 4> LHSs;
+  SmallVector<const Expr *, 4> RHSs;
+  SmallVector<const Expr *, 4> Privates;
+  SmallVector<const Expr *, 4> CopyOps;
+  SmallVector<const Expr *, 4> CopyArrayElems;
+  for (const auto *C : S.getClausesOfKind<OMPReductionClause>()) {
+    assert(C->getModifier() == OMPC_REDUCTION_inscan &&
+           "Only inscan reductions are expected.");
+    Shareds.append(C->varlist_begin(), C->varlist_end());
+    LHSs.append(C->lhs_exprs().begin(), C->lhs_exprs().end());
+    RHSs.append(C->rhs_exprs().begin(), C->rhs_exprs().end());
+    Privates.append(C->privates().begin(), C->privates().end());
+    CopyOps.append(C->copy_ops().begin(), C->copy_ops().end());
+    CopyArrayElems.append(C->copy_array_elems().begin(),
+                          C->copy_array_elems().end());
+  }
+  // Create temp var and copy LHS value to this temp value.
+  // LHS = TMP[LastIter];
+  llvm::Value *OMPLast = CGF.Builder.CreateNSWSub(
+      OMPScanNumIterations,
+      llvm::ConstantInt::get(CGF.SizeTy, 1, /*isSigned=*/false));
+  for (unsigned I = 0, E = CopyArrayElems.size(); I < E; ++I) {
+    const Expr *PrivateExpr = Privates[I];
+    const Expr *OrigExpr = Shareds[I];
+    const Expr *CopyArrayElem = CopyArrayElems[I];
+    CodeGenFunction::OpaqueValueMapping IdxMapping(
+        CGF,
+        cast<OpaqueValueExpr>(
+            cast<ArraySubscriptExpr>(CopyArrayElem)->getIdx()),
+        RValue::get(OMPLast));
+    LValue DestLVal = CGF.EmitLValue(OrigExpr);
+    LValue SrcLVal = CGF.EmitLValue(CopyArrayElem);
+    CGF.EmitOMPCopy(PrivateExpr->getType(), DestLVal.getAddress(CGF),
+                    SrcLVal.getAddress(CGF),
+                    cast<VarDecl>(cast<DeclRefExpr>(LHSs[I])->getDecl()),
+                    cast<VarDecl>(cast<DeclRefExpr>(RHSs[I])->getDecl()),
+                    CopyOps[I]);
+  }
+}
+
 /// Emits the code for the directive with inscan reductions.
 /// The code is the following:
 /// \code
@@ -3709,6 +3760,8 @@ static bool emitWorksharingDirective(CodeGenFunction &CGF,
     if (!isOpenMPParallelDirective(S.getDirectiveKind()))
       emitScanBasedDirectiveDecls(CGF, S, NumIteratorsGen);
     emitScanBasedDirective(CGF, S, NumIteratorsGen, FirstGen, SecondGen);
+    if (!isOpenMPParallelDirective(S.getDirectiveKind()))
+      emitScanBasedDirectiveFinals(CGF, S, NumIteratorsGen);
   } else {
     CodeGenFunction::OMPCancelStackRAII CancelRegion(CGF, S.getDirectiveKind(),
                                                      HasCancel);
@@ -4282,23 +4335,25 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     (void)emitWorksharingDirective(CGF, S, S.hasCancel());
   };
   {
-    if (llvm::any_of(S.getClausesOfKind<OMPReductionClause>(),
+    const auto &&NumIteratorsGen = [&S](CodeGenFunction &CGF) {
+      CodeGenFunction::OMPLocalDeclMapRAII Scope(CGF);
+      CGCapturedStmtInfo CGSI(CR_OpenMP);
+      CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(CGF, &CGSI);
+      OMPLoopScope LoopScope(CGF, S);
+      return CGF.EmitScalarExpr(S.getNumIterations());
+    };
+    bool IsInscan = llvm::any_of(S.getClausesOfKind<OMPReductionClause>(),
                      [](const OMPReductionClause *C) {
                        return C->getModifier() == OMPC_REDUCTION_inscan;
-                     })) {
-      const auto &&NumIteratorsGen = [&S](CodeGenFunction &CGF) {
-        CodeGenFunction::OMPLocalDeclMapRAII Scope(CGF);
-        CGCapturedStmtInfo CGSI(CR_OpenMP);
-        CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(CGF, &CGSI);
-        OMPLoopScope LoopScope(CGF, S);
-        return CGF.EmitScalarExpr(S.getNumIterations());
-      };
+                     });
+    if (IsInscan)
       emitScanBasedDirectiveDecls(*this, S, NumIteratorsGen);
-    }
     auto LPCRegion =
         CGOpenMPRuntime::LastprivateConditionalRAII::disable(*this, S);
     emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen,
                                    emitEmptyBoundParameters);
+    if (IsInscan)
+      emitScanBasedDirectiveFinals(*this, S, NumIteratorsGen);
   }
   // Check for outer lastprivate conditional update.
   checkForLastprivateConditionalUpdate(*this, S);
@@ -4313,23 +4368,25 @@ void CodeGenFunction::EmitOMPParallelForSimdDirective(
     (void)emitWorksharingDirective(CGF, S, /*HasCancel=*/false);
   };
   {
-    if (llvm::any_of(S.getClausesOfKind<OMPReductionClause>(),
+    const auto &&NumIteratorsGen = [&S](CodeGenFunction &CGF) {
+      CodeGenFunction::OMPLocalDeclMapRAII Scope(CGF);
+      CGCapturedStmtInfo CGSI(CR_OpenMP);
+      CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(CGF, &CGSI);
+      OMPLoopScope LoopScope(CGF, S);
+      return CGF.EmitScalarExpr(S.getNumIterations());
+    };
+    bool IsInscan = llvm::any_of(S.getClausesOfKind<OMPReductionClause>(),
                      [](const OMPReductionClause *C) {
                        return C->getModifier() == OMPC_REDUCTION_inscan;
-                     })) {
-      const auto &&NumIteratorsGen = [&S](CodeGenFunction &CGF) {
-        CodeGenFunction::OMPLocalDeclMapRAII Scope(CGF);
-        CGCapturedStmtInfo CGSI(CR_OpenMP);
-        CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(CGF, &CGSI);
-        OMPLoopScope LoopScope(CGF, S);
-        return CGF.EmitScalarExpr(S.getNumIterations());
-      };
+                     });
+    if (IsInscan)
       emitScanBasedDirectiveDecls(*this, S, NumIteratorsGen);
-    }
     auto LPCRegion =
         CGOpenMPRuntime::LastprivateConditionalRAII::disable(*this, S);
     emitCommonOMPParallelDirective(*this, S, OMPD_for_simd, CodeGen,
                                    emitEmptyBoundParameters);
+    if (IsInscan)
+      emitScanBasedDirectiveFinals(*this, S, NumIteratorsGen);
   }
   // Check for outer lastprivate conditional update.
   checkForLastprivateConditionalUpdate(*this, S);
@@ -5781,25 +5838,38 @@ static std::pair<bool, RValue> emitOMPAtomicRMW(CodeGenFunction &CGF, LValue X,
   // Allow atomicrmw only if 'x' and 'update' are integer values, lvalue for 'x'
   // expression is simple and atomic is allowed for the given type for the
   // target platform.
-  if (BO == BO_Comma || !Update.isScalar() ||
-      !Update.getScalarVal()->getType()->isIntegerTy() || !X.isSimple() ||
+  if (BO == BO_Comma || !Update.isScalar() || !X.isSimple() ||
       (!isa<llvm::ConstantInt>(Update.getScalarVal()) &&
        (Update.getScalarVal()->getType() !=
         X.getAddress(CGF).getElementType())) ||
-      !X.getAddress(CGF).getElementType()->isIntegerTy() ||
       !Context.getTargetInfo().hasBuiltinAtomic(
           Context.getTypeSize(X.getType()), Context.toBits(X.getAlignment())))
     return std::make_pair(false, RValue::get(nullptr));
 
+  auto &&CheckAtomicSupport = [&CGF](llvm::Type *T, BinaryOperatorKind BO) {
+    if (T->isIntegerTy())
+      return true;
+
+    if (T->isFloatingPointTy() && (BO == BO_Add || BO == BO_Sub))
+      return llvm::isPowerOf2_64(CGF.CGM.getDataLayout().getTypeStoreSize(T));
+
+    return false;
+  };
+
+  if (!CheckAtomicSupport(Update.getScalarVal()->getType(), BO) ||
+      !CheckAtomicSupport(X.getAddress(CGF).getElementType(), BO))
+    return std::make_pair(false, RValue::get(nullptr));
+
+  bool IsInteger = X.getAddress(CGF).getElementType()->isIntegerTy();
   llvm::AtomicRMWInst::BinOp RMWOp;
   switch (BO) {
   case BO_Add:
-    RMWOp = llvm::AtomicRMWInst::Add;
+    RMWOp = IsInteger ? llvm::AtomicRMWInst::Add : llvm::AtomicRMWInst::FAdd;
     break;
   case BO_Sub:
     if (!IsXLHSInRHSPart)
       return std::make_pair(false, RValue::get(nullptr));
-    RMWOp = llvm::AtomicRMWInst::Sub;
+    RMWOp = IsInteger ? llvm::AtomicRMWInst::Sub : llvm::AtomicRMWInst::FSub;
     break;
   case BO_And:
     RMWOp = llvm::AtomicRMWInst::And;
@@ -5857,9 +5927,13 @@ static std::pair<bool, RValue> emitOMPAtomicRMW(CodeGenFunction &CGF, LValue X,
   }
   llvm::Value *UpdateVal = Update.getScalarVal();
   if (auto *IC = dyn_cast<llvm::ConstantInt>(UpdateVal)) {
-    UpdateVal = CGF.Builder.CreateIntCast(
-        IC, X.getAddress(CGF).getElementType(),
-        X.getType()->hasSignedIntegerRepresentation());
+    if (IsInteger)
+      UpdateVal = CGF.Builder.CreateIntCast(
+          IC, X.getAddress(CGF).getElementType(),
+          X.getType()->hasSignedIntegerRepresentation());
+    else
+      UpdateVal = CGF.Builder.CreateCast(llvm::Instruction::CastOps::UIToFP, IC,
+                                         X.getAddress(CGF).getElementType());
   }
   llvm::Value *Res =
       CGF.Builder.CreateAtomicRMW(RMWOp, X.getPointer(CGF), UpdateVal, AO);
@@ -6221,6 +6295,7 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_memory_order:
   case OMPC_bind:
   case OMPC_align:
+  case OMPC_cancellation_construct_type:
     llvm_unreachable("Clause is not allowed in 'omp atomic'.");
   }
 }

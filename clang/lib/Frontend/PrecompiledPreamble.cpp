@@ -248,7 +248,7 @@ public:
     if (FileOS) {
       *FileOS << Buffer->Data;
       // Make sure it hits disk now.
-      FileOS->flush();
+      FileOS.reset();
     }
 
     this->HasEmittedPreamblePCH = true;
@@ -764,6 +764,10 @@ void PrecompiledPreamble::configurePreamble(
       Bounds.PreambleEndsAtStartOfLine;
   PreprocessorOpts.DisablePCHOrModuleValidation =
       DisableValidationForModuleKind::PCH;
+
+  // Don't bother generating the long version of the predefines buffer.
+  // The preamble is going to overwrite it anyway.
+  PreprocessorOpts.UsePredefines = false;
 
   setupPreambleStorage(*Storage, PreprocessorOpts, VFS);
 }

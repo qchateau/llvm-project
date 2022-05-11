@@ -2019,13 +2019,8 @@ LocalScope* CFGBuilder::addLocalScopeForVarDecl(VarDecl *VD,
     return Scope;
 
   // Check if variable is local.
-  switch (VD->getStorageClass()) {
-  case SC_None:
-  case SC_Auto:
-  case SC_Register:
-    break;
-  default: return Scope;
-  }
+  if (!VD->hasLocalStorage())
+    return Scope;
 
   if (BuildOpts.AddImplicitDtors) {
     if (!hasTrivialDestructor(VD) || BuildOpts.AddScopes) {
@@ -6127,17 +6122,13 @@ Stmt *CFGBlock::getTerminatorCondition(bool StripParens) {
 // CFG Graphviz Visualization
 //===----------------------------------------------------------------------===//
 
-#ifndef NDEBUG
-static StmtPrinterHelper* GraphHelper;
-#endif
+static StmtPrinterHelper *GraphHelper;
 
 void CFG::viewCFG(const LangOptions &LO) const {
-#ifndef NDEBUG
   StmtPrinterHelper H(this, LO);
   GraphHelper = &H;
   llvm::ViewGraph(this,"CFG");
   GraphHelper = nullptr;
-#endif
 }
 
 namespace llvm {
@@ -6146,8 +6137,7 @@ template<>
 struct DOTGraphTraits<const CFG*> : public DefaultDOTGraphTraits {
   DOTGraphTraits(bool isSimple = false) : DefaultDOTGraphTraits(isSimple) {}
 
-  static std::string getNodeLabel(const CFGBlock *Node, const CFG* Graph) {
-#ifndef NDEBUG
+  static std::string getNodeLabel(const CFGBlock *Node, const CFG *Graph) {
     std::string OutSStr;
     llvm::raw_string_ostream Out(OutSStr);
     print_block(Out,Graph, *Node, *GraphHelper, false, false);
@@ -6163,9 +6153,6 @@ struct DOTGraphTraits<const CFG*> : public DefaultDOTGraphTraits {
       }
 
     return OutStr;
-#else
-    return {};
-#endif
   }
 };
 

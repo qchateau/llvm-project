@@ -349,7 +349,7 @@ bool ExternalFileUnit::Receive(char *data, std::size_t bytes,
     return true;
   } else {
     handler.SignalEnd();
-    if (access == Access::Sequential) {
+    if (IsRecordFile() && access != Access::Direct) {
       endfileRecordNumber = currentRecordNumber;
     }
     return false;
@@ -385,7 +385,7 @@ const char *ExternalFileUnit::FrameNextInput(
       return Frame() + at;
     }
     handler.SignalEnd();
-    if (access == Access::Sequential) {
+    if (IsRecordFile() && access != Access::Direct) {
       endfileRecordNumber = currentRecordNumber;
     }
   }
@@ -544,6 +544,7 @@ bool ExternalFileUnit::AdvanceRecord(IoErrorHandler &handler) {
 #endif
       ok = ok && Emit(lineEnding, lineEndingBytes, 1, handler);
     }
+    leftTabLimit.reset();
     if (IsAfterEndfile()) {
       return false;
     }
@@ -568,6 +569,9 @@ void ExternalFileUnit::BackspaceRecord(IoErrorHandler &handler) {
     if (IsAfterEndfile()) {
       // BACKSPACE after explicit ENDFILE
       currentRecordNumber = *endfileRecordNumber;
+    } else if (leftTabLimit) {
+      // BACKSPACE after non-advancing I/O
+      leftTabLimit.reset();
     } else {
       DoImpliedEndfile(handler);
       if (frameOffsetInFile_ + recordOffsetInFrame_ > 0) {
@@ -620,7 +624,7 @@ void ExternalFileUnit::Endfile(IoErrorHandler &handler) {
     // ENDFILE after ENDFILE
   } else {
     DoEndfile(handler);
-    if (access == Access::Sequential) {
+    if (IsRecordFile() && access != Access::Direct) {
       // Explicit ENDFILE leaves position *after* the endfile record
       RUNTIME_CHECK(handler, endfileRecordNumber.has_value());
       currentRecordNumber = *endfileRecordNumber + 1;
@@ -716,6 +720,7 @@ void ExternalFileUnit::BeginVariableFormattedInputRecord(
       if (length > 0) {
         // final record w/o \n
         recordLength = length;
+        unterminatedRecord = true;
       } else {
         handler.SignalEnd();
       }
@@ -839,11 +844,17 @@ void ExternalFileUnit::DoImpliedEndfile(IoErrorHandler &handler) {
 }
 
 void ExternalFileUnit::DoEndfile(IoErrorHandler &handler) {
-  if (IsRecordFile()) {
+  if (IsRecordFile() && access != Access::Direct) {
+    if (furthestPositionInRecord > 0) {
+      // Last write was non-advancing, so AdvanceRecord() was not called.
+      leftTabLimit.reset();
+      ++currentRecordNumber;
+    }
     endfileRecordNumber = currentRecordNumber;
   }
   FlushOutput(handler);
-  Truncate(frameOffsetInFile_ + recordOffsetInFrame_, handler);
+  Truncate(frameOffsetInFile_ + recordOffsetInFrame_ + furthestPositionInRecord,
+      handler);
   BeginRecord();
   impliedEndfile_ = false;
 }

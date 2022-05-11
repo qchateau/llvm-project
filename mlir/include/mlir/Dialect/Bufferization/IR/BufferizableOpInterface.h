@@ -161,6 +161,19 @@ struct BufferizationOptions {
   Optional<DeallocationFn> deallocationFn;
   Optional<MemCpyFn> memCpyFn;
 
+  /// Create a memref allocation with the given type and dynamic extents.
+  FailureOr<Value> createAlloc(OpBuilder &b, Location loc, MemRefType type,
+                               ValueRange dynShape) const;
+
+  /// Creates a memref deallocation. The given memref buffer must have been
+  /// allocated using `createAlloc`.
+  LogicalResult createDealloc(OpBuilder &b, Location loc,
+                              Value allocatedBuffer) const;
+
+  /// Creates a memcpy between two given buffers.
+  LogicalResult createMemCpy(OpBuilder &b, Location loc, Value from,
+                             Value to) const;
+
   /// Specifies whether not bufferizable ops are allowed in the input. If so,
   /// bufferization.to_memref and bufferization.to_tensor ops are inserted at
   /// the boundaries.
@@ -337,6 +350,9 @@ public:
   /// Return true if `v1` and `v2` bufferize to equivalent buffers.
   virtual bool areEquivalentBufferizedValues(Value v1, Value v2) const = 0;
 
+  /// Return `true` if the given tensor has undefined contents.
+  virtual bool hasUndefinedContents(OpOperand *opOperand) const = 0;
+
   /// Return true if the given tensor (or an aliasing tensor) is yielded from
   /// the containing block. Also include all aliasing tensors in the same block.
   ///
@@ -409,6 +425,9 @@ public:
 
   /// Return true if `v1` and `v2` bufferize to equivalent buffers.
   bool areEquivalentBufferizedValues(Value v1, Value v2) const override;
+
+  /// Return `true` if the given tensor has undefined contents.
+  bool hasUndefinedContents(OpOperand *opOperand) const override;
 
   /// Return true if the given tensor (or an aliasing tensor) is yielded from
   /// the containing block. Also include all aliasing tensors in the same block.
@@ -507,15 +526,6 @@ BaseMemRefType getMemRefType(TensorType tensorType,
                              const BufferizationOptions &options,
                              MemRefLayoutAttrInterface layout = {},
                              Attribute memorySpace = {});
-
-/// Creates a memref deallocation. The given memref buffer must have been
-/// allocated using `createAlloc`.
-LogicalResult createDealloc(OpBuilder &b, Location loc, Value allocatedBuffer,
-                            const BufferizationOptions &options);
-
-/// Creates a memcpy between two given buffers.
-LogicalResult createMemCpy(OpBuilder &b, Location loc, Value from, Value to,
-                           const BufferizationOptions &options);
 
 /// Try to hoist all new buffer allocations until the next hoisting barrier.
 LogicalResult hoistBufferAllocations(Operation *op,
