@@ -352,7 +352,8 @@ public:
     bool operator>(const Entry &Other) const { return Score > Other.Score; }
   };
 
-  explicit PreambleStore(size_t ClosedPreamblesToKeep): ClosedPreamblesToKeep(ClosedPreamblesToKeep) {}
+  explicit PreambleStore(size_t ClosedPreamblesToKeep)
+      : ClosedPreamblesToKeep(ClosedPreamblesToKeep) {}
 
   auto getAll() {
     std::unique_lock<std::mutex> Lock(Mut);
@@ -366,8 +367,7 @@ public:
     if (It == Store.end()) {
       Store.push_back(Entry{std::move(Preamble), 0, FileName.str()});
       popWorstPreambles();
-    }
-    else {
+    } else {
       It->Preamble = std::move(Preamble);
     }
     vlog("Store contains {0} preambles", Store.size());
@@ -628,7 +628,8 @@ public:
 
   std::shared_ptr<const PreambleData> getPossiblyStalePreamble(
       std::shared_ptr<const ASTSignals> *ASTSignals = nullptr) const;
-  std::shared_ptr<const PreambleData> getBestPreamble(
+  std::tuple<std::shared_ptr<const PreambleData>, Optional<PreamblePatch>>
+  getBestPreamble(
       std::shared_ptr<const ASTSignals> *ASTSignals = nullptr) const;
 
   /// Used to inform ASTWorker about a new preamble build by PreambleThread.
@@ -960,8 +961,8 @@ void ASTWorker::update(ParseInputs Inputs, WantDiagnostics WantDiags,
       // that may be used to accelerate the AST build.
       // We block here instead of the consumer to prevent any deadlocks. Since
       // LatestPreamble is only populated by ASTWorker thread.
-      return LatestPreamble || !PreambleRequests.empty() ||
-             !getCompatiblePreambles().empty() || Done;
+      return LatestPreamble || !PreambleRequests.empty() || Done ||
+             std::get<std::shared_ptr<const PreambleData>>(getBestPreamble());
     });
   };
   startTask(TaskName, std::move(Task), UpdateType{WantDiags, ContentChanged},
@@ -990,11 +991,15 @@ void ASTWorker::runWithAST(
       // FIXME: We might need to build a patched ast once preamble thread starts
       // running async. Currently getBestPreamble below will always
       // return a compatible preamble as ASTWorker::update blocks.
+      auto BestPreamble = getBestPreamble();
+      if (const auto &Patch = std::get<Optional<PreamblePatch>>(BestPreamble))
+        Patch->apply(*Invocation);
       llvm::Optional<ParsedAST> NewAST;
       if (Invocation) {
-        NewAST = ParsedAST::build(FileName, FileInputs, std::move(Invocation),
-                                  CompilerInvocationDiagConsumer.take(),
-                                  getBestPreamble());
+        NewAST = ParsedAST::build(
+            FileName, FileInputs, std::move(Invocation),
+            CompilerInvocationDiagConsumer.take(),
+            std::get<std::shared_ptr<const PreambleData>>(BestPreamble));
         ++ASTBuildCount;
       }
       AST = NewAST ? std::make_unique<ParsedAST>(std::move(*NewAST)) : nullptr;
@@ -1278,18 +1283,19 @@ ASTWorker::getCompatiblePreambles() const {
   return AllPreamblesEntries;
 }
 
-std::shared_ptr<const PreambleData> ASTWorker::getBestPreamble(
+std::tuple<std::shared_ptr<const PreambleData>, Optional<PreamblePatch>>
+ASTWorker::getBestPreamble(
     std::shared_ptr<const ASTSignals> *ASTSignals) const {
   if (auto Preamble = getPossiblyStalePreamble(ASTSignals)) {
     vlog("Best premable is the real one");
-    return Preamble;
+    return {Preamble, None};
   }
 
   auto CompatiblePreambles = getCompatiblePreambles();
   vlog("Looking for the best of {0} preambles ...", CompatiblePreambles.size());
   if (CompatiblePreambles.empty()) {
     vlog("No compatible preamble");
-    return nullptr;
+    return {nullptr, None};
   }
 
   auto Best = CompatiblePreambles.begin();
@@ -1307,7 +1313,7 @@ std::shared_ptr<const PreambleData> ASTWorker::getBestPreamble(
 
   vlog("Using preamble from: {0}", Best->FileName);
   Preambles.hit(Best->FileName);
-  return Best->Preamble;
+  return {Best->Preamble, BestPatch};
 }
 
 void ASTWorker::waitForFirstPreamble() const {
@@ -1802,11 +1808,11 @@ void TUScheduler::runWithPreamble(llvm::StringRef Name, PathRef File,
     trace::Span Tracer(Name);
     SPAN_ATTACH(Tracer, "file", File);
     std::shared_ptr<const ASTSignals> Signals;
-    std::shared_ptr<const PreambleData> Preamble =
-        It->second->Worker->getBestPreamble(&Signals);
+    auto Preamble = std::get<std::shared_ptr<const PreambleData>>(
+        It->second->Worker->getBestPreamble(&Signals));
+    auto CompileCommand = It->second->Worker->getCurrentCompileCommand();
     WithContext WithProvidedContext(Opts.ContextProvider(File));
-    Action(InputsAndPreamble{It->second->Contents,
-                             It->second->Worker->getCurrentCompileCommand(),
+    Action(InputsAndPreamble{It->second->Contents, CompileCommand,
                              Preamble.get(), Signals.get()});
     return;
   }
@@ -1823,7 +1829,6 @@ void TUScheduler::runWithPreamble(llvm::StringRef Name, PathRef File,
       crashDumpCompileCommand(llvm::errs(), Command);
       crashDumpFileContents(llvm::errs(), Contents);
     });
-    std::shared_ptr<const PreambleData> Preamble;
     if (Consistency == PreambleConsistency::Stale) {
       // Wait until the preamble is built for the first time, if preamble
       // is required. This avoids extra work of processing the preamble
@@ -1831,7 +1836,8 @@ void TUScheduler::runWithPreamble(llvm::StringRef Name, PathRef File,
       Worker->waitForFirstPreamble();
     }
     std::shared_ptr<const ASTSignals> Signals;
-    Preamble = Worker->getBestPreamble(&Signals);
+    auto Preamble = std::get<std::shared_ptr<const PreambleData>>(
+        Worker->getBestPreamble(&Signals));
 
     std::lock_guard<Semaphore> BarrierLock(Barrier);
     WithContext Guard(std::move(Ctx));
