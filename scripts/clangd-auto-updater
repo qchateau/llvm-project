@@ -1,0 +1,42 @@
+#!/bin/bash
+
+script_dir=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
+pushd ${script_dir} > /dev/null
+
+name=$(basename $0)
+archive_name=${name}.tar.bz2
+binary_path=.clang/bin/clangd
+echo Checking for artifact "${archive_name}" in latest release 1>&2
+
+asset=$(curl -s https://api.github.com/repos/qchateau/llvm-project/releases/latest | jq ".assets[] | select(.browser_download_url|test(\"${archive_name}\"))")
+if [ -z "${asset}" ]; then
+    echo Not found 1>&2
+    exit 1
+fi
+
+asset_date=$(echo "${asset}" | jq -r .updated_at)
+asset_timestamp=$(date -d"${asset_date}" +%s)
+download_url=$(echo "${asset}" | jq -r .browser_download_url)
+
+if [ -e "${binary_path}" ]; then
+    local_timestamp=$(stat -c %Y ${binary_path})
+else
+    local_timestamp=0
+fi
+
+if [ ${asset_timestamp} -gt ${local_timestamp} ]; then
+    echo Downloading ${download_url} 1>&2
+    curl -L -s ${download_url} -o ${archive_name}
+    mkdir -p .clang/
+    tar Cjxf .clang/ ${archive_name}
+    rm ${archive_name}
+    touch ${binary_path}
+    echo Done 1>&2
+else
+    echo Already up to date 1>&2
+fi
+
+binary_path=$(realpath ${binary_path})
+chmod +x ${binary_path}
+popd > /dev/null
+exec ${binary_path} "$@"

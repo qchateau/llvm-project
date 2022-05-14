@@ -1,0 +1,47 @@
+name: Build latest clangd
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_clangd:
+    strategy:
+      fail-fast: false
+      matrix:
+        docker-image: ["ubuntu-2004", "centos-7"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          path: llvm-project
+          fetch-depth: 1
+
+      - name: Build docker image
+        run: |
+          cd $GITHUB_WORKSPACE/llvm-project/.github/images/
+          docker build --file ${{ matrix.docker-image }}.dockerfile --tag clangd-image .
+
+      - name: Build clangd
+        run: |
+          mkdir out
+          docker run \
+            -v $GITHUB_WORKSPACE/llvm-project:/tmp/llvm-project/ \
+            -v $GITHUB_WORKSPACE/out:/tmp/out/ \
+            clangd-image /build.sh /tmp/llvm-project/ /tmp/out/
+          cd out/
+          tar jcvf ../clangd-${{ matrix.docker-image }}.tar.bz2 *
+
+      - name: Set date
+        run: echo "NOW=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: clangd-${{ matrix.docker-image }}.tar.bz2
+          commit: ${{ github.ref }}
+          tag: clangd-${{ env.NOW }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
