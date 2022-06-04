@@ -50,7 +50,7 @@ declare_args() {
 
   # glibc is at least 2.33 which has mallinfo2.
   # TODO: remove this once nobody using the gn build is building against an old glibc.
-  llvm_have_mallinfo2 = false
+  llvm_have_mallinfo2 = current_os == "linux"
 }
 
 write_cmake_config("abi-breaking") {
@@ -132,10 +132,6 @@ write_cmake_config("config") {
     "RETSIGTYPE=void",
     "LLVM_GISEL_COV_ENABLED=",
     "LLVM_GISEL_COV_PREFIX=",
-
-    # This is both in llvm-config.h and config.h; llvm-config.h doesn't
-    # define it if it's not set while config.h defines it to empty in that case.
-    "LLVM_DEFAULT_TARGET_TRIPLE=$llvm_target_triple",
 
     # FIXME: Set to 1 on mac once the 10.14 SDK is in common use.
     "LLVM_SUPPORT_XCODE_SIGNPOSTS=",

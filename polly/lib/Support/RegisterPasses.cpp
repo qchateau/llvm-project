@@ -30,6 +30,7 @@
 #include "polly/ForwardOpTree.h"
 #include "polly/JSONExporter.h"
 #include "polly/LinkAllPasses.h"
+#include "polly/MaximalStaticExpansion.h"
 #include "polly/PolyhedralInfo.h"
 #include "polly/PruneUnprofitable.h"
 #include "polly/ScheduleOptimizer.h"
@@ -234,8 +235,7 @@ namespace {
 /// We use the constructor of a statically declared object to initialize the
 /// different Polly passes right after the Polly library is loaded. This ensures
 /// that the Polly passes are available e.g. in the 'opt' tool.
-class StaticInitializer {
-public:
+struct StaticInitializer {
   StaticInitializer() {
     llvm::PassRegistry &Registry = *llvm::PassRegistry::getPassRegistry();
     polly::initializePollyPasses(Registry);
@@ -264,7 +264,7 @@ void initializePollyPasses(llvm::PassRegistry &Registry) {
   initializeJSONExporterPass(Registry);
   initializeJSONImporterPass(Registry);
   initializeJSONImporterPrinterLegacyPassPass(Registry);
-  initializeMaximalStaticExpanderPass(Registry);
+  initializeMaximalStaticExpanderWrapperPassPass(Registry);
   initializeIslAstInfoWrapperPassPass(Registry);
   initializeIslAstInfoPrinterLegacyPassPass(Registry);
   initializeIslScheduleOptimizerWrapperPassPass(Registry);

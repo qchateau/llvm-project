@@ -28,6 +28,14 @@ add_header_library(
     libc.src.string.memory_utils.memcpy_implementation
 )
 
+add_header_library(
+  file_writer
+  HDRS
+    file_writer.h
+  DEPENDS
+    libc.src.__support.File.file
+)
+
 add_object_library(
   writer
   SRCS
@@ -50,4 +58,17 @@ add_object_library(
   DEPENDS
     .writer
     .core_structs
+)
+
+
+add_header_library(
+  printf_main
+  HDRS
+    printf_main.h
+  DEPENDS
+    .parser
+    .converter
+    .writer
+    .core_structs
+    libc.src.__support.arg_list
 )

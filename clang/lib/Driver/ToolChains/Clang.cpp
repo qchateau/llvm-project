@@ -1693,18 +1693,17 @@ static void CollectARMPACBTIOptions(const ToolChain &TC, const ArgList &Args,
 
   if (A->getOption().matches(options::OPT_msign_return_address_EQ)) {
     Scope = A->getValue();
-    if (!Scope.equals("none") && !Scope.equals("non-leaf") &&
-        !Scope.equals("all"))
-      D.Diag(diag::err_invalid_branch_protection)
-          << Scope << A->getAsString(Args);
+    if (Scope != "none" && Scope != "non-leaf" && Scope != "all")
+      D.Diag(diag::err_drv_unsupported_option_argument)
+          << A->getOption().getName() << Scope;
     Key = "a_key";
     IndirectBranches = false;
   } else {
     StringRef DiagMsg;
     llvm::ARM::ParsedBranchProtection PBP;
     if (!llvm::ARM::parseBranchProtection(A->getValue(), PBP, DiagMsg))
-      D.Diag(diag::err_invalid_branch_protection)
-          << DiagMsg << A->getAsString(Args);
+      D.Diag(diag::err_drv_unsupported_option_argument)
+          << A->getOption().getName() << DiagMsg;
     if (!isAArch64 && PBP.Key == "b_key")
       D.Diag(diag::warn_unsupported_branch_protection)
           << "b-key" << A->getAsString(Args);
@@ -3458,6 +3457,9 @@ static void RenderOpenCLOptions(const ArgList &Args, ArgStringList &CmdArgs,
   if (Arg *A = Args.getLastArg(options::OPT_cl_std_EQ)) {
     std::string CLStdStr = std::string("-cl-std=") + A->getValue();
     CmdArgs.push_back(Args.MakeArgString(CLStdStr));
+  } else if (Arg *A = Args.getLastArg(options::OPT_cl_ext_EQ)) {
+    std::string CLExtStr = std::string("-cl-ext=") + A->getValue();
+    CmdArgs.push_back(Args.MakeArgString(CLExtStr));
   }
 
   for (const auto &Arg : ForwardedArguments)
@@ -3475,13 +3477,16 @@ static void RenderOpenCLOptions(const ArgList &Args, ArgStringList &CmdArgs,
 
 static void RenderHLSLOptions(const ArgList &Args, ArgStringList &CmdArgs,
                               types::ID InputType) {
-  const unsigned ForwardedArguments[] = {options::OPT_dxil_validator_version,
-                                         options::OPT_S, options::OPT_emit_llvm,
-                                         options::OPT_disable_llvm_passes};
+  const unsigned ForwardedArguments[] = {
+      options::OPT_dxil_validator_version, options::OPT_D, options::OPT_S,
+      options::OPT_emit_llvm, options::OPT_disable_llvm_passes};
 
   for (const auto &Arg : ForwardedArguments)
     if (const auto *A = Args.getLastArg(Arg))
       A->renderAsInput(Args, CmdArgs);
+  // Add the default headers if dxc_no_stdinc is not set.
+  if (!Args.hasArg(options::OPT_dxc_no_stdinc))
+    CmdArgs.push_back("-finclude-default-header");
 }
 
 static void RenderARCMigrateToolOptions(const Driver &D, const ArgList &Args,
@@ -5993,7 +5998,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     // FIXME: There's no reason for this to be restricted to X86. The backend
     // code needs to be changed to include the appropriate function calls
     // automatically.
-    if (!Triple.isX86())
+    if (!Triple.isX86() && !Triple.isAArch64())
       D.Diag(diag::err_drv_unsupported_opt_for_target)
           << A->getAsString(Args) << TripleStr;
   }
@@ -7589,6 +7594,11 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
   CmdArgs.push_back("-fno-dllexport-inlines");
  }
 
+ if (Args.hasFlag(options::OPT__SLASH_Zc_wchar_t_,
+                  options::OPT__SLASH_Zc_wchar_t, false)) {
+   CmdArgs.push_back("-fno-wchar");
+ }
+
   Arg *MostGeneralArg = Args.getLastArg(options::OPT__SLASH_vmg);
   Arg *BestCaseArg = Args.getLastArg(options::OPT__SLASH_vmb);
   if (MostGeneralArg && BestCaseArg)
@@ -7863,7 +7873,6 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
                           llvm::DebuggerKind::Default);
   renderDwarfFormat(D, Triple, Args, CmdArgs, DwarfVersion);
   RenderDebugInfoCompressionArgs(Args, CmdArgs, D, getToolChain());
-
 
   // Handle -fPIC et al -- the relocation-model affects the assembler
   // for some targets.
@@ -8385,6 +8394,20 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
   // Construct the link job so we can wrap around it.
   Linker->ConstructJob(C, JA, Output, Inputs, Args, LinkingOutput);
   const auto &LinkCommand = C.getJobs().getJobs().back();
+
+  // Forward -Xoffload-linker<-triple> arguments to the device link job.
+  for (auto *Arg : Args.filtered(options::OPT_Xoffload_linker)) {
+    StringRef Val = Arg->getValue(0);
+    if (Val.empty())
+      CmdArgs.push_back(
+          Args.MakeArgString(Twine("-device-linker=") + Arg->getValue(1)));
+    else
+      CmdArgs.push_back(Args.MakeArgString(
+          "-device-linker=" +
+          ToolChain::getOpenMPTriple(Val.drop_front()).getTriple() + "=" +
+          Arg->getValue(1)));
+  }
+  Args.ClaimAllArgs(options::OPT_Xoffload_linker);
 
   // Add the linker arguments to be forwarded by the wrapper.
   CmdArgs.push_back("-linker-path");

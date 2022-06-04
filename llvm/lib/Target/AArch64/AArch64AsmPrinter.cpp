@@ -132,7 +132,7 @@ public:
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     AArch64FI = MF.getInfo<AArch64FunctionInfo>();
-    STI = static_cast<const AArch64Subtarget*>(&MF.getSubtarget());
+    STI = &MF.getSubtarget<AArch64Subtarget>();
 
     SetupMachineFunction(MF);
 
@@ -144,8 +144,8 @@ public:
         COFF::IMAGE_SYM_DTYPE_FUNCTION << COFF::SCT_COMPLEX_TYPE_SHIFT;
 
       OutStreamer->BeginCOFFSymbolDef(CurrentFnSym);
-      OutStreamer->EmitCOFFSymbolStorageClass(Scl);
-      OutStreamer->EmitCOFFSymbolType(Type);
+      OutStreamer->emitCOFFSymbolStorageClass(Scl);
+      OutStreamer->emitCOFFSymbolType(Type);
       OutStreamer->EndCOFFSymbolDef();
     }
 
@@ -205,8 +205,8 @@ void AArch64AsmPrinter::emitStartOfAsmFile(Module &M) {
     // compiler features bitfield read by link.exe.
     MCSymbol *S = MMI->getContext().getOrCreateSymbol(StringRef("@feat.00"));
     OutStreamer->BeginCOFFSymbolDef(S);
-    OutStreamer->EmitCOFFSymbolStorageClass(COFF::IMAGE_SYM_CLASS_STATIC);
-    OutStreamer->EmitCOFFSymbolType(COFF::IMAGE_SYM_DTYPE_NULL);
+    OutStreamer->emitCOFFSymbolStorageClass(COFF::IMAGE_SYM_CLASS_STATIC);
+    OutStreamer->emitCOFFSymbolType(COFF::IMAGE_SYM_DTYPE_NULL);
     OutStreamer->EndCOFFSymbolDef();
     int64_t Feat00Flags = 0;
 
@@ -1263,7 +1263,7 @@ void AArch64AsmPrinter::emitInstruction(const MachineInstr *MI) {
     break;
 
   case AArch64::DBG_VALUE:
-  case AArch64::DBG_VALUE_LIST: {
+  case AArch64::DBG_VALUE_LIST:
     if (isVerbose() && OutStreamer->hasRawTextSupport()) {
       SmallString<128> TmpStr;
       raw_svector_ostream OS(TmpStr);
@@ -1283,8 +1283,7 @@ void AArch64AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
       OutStreamer->emitCFIBKeyFrame();
       return;
-    }
-    }
+  }
 
   // Tail calls use pseudo instructions so they have the proper code-gen
   // attributes (isCall, isReturn, etc.). We lower them to the real
