@@ -65,21 +65,18 @@ static cl::opt<unsigned> MaxIFMSize("insert-max-ifmap", cl::init(1024),
                                     cl::Hidden,
                                     cl::desc("Maximum size of IFMap"));
 
-static cl::opt<bool> OptTiming("insert-timing", cl::Hidden, cl::ZeroOrMore,
+static cl::opt<bool> OptTiming("insert-timing", cl::Hidden,
                                cl::desc("Enable timing of insert generation"));
 static cl::opt<bool>
     OptTimingDetail("insert-timing-detail", cl::Hidden,
                     cl::desc("Enable detailed timing of insert "
                              "generation"));
 
-static cl::opt<bool> OptSelectAll0("insert-all0", cl::init(false), cl::Hidden,
-  cl::ZeroOrMore);
-static cl::opt<bool> OptSelectHas0("insert-has0", cl::init(false), cl::Hidden,
-  cl::ZeroOrMore);
+static cl::opt<bool> OptSelectAll0("insert-all0", cl::init(false), cl::Hidden);
+static cl::opt<bool> OptSelectHas0("insert-has0", cl::init(false), cl::Hidden);
 // Whether to construct constant values via "insert". Could eliminate constant
 // extenders, but often not practical.
-static cl::opt<bool> OptConst("insert-const", cl::init(false), cl::Hidden,
-  cl::ZeroOrMore);
+static cl::opt<bool> OptConst("insert-const", cl::init(false), cl::Hidden);
 
 // The preprocessor gets confused when the DEBUG macro is passed larger
 // chunks of code. Use this function to detect debugging.

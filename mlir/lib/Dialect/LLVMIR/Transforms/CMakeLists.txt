@@ -9,4 +9,6 @@ add_mlir_dialect_library(MLIRLLVMIRTransforms
   MLIRIR
   MLIRLLVMIR
   MLIRPass
+  MLIRTransforms
+  MLIRNVVMIR
   )

@@ -41,18 +41,16 @@ static cl::alias PDA("pd", cl::desc("Alias for --perfdata"),
 
 static cl::opt<std::string> UnsymbolizedProfFilename(
     "unsymbolized-profile", cl::value_desc("unsymbolized profile"),
-    cl::ZeroOrMore, llvm::cl::MiscFlags::CommaSeparated,
+    llvm::cl::MiscFlags::CommaSeparated,
     cl::desc("Path of the unsymbolized profile created by "
              "`llvm-profgen` with `--skip-symbolization`"),
     cl::cat(ProfGenCategory));
 static cl::alias UPA("up", cl::desc("Alias for --unsymbolized-profile"),
                      cl::aliasopt(UnsymbolizedProfFilename));
 
-static cl::opt<std::string>
-    SampleProfFilename("llvm-sample-profile",
-                       cl::value_desc("llvm sample profile"), cl::ZeroOrMore,
-                       cl::desc("Path of the LLVM sample profile"),
-                       cl::cat(ProfGenCategory));
+static cl::opt<std::string> SampleProfFilename(
+    "llvm-sample-profile", cl::value_desc("llvm sample profile"),
+    cl::desc("Path of the LLVM sample profile"), cl::cat(ProfGenCategory));
 
 static cl::opt<std::string>
     BinaryPath("binary", cl::value_desc("binary"), cl::Required,
