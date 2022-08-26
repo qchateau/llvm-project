@@ -237,6 +237,10 @@ static cl::opt<int> ClPoisonStackPattern("msan-poison-stack-pattern",
        cl::desc("poison uninitialized stack variables with the given pattern"),
        cl::Hidden, cl::init(0xff));
 
+static cl::opt<bool> ClPrintStackNames("msan-print-stack-names",
+       cl::desc("Print name of local stack variable"),
+       cl::Hidden, cl::init(true));
+
 static cl::opt<bool> ClPoisonUndef("msan-poison-undef",
        cl::desc("poison undef temps"),
        cl::Hidden, cl::init(true));
@@ -417,6 +421,14 @@ static const MemoryMapParams Linux_AArch64_MemoryMapParams = {
   0x01000000000,   // OriginBase
 };
 
+// aarch64 FreeBSD
+static const MemoryMapParams FreeBSD_AArch64_MemoryMapParams = {
+  0x1800000000000,  // AndMask
+  0x0400000000000,  // XorMask
+  0x0200000000000,  // ShadowBase
+  0x0700000000000,  // OriginBase
+};
+
 // i386 FreeBSD
 static const MemoryMapParams FreeBSD_I386_MemoryMapParams = {
   0x000180000000,  // AndMask
@@ -464,6 +476,11 @@ static const PlatformMemoryMapParams Linux_S390_MemoryMapParams = {
 static const PlatformMemoryMapParams Linux_ARM_MemoryMapParams = {
   nullptr,
   &Linux_AArch64_MemoryMapParams,
+};
+
+static const PlatformMemoryMapParams FreeBSD_ARM_MemoryMapParams = {
+  nullptr,
+  &FreeBSD_AArch64_MemoryMapParams,
 };
 
 static const PlatformMemoryMapParams FreeBSD_X86_MemoryMapParams = {
@@ -566,7 +583,9 @@ private:
 
   /// Run-time helper that generates a new origin value for a stack
   /// allocation.
-  FunctionCallee MsanSetAllocaOrigin4Fn;
+  FunctionCallee MsanSetAllocaOriginWithDescriptionFn;
+  // No description version
+  FunctionCallee MsanSetAllocaOriginNoDescriptionFn;
 
   /// Run-time helper that poisons stack on function entry.
   FunctionCallee MsanPoisonStackFn;
@@ -678,10 +697,10 @@ void MemorySanitizerPass::printPipeline(
 /// Creates a writable global for Str so that we can pass it to the
 /// run-time lib. Runtime uses first 4 bytes of the string to store the
 /// frame ID, so the string needs to be mutable.
-static GlobalVariable *createPrivateNonConstGlobalForString(Module &M,
-                                                            StringRef Str) {
+static GlobalVariable *createPrivateConstGlobalForString(Module &M,
+                                                         StringRef Str) {
   Constant *StrConst = ConstantDataArray::getString(M.getContext(), Str);
-  return new GlobalVariable(M, StrConst->getType(), /*isConstant=*/false,
+  return new GlobalVariable(M, StrConst->getType(), /*isConstant=*/true,
                             GlobalValue::PrivateLinkage, StrConst, "");
 }
 
@@ -812,9 +831,12 @@ void MemorySanitizer::createUserspaceApi(Module &M) {
         IRB.getInt32Ty());
   }
 
-  MsanSetAllocaOrigin4Fn = M.getOrInsertFunction(
-    "__msan_set_alloca_origin4", IRB.getVoidTy(), IRB.getInt8PtrTy(), IntptrTy,
-    IRB.getInt8PtrTy(), IntptrTy);
+  MsanSetAllocaOriginWithDescriptionFn = M.getOrInsertFunction(
+      "__msan_set_alloca_origin_with_descr", IRB.getVoidTy(),
+      IRB.getInt8PtrTy(), IntptrTy, IRB.getInt8PtrTy(), IRB.getInt8PtrTy());
+  MsanSetAllocaOriginNoDescriptionFn = M.getOrInsertFunction(
+      "__msan_set_alloca_origin_no_descr", IRB.getVoidTy(), IRB.getInt8PtrTy(),
+      IntptrTy, IRB.getInt8PtrTy());
   MsanPoisonStackFn =
       M.getOrInsertFunction("__msan_poison_stack", IRB.getVoidTy(),
                             IRB.getInt8PtrTy(), IntptrTy);
@@ -894,6 +916,9 @@ void MemorySanitizer::initializeModule(Module &M) {
     switch (TargetTriple.getOS()) {
       case Triple::FreeBSD:
         switch (TargetTriple.getArch()) {
+          case Triple::aarch64:
+            MapParams = FreeBSD_ARM_MemoryMapParams.bits64;
+            break;
           case Triple::x86_64:
             MapParams = FreeBSD_X86_MemoryMapParams.bits64;
             break;
@@ -1881,7 +1906,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     Type *ShadowTy = getShadowTy(&I);
     Value *Addr = I.getPointerOperand();
     Value *ShadowPtr = nullptr, *OriginPtr = nullptr;
-    const Align Alignment = assumeAligned(I.getAlignment());
+    const Align Alignment = I.getAlign();
     if (PropagateShadow) {
       std::tie(ShadowPtr, OriginPtr) =
           getShadowOriginPtr(Addr, IRB, ShadowTy, Alignment, /*isStore*/ false);
@@ -1924,7 +1949,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     IRBuilder<> IRB(&I);
     Value *Addr = I.getOperand(0);
     Value *Val = I.getOperand(1);
-    Value *ShadowPtr = getShadowOriginPtr(Addr, IRB, Val->getType(), Align(1),
+    Value *ShadowPtr = getShadowOriginPtr(Addr, IRB, getShadowTy(Val), Align(1),
                                           /*isStore*/ true)
                            .first;
 
@@ -2529,10 +2554,20 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     I.eraseFromParent();
   }
 
-  // Similar to memmove: avoid copying shadow twice.
-  // This is somewhat unfortunate as it may slowdown small constant memcpys.
-  // FIXME: consider doing manual inline for small constant sizes and proper
-  // alignment.
+  /// Instrument memcpy
+  ///
+  /// Similar to memmove: avoid copying shadow twice. This is somewhat
+  /// unfortunate as it may slowdown small constant memcpys.
+  /// FIXME: consider doing manual inline for small constant sizes and proper
+  /// alignment.
+  ///
+  /// Note: This also handles memcpy.inline, which promises no calls to external
+  /// functions as an optimization. However, with instrumentation enabled this
+  /// is difficult to promise; additionally, we know that the MSan runtime
+  /// exists and provides __msan_memcpy(). Therefore, we assume that with
+  /// instrumentation it's safe to turn memcpy.inline into a call to
+  /// __msan_memcpy(). Should this be wrong, such as when implementing memcpy()
+  /// itself, instrumentation should be disabled with the no_sanitize attribute.
   void visitMemCpyInst(MemCpyInst &I) {
     getShadow(I.getArgOperand(1)); // Ensure shadow initialized
     IRBuilder<> IRB(&I);
@@ -3851,17 +3886,16 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
                                   "_msphi_o"));
   }
 
+  Value *getLocalVarIdptr(AllocaInst &I) {
+    ConstantInt *IntConst =
+        ConstantInt::get(Type::getInt32Ty((*F.getParent()).getContext()), 0);
+    return new GlobalVariable(*F.getParent(), IntConst->getType(),
+                              /*isConstant=*/false, GlobalValue::PrivateLinkage,
+                              IntConst);
+  }
+
   Value *getLocalVarDescription(AllocaInst &I) {
-    SmallString<2048> StackDescriptionStorage;
-    raw_svector_ostream StackDescription(StackDescriptionStorage);
-    // We create a string with a description of the stack allocation and
-    // pass it into __msan_set_alloca_origin.
-    // It will be printed by the run-time if stack-originated UMR is found.
-    // The first 4 bytes of the string are set to '----' and will be replaced
-    // by __msan_va_arg_overflow_size_tls at the first call.
-    StackDescription << "----" << I.getName() << "@" << F.getName();
-    return createPrivateNonConstGlobalForString(*F.getParent(),
-                                                StackDescription.str());
+    return createPrivateConstGlobalForString(*F.getParent(), I.getName());
   }
 
   void poisonAllocaUserspace(AllocaInst &I, IRBuilder<> &IRB, Value *Len) {
@@ -3878,11 +3912,18 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     }
 
     if (PoisonStack && MS.TrackOrigins) {
-      Value *Descr = getLocalVarDescription(I);
-      IRB.CreateCall(MS.MsanSetAllocaOrigin4Fn,
-                     {IRB.CreatePointerCast(&I, IRB.getInt8PtrTy()), Len,
-                      IRB.CreatePointerCast(Descr, IRB.getInt8PtrTy()),
-                      IRB.CreatePointerCast(&F, MS.IntptrTy)});
+      Value *Idptr = getLocalVarIdptr(I);
+      if (ClPrintStackNames) {
+        Value *Descr = getLocalVarDescription(I);
+        IRB.CreateCall(MS.MsanSetAllocaOriginWithDescriptionFn,
+                       {IRB.CreatePointerCast(&I, IRB.getInt8PtrTy()), Len,
+                        IRB.CreatePointerCast(Idptr, IRB.getInt8PtrTy()),
+                        IRB.CreatePointerCast(Descr, IRB.getInt8PtrTy())});
+      } else {
+        IRB.CreateCall(MS.MsanSetAllocaOriginNoDescriptionFn,
+                       {IRB.CreatePointerCast(&I, IRB.getInt8PtrTy()), Len,
+                        IRB.CreatePointerCast(Idptr, IRB.getInt8PtrTy())});
+      }
     }
   }
 
@@ -3902,11 +3943,13 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     if (!InsPoint)
       InsPoint = &I;
     IRBuilder<> IRB(InsPoint->getNextNode());
+    IRB.SetCurrentDebugLocation(InsPoint->getDebugLoc());
     const DataLayout &DL = F.getParent()->getDataLayout();
     uint64_t TypeSize = DL.getTypeAllocSize(I.getAllocatedType());
     Value *Len = ConstantInt::get(MS.IntptrTy, TypeSize);
     if (I.isArrayAllocation())
-      Len = IRB.CreateMul(Len, I.getArraySize());
+      Len = IRB.CreateMul(Len,
+                          IRB.CreateZExtOrTrunc(I.getArraySize(), MS.IntptrTy));
 
     if (MS.CompileKernel)
       poisonAllocaKmsan(I, IRB, Len);
@@ -4445,11 +4488,9 @@ struct VarArgMIPS64Helper : public VarArgHelper {
   void visitCallBase(CallBase &CB, IRBuilder<> &IRB) override {
     unsigned VAArgOffset = 0;
     const DataLayout &DL = F.getParent()->getDataLayout();
-    for (auto ArgIt = CB.arg_begin() + CB.getFunctionType()->getNumParams(),
-              End = CB.arg_end();
-         ArgIt != End; ++ArgIt) {
+    for (Value *A :
+         llvm::drop_begin(CB.args(), CB.getFunctionType()->getNumParams())) {
       Triple TargetTriple(F.getParent()->getTargetTriple());
-      Value *A = *ArgIt;
       Value *Base;
       uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
       if (TargetTriple.getArch() == Triple::mips64) {
@@ -4848,8 +4889,8 @@ struct VarArgPowerPC64Helper : public VarArgHelper {
         assert(A->getType()->isPointerTy());
         Type *RealTy = CB.getParamByValType(ArgNo);
         uint64_t ArgSize = DL.getTypeAllocSize(RealTy);
-        MaybeAlign ArgAlign = CB.getParamAlign(ArgNo);
-        if (!ArgAlign || *ArgAlign < Align(8))
+        Align ArgAlign = CB.getParamAlign(ArgNo).value_or(Align(8));
+        if (ArgAlign < 8)
           ArgAlign = Align(8);
         VAArgOffset = alignTo(VAArgOffset, ArgAlign);
         if (!IsFixed) {
@@ -4865,27 +4906,27 @@ struct VarArgPowerPC64Helper : public VarArgHelper {
                              kShadowTLSAlignment, ArgSize);
           }
         }
-        VAArgOffset += alignTo(ArgSize, 8);
+        VAArgOffset += alignTo(ArgSize, Align(8));
       } else {
         Value *Base;
         uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
-        uint64_t ArgAlign = 8;
+        Align ArgAlign = Align(8);
         if (A->getType()->isArrayTy()) {
           // Arrays are aligned to element size, except for long double
           // arrays, which are aligned to 8 bytes.
           Type *ElementTy = A->getType()->getArrayElementType();
           if (!ElementTy->isPPC_FP128Ty())
-            ArgAlign = DL.getTypeAllocSize(ElementTy);
+            ArgAlign = Align(DL.getTypeAllocSize(ElementTy));
         } else if (A->getType()->isVectorTy()) {
           // Vectors are naturally aligned.
-          ArgAlign = DL.getTypeAllocSize(A->getType());
+          ArgAlign = Align(ArgSize);
         }
         if (ArgAlign < 8)
-          ArgAlign = 8;
+          ArgAlign = Align(8);
         VAArgOffset = alignTo(VAArgOffset, ArgAlign);
         if (DL.isBigEndian()) {
-          // Adjusting the shadow for argument with size < 8 to match the placement
-          // of bits in big endian system
+          // Adjusting the shadow for argument with size < 8 to match the
+          // placement of bits in big endian system
           if (ArgSize < 8)
             VAArgOffset += (8 - ArgSize);
         }
@@ -4896,7 +4937,7 @@ struct VarArgPowerPC64Helper : public VarArgHelper {
             IRB.CreateAlignedStore(MSV.getShadow(A), Base, kShadowTLSAlignment);
         }
         VAArgOffset += ArgSize;
-        VAArgOffset = alignTo(VAArgOffset, 8);
+        VAArgOffset = alignTo(VAArgOffset, Align(8));
       }
       if (IsFixed)
         VAArgBase = VAArgOffset;

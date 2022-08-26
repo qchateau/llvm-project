@@ -37,10 +37,25 @@ class RISCVTTIImpl : public BasicTTIImplBase<RISCVTTIImpl> {
   const RISCVSubtarget *getST() const { return ST; }
   const RISCVTargetLowering *getTLI() const { return TLI; }
 
+  /// This function returns an estimate for VL to be used in VL based terms
+  /// of the cost model.  For fixed length vectors, this is simply the
+  /// vector length.  For scalable vectors, we return results consistent
+  /// with getVScaleForTuning under the assumption that clients are also
+  /// using that when comparing costs between scalar and vector representation.
+  /// This does unfortunately mean that we can both undershoot and overshot
+  /// the true cost significantly if getVScaleForTuning is wildly off for the
+  /// actual target hardware.
+  unsigned getEstimatedVLFor(VectorType *Ty);
 public:
   explicit RISCVTTIImpl(const RISCVTargetMachine *TM, const Function &F)
       : BaseT(TM, F.getParent()->getDataLayout()), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
+
+  /// Return the cost of materializing a vector immediate, assuming it does
+  /// not get folded into the using instruction(s).
+  InstructionCost getVectorImmCost(VectorType *VecTy,
+                                   TTI::OperandValueInfo OpInfo,
+                                   TTI::TargetCostKind CostKind);
 
   InstructionCost getIntImmCost(const APInt &Imm, Type *Ty,
                                 TTI::TargetCostKind CostKind);
@@ -56,7 +71,13 @@ public:
 
   bool shouldExpandReduction(const IntrinsicInst *II) const;
   bool supportsScalableVectors() const { return ST->hasVInstructions(); }
+  bool enableScalableVectorization() const { return ST->hasVInstructions(); }
+  PredicationStyle emitGetActiveLaneMask() const {
+    return ST->hasVInstructions() ? PredicationStyle::Data
+                                  : PredicationStyle::None;
+  }
   Optional<unsigned> getMaxVScale() const;
+  Optional<unsigned> getVScaleForTuning() const;
 
   TypeSize getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const;
 
@@ -79,7 +100,8 @@ public:
 
   InstructionCost getSpliceCost(VectorType *Tp, int Index);
   InstructionCost getShuffleCost(TTI::ShuffleKind Kind, VectorType *Tp,
-                                 ArrayRef<int> Mask, int Index,
+                                 ArrayRef<int> Mask,
+                                 TTI::TargetCostKind CostKind, int Index,
                                  VectorType *SubTp,
                                  ArrayRef<const Value *> Args = None);
 
@@ -105,12 +127,27 @@ public:
                                              Optional<FastMathFlags> FMF,
                                              TTI::TargetCostKind CostKind);
 
+  InstructionCost getExtendedReductionCost(unsigned Opcode, bool IsUnsigned,
+                                           Type *ResTy, VectorType *ValTy,
+                                           Optional<FastMathFlags> FMF,
+                                           TTI::TargetCostKind CostKind);
+
+  InstructionCost
+  getMemoryOpCost(unsigned Opcode, Type *Src, MaybeAlign Alignment,
+                  unsigned AddressSpace, TTI::TargetCostKind CostKind,
+                  TTI::OperandValueInfo OpdInfo = {TTI::OK_AnyValue, TTI::OP_None},
+                  const Instruction *I = nullptr);
+
+  bool isElementTypeLegalForScalableVector(Type *Ty) const {
+    return TLI->isLegalElementTypeForRVV(Ty);
+  }
+
   bool isLegalMaskedLoadStore(Type *DataType, Align Alignment) {
     if (!ST->hasVInstructions())
       return false;
 
     // Only support fixed vectors if we know the minimum vector size.
-    if (isa<FixedVectorType>(DataType) && ST->getMinRVVVectorSizeInBits() == 0)
+    if (isa<FixedVectorType>(DataType) && !ST->useRVVForFixedLengthVectors())
       return false;
 
     // Don't allow elements larger than the ELEN.
@@ -138,7 +175,7 @@ public:
       return false;
 
     // Only support fixed vectors if we know the minimum vector size.
-    if (isa<FixedVectorType>(DataType) && ST->getMinRVVVectorSizeInBits() == 0)
+    if (isa<FixedVectorType>(DataType) && !ST->useRVVForFixedLengthVectors())
       return false;
 
     // Don't allow elements larger than the ELEN.
@@ -159,6 +196,16 @@ public:
   }
   bool isLegalMaskedScatter(Type *DataType, Align Alignment) {
     return isLegalMaskedGatherScatter(DataType, Alignment);
+  }
+
+  bool forceScalarizeMaskedGather(VectorType *VTy, Align Alignment) {
+    // Scalarize masked gather for RV64 if EEW=64 indices aren't supported.
+    return ST->is64Bit() && !ST->hasVInstructionsI64();
+  }
+
+  bool forceScalarizeMaskedScatter(VectorType *VTy, Align Alignment) {
+    // Scalarize masked scatter for RV64 if EEW=64 indices aren't supported.
+    return ST->is64Bit() && !ST->hasVInstructionsI64();
   }
 
   /// \returns How the target needs this vector-predicated operation to be

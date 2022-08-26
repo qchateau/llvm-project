@@ -224,7 +224,7 @@ func.func @tensor_cast_to_memref(%arg0 : tensor<4x6x16x32xi8>) ->
   return %1 : memref<?x?x16x32xi8>
 }
 // CHECK:   %[[M:.+]] = bufferization.to_memref %[[ARG0]] : memref<4x6x16x32xi8>
-// CHECK:   %[[M1:.+]] = memref.cast %[[M]] 
+// CHECK:   %[[M1:.+]] = memref.cast %[[M]]
 // CHECK-SAME: memref<4x6x16x32xi8> to memref<?x?x16x32xi8>
 // CHECK:   return %[[M1]] : memref<?x?x16x32xi8>
 
@@ -256,3 +256,18 @@ func.func @alloc_tensor_canonicalize() -> (tensor<4x5x?xf32>) {
 // CHECK:   %[[T0:.+]] = bufferization.alloc_tensor() : tensor<4x5x6xf32>
 // CHECK:   %[[T1:.+]] = tensor.cast %[[T0]] : tensor<4x5x6xf32> to tensor<4x5x?xf32>
 // CHECK:   return %[[T1]]
+
+// -----
+
+func.func @dealloc_canonicalize_clone_removal(%arg0: memref<?xindex>) -> memref<*xf32> {
+  %c1 = arith.constant 1 : index
+  %0 = memref.alloc(%c1) : memref<?xf32>
+  %1 = memref.reshape %0(%arg0) : (memref<?xf32>, memref<?xindex>) -> memref<*xf32>
+  %2 = bufferization.clone %1 : memref<*xf32> to memref<*xf32>
+  memref.dealloc %0 : memref<?xf32>
+  return %2 : memref<*xf32>
+}
+// CHECK-LABEL: @dealloc_canonicalize_clone_removal
+//   CHECK-NOT:   bufferization.clone
+//   CHECK-NOT:   memref.dealloc
+//       CHECK:   return {{.*}}

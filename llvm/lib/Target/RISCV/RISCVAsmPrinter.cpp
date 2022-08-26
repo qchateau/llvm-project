@@ -69,8 +69,6 @@ public:
   void emitStartOfAsmFile(Module &M) override;
   void emitEndOfAsmFile(Module &M) override;
 
-  void emitFunctionEntryLabel() override;
-
 private:
   void emitAttributes();
 };
@@ -91,6 +89,9 @@ void RISCVAsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
 #include "RISCVGenMCPseudoLowering.inc"
 
 void RISCVAsmPrinter::emitInstruction(const MachineInstr *MI) {
+  RISCV_MC::verifyInstructionPredicates(MI->getOpcode(),
+                                        getSubtargetInfo().getFeatureBits());
+
   // Do any auto-generated pseudo lowerings.
   if (emitPseudoExpansionLowering(*OutStreamer, MI))
     return;
@@ -182,6 +183,11 @@ bool RISCVAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 }
 
 void RISCVAsmPrinter::emitStartOfAsmFile(Module &M) {
+  RISCVTargetStreamer &RTS =
+      static_cast<RISCVTargetStreamer &>(*OutStreamer->getTargetStreamer());
+  if (const MDString *ModuleTargetABI =
+          dyn_cast_or_null<MDString>(M.getModuleFlag("target-abi")))
+    RTS.setTargetABI(RISCVABI::getTargetABI(ModuleTargetABI->getString()));
   if (TM.getTargetTriple().isOSBinFormatELF())
     emitAttributes();
 }
@@ -198,13 +204,6 @@ void RISCVAsmPrinter::emitAttributes() {
   RISCVTargetStreamer &RTS =
       static_cast<RISCVTargetStreamer &>(*OutStreamer->getTargetStreamer());
   RTS.emitTargetAttributes(*MCSTI);
-}
-
-void RISCVAsmPrinter::emitFunctionEntryLabel() {
-  AsmPrinter::emitFunctionEntryLabel();
-  RISCVTargetStreamer &RTS =
-      static_cast<RISCVTargetStreamer &>(*OutStreamer->getTargetStreamer());
-  RTS.setTargetABI(STI->getTargetABI());
 }
 
 // Force static initialization.

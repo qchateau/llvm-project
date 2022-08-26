@@ -185,6 +185,19 @@ def testBlockArgumentList():
     for t in entry_block.arguments.types:
       print("Type: ", t)
 
+    # Check that slicing and type access compose.
+    # CHECK: Sliced type: i16
+    # CHECK: Sliced type: i24
+    for t in entry_block.arguments[1:].types:
+      print("Sliced type: ", t)
+
+    # Check that slice addition works as expected.
+    # CHECK: Argument 2, type i24
+    # CHECK: Argument 0, type i8
+    restructured = entry_block.arguments[-1:] + entry_block.arguments[:1]
+    for arg in restructured:
+      print(f"Argument {arg.arg_number}, type {arg.type}")
+
 
 # CHECK-LABEL: TEST: testOperationOperands
 @run
@@ -535,7 +548,7 @@ def testOperationPrint():
   module = Module.parse(
       r"""
     func.func @f1(%arg0: i32) -> i32 {
-      %0 = arith.constant dense<[1, 2, 3, 4]> : tensor<4xi32>
+      %0 = arith.constant dense<[1, 2, 3, 4]> : tensor<4xi32> loc("nom")
       return %arg0 : i32
     }
   """, ctx)
@@ -562,8 +575,12 @@ def testOperationPrint():
   print(bytes_value.__class__)
   print(bytes_value)
 
+  # Test get_asm local_scope.
+  # CHECK: constant dense<[1, 2, 3, 4]> : tensor<4xi32> loc("nom")
+  module.operation.print(enable_debug_info=True, use_local_scope=True)
+
   # Test get_asm with options.
-  # CHECK: value = opaque<"elided_large_const", "0xDEADBEEF"> : tensor<4xi32>
+  # CHECK: value = dense_resource<__elided__> : tensor<4xi32>
   # CHECK: "func.return"(%arg0) : (i32) -> () -:4:7
   module.operation.print(
       large_elements_limit=2,

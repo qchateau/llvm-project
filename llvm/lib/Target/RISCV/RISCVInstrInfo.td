@@ -83,6 +83,21 @@ def riscv_read_cycle_wide : SDNode<"RISCVISD::READ_CYCLE_WIDE",
                                    SDT_RISCVReadCycleWide,
                                    [SDNPHasChain, SDNPSideEffect]>;
 
+def riscv_add_lo : SDNode<"RISCVISD::ADD_LO", SDTIntBinOp>;
+def riscv_hi : SDNode<"RISCVISD::HI", SDTIntUnaryOp>;
+def riscv_lla : SDNode<"RISCVISD::LLA", SDTIntUnaryOp>;
+def riscv_add_tprel : SDNode<"RISCVISD::ADD_TPREL",
+                             SDTypeProfile<1, 3, [SDTCisSameAs<0, 1>,
+                                                  SDTCisSameAs<0, 2>,
+                                                  SDTCisSameAs<0, 3>,
+                                                  SDTCisInt<0>]>>;
+
+def riscv_la : SDNode<"RISCVISD::LA", SDTLoad,
+                      [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
+def riscv_la_tls_ie : SDNode<"RISCVISD::LA_TLS_IE", SDTLoad,
+                             [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
+def riscv_la_tls_gd : SDNode<"RISCVISD::LA_TLS_GD", SDTIntUnaryOp>;
+
 //===----------------------------------------------------------------------===//
 // Operand and SDNode transformation definitions.
 //===----------------------------------------------------------------------===//
@@ -369,7 +384,6 @@ def uimm6gt32 : ImmLeaf<XLenVT, [{
 // Necessary because a frameindex can't be matched directly in a pattern.
 def FrameAddrRegImm : ComplexPattern<iPTR, 2, "SelectFrameAddrRegImm",
                                      [frameindex, or, add]>;
-def BaseAddr : ComplexPattern<iPTR, 1, "SelectBaseAddr">;
 def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
 
 // Return the negation of an immediate value.
@@ -404,7 +418,9 @@ def ImmSubFrom32 : SDNodeXForm<imm, [{
 }]>;
 
 // Check if (add r, imm) can be optimized to (ADDI (ADDI r, imm0), imm1),
-// in which imm = imm0 + imm1 and both imm0 and imm1 are simm12.
+// in which imm = imm0 + imm1 and both imm0 and imm1 are simm12. We make imm0
+// as large as possible and imm1 as small as possible so that we might be able
+// to use c.addi for the small immediate.
 def AddiPair : PatLeaf<(imm), [{
   if (!N->hasOneUse())
     return false;
@@ -413,16 +429,19 @@ def AddiPair : PatLeaf<(imm), [{
   return (-4096 <= Imm && Imm <= -2049) || (2048 <= Imm && Imm <= 4094);
 }]>;
 
-// Return imm/2.
-def AddiPairImmA : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant(N->getSExtValue() / 2, SDLoc(N),
+// Return imm - (imm < 0 ? -2048 : 2047).
+def AddiPairImmSmall : SDNodeXForm<imm, [{
+  int64_t Imm = N->getSExtValue();
+  int64_t Adj = N->getSExtValue() < 0 ? -2048 : 2047;
+  return CurDAG->getTargetConstant(Imm - Adj, SDLoc(N),
                                    N->getValueType(0));
 }]>;
 
-// Return imm - imm/2.
-def AddiPairImmB : SDNodeXForm<imm, [{
-  int64_t Imm = N->getSExtValue();
-  return CurDAG->getTargetConstant(Imm - Imm / 2, SDLoc(N),
+// Return -2048 if immediate is negative or 2047 if positive. These are the
+// largest simm12 values.
+def AddiPairImmLarge : SDNodeXForm<imm, [{
+  int64_t Imm = N->getSExtValue() < 0 ? -2048 : 2047;
+  return CurDAG->getTargetConstant(Imm, SDLoc(N),
                                    N->getValueType(0));
 }]>;
 
@@ -942,6 +961,13 @@ def : InstAlias<"hfence.gvma $rs", (HFENCE_GVMA GPR:$rs, X0)>;
 def : InstAlias<"hfence.vvma",     (HFENCE_VVMA      X0, X0)>;
 def : InstAlias<"hfence.vvma $rs", (HFENCE_VVMA GPR:$rs, X0)>;
 
+let Predicates = [HasStdExtZihintntl] in {
+  def : InstAlias<"ntl.p1",     (ADD   X0, X0, X2)>;
+  def : InstAlias<"ntl.pall",   (ADD   X0, X0, X3)>;
+  def : InstAlias<"ntl.s1",     (ADD   X0, X0, X4)>;
+  def : InstAlias<"ntl.all",    (ADD   X0, X0, X5)>;
+} // Predicates = [HasStdExtZihintntl]
+
 let EmitPriority = 0 in {
 def : InstAlias<"lb $rd, (${rs1})",
                 (LB  GPR:$rd, GPR:$rs1, 0)>;
@@ -1207,6 +1233,30 @@ def PseudoAddTPRel : Pseudo<(outs GPR:$rd),
 def : Pat<(FrameAddrRegImm GPR:$rs1, simm12:$imm12),
           (ADDI GPR:$rs1, simm12:$imm12)>;
 
+/// HI and ADD_LO address nodes.
+
+def : Pat<(riscv_hi tglobaladdr:$in), (LUI tglobaladdr:$in)>;
+def : Pat<(riscv_hi tblockaddress:$in), (LUI tblockaddress:$in)>;
+def : Pat<(riscv_hi tjumptable:$in), (LUI tjumptable:$in)>;
+def : Pat<(riscv_hi tconstpool:$in), (LUI tconstpool:$in)>;
+
+def : Pat<(riscv_add_lo GPR:$hi, tglobaladdr:$lo),
+          (ADDI GPR:$hi, tglobaladdr:$lo)>;
+def : Pat<(riscv_add_lo GPR:$hi, tblockaddress:$lo),
+          (ADDI GPR:$hi, tblockaddress:$lo)>;
+def : Pat<(riscv_add_lo GPR:$hi, tjumptable:$lo),
+          (ADDI GPR:$hi, tjumptable:$lo)>;
+def : Pat<(riscv_add_lo GPR:$hi, tconstpool:$lo),
+          (ADDI GPR:$hi, tconstpool:$lo)>;
+
+/// TLS address nodes.
+
+def : Pat<(riscv_hi tglobaltlsaddr:$in), (LUI tglobaltlsaddr:$in)>;
+def : Pat<(riscv_add_tprel GPR:$rs1, GPR:$rs2, tglobaltlsaddr:$src),
+          (PseudoAddTPRel GPR:$rs1, GPR:$rs2, tglobaltlsaddr:$src)>;
+def : Pat<(riscv_add_lo GPR:$src, tglobaltlsaddr:$lo),
+          (ADDI GPR:$src, tglobaltlsaddr:$lo)>;
+
 /// Setcc
 
 def : PatGprGpr<setlt, SLT>;
@@ -1220,20 +1270,15 @@ def : Pat<(seteq GPR:$rs1, 0), (SLTIU GPR:$rs1, 1)>;
 def : Pat<(seteq GPR:$rs1, GPR:$rs2), (SLTIU (XOR GPR:$rs1, GPR:$rs2), 1)>;
 def : Pat<(seteq GPR:$rs1, simm12_plus1:$imm12),
           (SLTIU (ADDI GPR:$rs1, (NegImm simm12_plus1:$imm12)), 1)>;
+def : Pat<(seteq GPR:$rs1, -2048),
+          (SLTIU (XORI GPR:$rs1, -2048), 1)>;
 def : Pat<(setne GPR:$rs1, 0), (SLTU X0, GPR:$rs1)>;
 def : Pat<(setne GPR:$rs1, GPR:$rs2), (SLTU X0, (XOR GPR:$rs1, GPR:$rs2))>;
 def : Pat<(setne GPR:$rs1, simm12_plus1:$imm12),
           (SLTU X0, (ADDI GPR:$rs1, (NegImm simm12_plus1:$imm12)))>;
-def : Pat<(setugt GPR:$rs1, GPR:$rs2), (SLTU GPR:$rs2, GPR:$rs1)>;
-def : Pat<(setuge GPR:$rs1, GPR:$rs2), (XORI (SLTU GPR:$rs1, GPR:$rs2), 1)>;
-def : Pat<(setule GPR:$rs1, GPR:$rs2), (XORI (SLTU GPR:$rs2, GPR:$rs1), 1)>;
-def : Pat<(setgt GPR:$rs1, GPR:$rs2), (SLT GPR:$rs2, GPR:$rs1)>;
-def : Pat<(setge GPR:$rs1, GPR:$rs2), (XORI (SLT GPR:$rs1, GPR:$rs2), 1)>;
-def : Pat<(setle GPR:$rs1, GPR:$rs2), (XORI (SLT GPR:$rs2, GPR:$rs1), 1)>;
-def : Pat<(setgt GPR:$rs1, simm12_minus1_nonzero:$imm),
-          (XORI (SLTI GPR:$rs1, (ImmPlus1 simm12_minus1_nonzero:$imm)), 1)>;
-def : Pat<(setugt GPR:$rs1, simm12_minus1_nonzero:$imm),
-          (XORI (SLTIU GPR:$rs1, (ImmPlus1 simm12_minus1_nonzero:$imm)), 1)>;
+def : Pat<(setne GPR:$rs1, -2048),
+          (SLTU X0, (XORI GPR:$rs1, -2048))>;
+def : Pat<(setne GPR:$rs1, -1), (SLTIU GPR:$rs1, -1)>;
 
 def IntCCtoRISCVCC : SDNodeXForm<riscv_selectcc, [{
   ISD::CondCode CC = cast<CondCodeSDNode>(N->getOperand(2))->get();
@@ -1248,30 +1293,41 @@ def riscv_selectcc_frag : PatFrag<(ops node:$lhs, node:$rhs, node:$cc,
                                                   node:$falsev), [{}],
                                   IntCCtoRISCVCC>;
 
-let usesCustomInserter = 1 in
-class SelectCC_rrirr<RegisterClass valty, RegisterClass cmpty>
-    : Pseudo<(outs valty:$dst),
-             (ins cmpty:$lhs, cmpty:$rhs, ixlenimm:$imm,
-              valty:$truev, valty:$falsev),
-             [(set valty:$dst,
-               (riscv_selectcc_frag:$imm cmpty:$lhs, cmpty:$rhs, cond,
-                                         valty:$truev, valty:$falsev))]>;
+multiclass SelectCC_GPR_rrirr<RegisterClass valty> {
+  let usesCustomInserter = 1 in
+  def _Using_CC_GPR : Pseudo<(outs valty:$dst),
+                             (ins GPR:$lhs, GPR:$rhs, ixlenimm:$cc,
+                              valty:$truev, valty:$falsev),
+                             [(set valty:$dst,
+                               (riscv_selectcc_frag:$cc GPR:$lhs, GPR:$rhs, cond,
+                                                        valty:$truev, valty:$falsev))]>;
+  // Explicitly select 0 in the condition to X0. The register coalescer doesn't
+  // always do it.
+  def : Pat<(riscv_selectcc_frag:$cc GPR:$lhs, 0, cond, valty:$truev,
+                                     valty:$falsev),
+            (!cast<Instruction>(NAME#"_Using_CC_GPR") GPR:$lhs, X0,
+             (IntCCtoRISCVCC $cc), valty:$truev, valty:$falsev)>;
+}
 
-def Select_GPR_Using_CC_GPR : SelectCC_rrirr<GPR, GPR>;
+defm Select_GPR : SelectCC_GPR_rrirr<GPR>;
 
 /// Branches and jumps
 
 // Match `riscv_brcc` and lower to the appropriate RISC-V branch instruction.
-class BccPat<CondCode Cond, RVInstB Inst>
-    : Pat<(riscv_brcc GPR:$rs1, GPR:$rs2, Cond, bb:$imm12),
-          (Inst GPR:$rs1, GPR:$rs2, simm13_lsb0:$imm12)>;
+multiclass BccPat<CondCode Cond, RVInstB Inst> {
+  def : Pat<(riscv_brcc GPR:$rs1, GPR:$rs2, Cond, bb:$imm12),
+            (Inst GPR:$rs1, GPR:$rs2, simm13_lsb0:$imm12)>;
+  // Explicitly select 0 to X0. The register coalescer doesn't always do it.
+  def : Pat<(riscv_brcc GPR:$rs1, 0, Cond, bb:$imm12),
+            (Inst GPR:$rs1, X0, simm13_lsb0:$imm12)>;
+}
 
-def : BccPat<SETEQ, BEQ>;
-def : BccPat<SETNE, BNE>;
-def : BccPat<SETLT, BLT>;
-def : BccPat<SETGE, BGE>;
-def : BccPat<SETULT, BLTU>;
-def : BccPat<SETUGE, BGEU>;
+defm : BccPat<SETEQ, BEQ>;
+defm : BccPat<SETNE, BNE>;
+defm : BccPat<SETLT, BLT>;
+defm : BccPat<SETGE, BGE>;
+defm : BccPat<SETULT, BLTU>;
+defm : BccPat<SETUGE, BGEU>;
 
 let isBarrier = 1, isBranch = 1, isTerminator = 1 in
 def PseudoBR : Pseudo<(outs), (ins simm21_lsb0_jal:$imm20), [(br bb:$imm20)]>,
@@ -1341,7 +1397,7 @@ def PseudoTAILIndirect : Pseudo<(outs), (ins GPRTC:$rs1),
                          PseudoInstExpansion<(JALR X0, GPR:$rs1, 0)>;
 
 def : Pat<(riscv_tail (iPTR tglobaladdr:$dst)),
-          (PseudoTAIL texternalsym:$dst)>;
+          (PseudoTAIL tglobaladdr:$dst)>;
 def : Pat<(riscv_tail (iPTR texternalsym:$dst)),
           (PseudoTAIL texternalsym:$dst)>;
 
@@ -1357,21 +1413,33 @@ let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Size = 8, isCodeGenOnly = 0,
 def PseudoLLA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                        "lla", "$dst, $src">;
 
+def : Pat<(riscv_lla tglobaladdr:$in), (PseudoLLA tglobaladdr:$in)>;
+def : Pat<(riscv_lla tblockaddress:$in), (PseudoLLA tblockaddress:$in)>;
+def : Pat<(riscv_lla tjumptable:$in), (PseudoLLA tjumptable:$in)>;
+def : Pat<(riscv_lla tconstpool:$in), (PseudoLLA tconstpool:$in)>;
+
 let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 0,
     isAsmParserOnly = 1 in
 def PseudoLA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                       "la", "$dst, $src">;
+
+def : Pat<(riscv_la tglobaladdr:$in), (PseudoLA tglobaladdr:$in)>;
 
 let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 0,
     isAsmParserOnly = 1 in
 def PseudoLA_TLS_IE : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                              "la.tls.ie", "$dst, $src">;
 
+def : Pat<(riscv_la_tls_ie tglobaltlsaddr:$in),
+          (PseudoLA_TLS_IE  tglobaltlsaddr:$in)>;
+
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Size = 8, isCodeGenOnly = 0,
     isAsmParserOnly = 1 in
 def PseudoLA_TLS_GD : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                              "la.tls.gd", "$dst, $src">;
 
+def : Pat<(riscv_la_tls_gd tglobaltlsaddr:$in),
+          (PseudoLA_TLS_GD  tglobaltlsaddr:$in)>;
 
 /// Sign/Zero Extends
 
@@ -1600,14 +1668,14 @@ def : Pat<(debugtrap), (EBREAK)>;
 
 /// Simple optimization
 def : Pat<(add GPR:$rs1, (AddiPair:$rs2)),
-          (ADDI (ADDI GPR:$rs1, (AddiPairImmB AddiPair:$rs2)),
-                (AddiPairImmA GPR:$rs2))>;
+          (ADDI (ADDI GPR:$rs1, (AddiPairImmLarge AddiPair:$rs2)),
+                (AddiPairImmSmall GPR:$rs2))>;
 
 let Predicates = [IsRV64] in {
 // Select W instructions if only the lower 32-bits of the result are used.
 def : Pat<(binop_allwusers<add> GPR:$rs1, (AddiPair:$rs2)),
-          (ADDIW (ADDIW GPR:$rs1, (AddiPairImmB AddiPair:$rs2)),
-                 (AddiPairImmA AddiPair:$rs2))>;
+          (ADDIW (ADDIW GPR:$rs1, (AddiPairImmLarge AddiPair:$rs2)),
+                 (AddiPairImmSmall AddiPair:$rs2))>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1623,3 +1691,4 @@ include "RISCVInstrInfoZb.td"
 include "RISCVInstrInfoZk.td"
 include "RISCVInstrInfoV.td"
 include "RISCVInstrInfoZfh.td"
+include "RISCVInstrInfoZicbo.td"

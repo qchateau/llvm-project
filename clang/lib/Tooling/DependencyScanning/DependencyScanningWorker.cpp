@@ -28,8 +28,9 @@ namespace {
 class DependencyConsumerForwarder : public DependencyFileGenerator {
 public:
   DependencyConsumerForwarder(std::unique_ptr<DependencyOutputOptions> Opts,
-                              DependencyConsumer &C)
-      : DependencyFileGenerator(*Opts), Opts(std::move(Opts)), C(C) {}
+                              StringRef WorkingDirectory, DependencyConsumer &C)
+      : DependencyFileGenerator(*Opts), WorkingDirectory(WorkingDirectory),
+        Opts(std::move(Opts)), C(C) {}
 
   void finishedMainFile(DiagnosticsEngine &Diags) override {
     C.handleDependencyOutputOpts(*Opts);
@@ -37,11 +38,13 @@ public:
     for (const auto &File : getDependencies()) {
       CanonPath = File;
       llvm::sys::path::remove_dots(CanonPath, /*remove_dot_dot=*/true);
+      llvm::sys::fs::make_absolute(WorkingDirectory, CanonPath);
       C.handleFileDependency(CanonPath);
     }
   }
 
 private:
+  StringRef WorkingDirectory;
   std::unique_ptr<DependencyOutputOptions> Opts;
   DependencyConsumer &C;
 };
@@ -137,10 +140,11 @@ public:
   DependencyScanningAction(
       StringRef WorkingDirectory, DependencyConsumer &Consumer,
       llvm::IntrusiveRefCntPtr<DependencyScanningWorkerFilesystem> DepFS,
-      ScanningOutputFormat Format, bool OptimizeArgs,
-      llvm::Optional<StringRef> ModuleName = None)
+      ScanningOutputFormat Format, bool OptimizeArgs, bool EagerLoadModules,
+      bool DisableFree, llvm::Optional<StringRef> ModuleName = None)
       : WorkingDirectory(WorkingDirectory), Consumer(Consumer),
         DepFS(std::move(DepFS)), Format(Format), OptimizeArgs(OptimizeArgs),
+        EagerLoadModules(EagerLoadModules), DisableFree(DisableFree),
         ModuleName(ModuleName) {}
 
   bool runInvocation(std::shared_ptr<CompilerInvocation> Invocation,
@@ -149,6 +153,8 @@ public:
                      DiagnosticConsumer *DiagConsumer) override {
     // Make a deep copy of the original Clang invocation.
     CompilerInvocation OriginalInvocation(*Invocation);
+    // Restore the value of DisableFree, which may be modified by Tooling.
+    OriginalInvocation.getFrontendOpts().DisableFree = DisableFree;
 
     // Create a compiler instance to handle the actual work.
     CompilerInstance ScanInstance(std::move(PCHContainerOps));
@@ -165,6 +171,7 @@ public:
 
     ScanInstance.getFrontendOpts().GenerateGlobalModuleIndex = false;
     ScanInstance.getFrontendOpts().UseGlobalModuleIndex = false;
+    ScanInstance.getFrontendOpts().ModulesShareFileManager = false;
 
     FileMgr->getFileSystemOpts().WorkingDir = std::string(WorkingDirectory);
     ScanInstance.setFileManager(FileMgr);
@@ -219,13 +226,13 @@ public:
     switch (Format) {
     case ScanningOutputFormat::Make:
       ScanInstance.addDependencyCollector(
-          std::make_shared<DependencyConsumerForwarder>(std::move(Opts),
-                                                        Consumer));
+          std::make_shared<DependencyConsumerForwarder>(
+              std::move(Opts), WorkingDirectory, Consumer));
       break;
     case ScanningOutputFormat::Full:
       ScanInstance.addDependencyCollector(std::make_shared<ModuleDepCollector>(
           std::move(Opts), ScanInstance, Consumer,
-          std::move(OriginalInvocation), OptimizeArgs));
+          std::move(OriginalInvocation), OptimizeArgs, EagerLoadModules));
       break;
     }
 
@@ -238,7 +245,7 @@ public:
 
     std::unique_ptr<FrontendAction> Action;
 
-    if (ModuleName.hasValue())
+    if (ModuleName)
       Action = std::make_unique<GetDependenciesByModuleNameAction>(*ModuleName);
     else
       Action = std::make_unique<ReadPCHAndPreprocessAction>();
@@ -255,14 +262,18 @@ private:
   llvm::IntrusiveRefCntPtr<DependencyScanningWorkerFilesystem> DepFS;
   ScanningOutputFormat Format;
   bool OptimizeArgs;
+  bool EagerLoadModules;
+  bool DisableFree;
   llvm::Optional<StringRef> ModuleName;
 };
 
 } // end anonymous namespace
 
 DependencyScanningWorker::DependencyScanningWorker(
-    DependencyScanningService &Service)
-    : Format(Service.getFormat()), OptimizeArgs(Service.canOptimizeArgs()) {
+    DependencyScanningService &Service,
+    llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS)
+    : Format(Service.getFormat()), OptimizeArgs(Service.canOptimizeArgs()),
+      EagerLoadModules(Service.shouldEagerLoadModules()) {
   PCHContainerOps = std::make_shared<PCHContainerOperations>();
   PCHContainerOps->registerReader(
       std::make_unique<ObjectFilePCHContainerReader>());
@@ -271,8 +282,8 @@ DependencyScanningWorker::DependencyScanningWorker(
   PCHContainerOps->registerWriter(
       std::make_unique<ObjectFilePCHContainerWriter>());
 
-  auto OverlayFS = llvm::makeIntrusiveRefCnt<llvm::vfs::OverlayFileSystem>(
-      llvm::vfs::createPhysicalFileSystem());
+  auto OverlayFS =
+      llvm::makeIntrusiveRefCnt<llvm::vfs::OverlayFileSystem>(std::move(FS));
   InMemoryFS = llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
   OverlayFS->pushOverlay(InMemoryFS);
   RealFS = OverlayFS;
@@ -314,7 +325,7 @@ llvm::Error DependencyScanningWorker::computeDependencies(
       Files ? Files : new FileManager(FileSystemOptions(), RealFS);
 
   Optional<std::vector<std::string>> ModifiedCommandLine;
-  if (ModuleName.hasValue()) {
+  if (ModuleName) {
     ModifiedCommandLine = CommandLine;
     InMemoryFS->addFile(*ModuleName, 0, llvm::MemoryBuffer::getMemBuffer(""));
     ModifiedCommandLine->emplace_back(*ModuleName);
@@ -329,9 +340,14 @@ llvm::Error DependencyScanningWorker::computeDependencies(
 
   return runWithDiags(CreateAndPopulateDiagOpts(FinalCCommandLine).release(),
                       [&](DiagnosticConsumer &DC, DiagnosticOptions &DiagOpts) {
+                        // DisableFree is modified by Tooling for running
+                        // in-process; preserve the original value, which is
+                        // always true for a driver invocation.
+                        bool DisableFree = true;
                         DependencyScanningAction Action(
                             WorkingDirectory, Consumer, DepFS, Format,
-                            OptimizeArgs, ModuleName);
+                            OptimizeArgs, EagerLoadModules, DisableFree,
+                            ModuleName);
                         // Create an invocation that uses the underlying file
                         // system to ensure that any file system requests that
                         // are made by the driver do not go through the

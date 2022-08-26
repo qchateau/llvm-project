@@ -154,10 +154,14 @@ define i32 @test20(i32 %x) {
   ret i32 %z
 }
 
+; TODO: This should combine to t1 + 2.
 define i32 @test21(i32 %t1) {
 ; CHECK-LABEL: @test21(
-; CHECK-NEXT:    [[T1_MASK1:%.*]] = add i32 [[T1:%.*]], 2
-; CHECK-NEXT:    ret i32 [[T1_MASK1]]
+; CHECK-NEXT:    [[TMP1:%.*]] = and i32 [[T1:%.*]], -2
+; CHECK-NEXT:    [[T3:%.*]] = add i32 [[TMP1]], 2
+; CHECK-NEXT:    [[T5:%.*]] = and i32 [[T1]], 1
+; CHECK-NEXT:    [[T6:%.*]] = or i32 [[T5]], [[T3]]
+; CHECK-NEXT:    ret i32 [[T6]]
 ;
   %t1.mask1 = add i32 %t1, 2
   %t3 = and i32 %t1.mask1, -2
@@ -396,10 +400,8 @@ define i32 @test30(i32 %A) {
 
 define <2 x i32> @test30vec(<2 x i32> %A) {
 ; CHECK-LABEL: @test30vec(
-; CHECK-NEXT:    [[C:%.*]] = and <2 x i32> [[A:%.*]], <i32 -65536, i32 -65536>
-; CHECK-NEXT:    [[B:%.*]] = and <2 x i32> [[A]], <i32 7224, i32 7224>
-; CHECK-NEXT:    [[D:%.*]] = or <2 x i32> [[B]], <i32 32962, i32 32962>
-; CHECK-NEXT:    [[E:%.*]] = or <2 x i32> [[D]], [[C]]
+; CHECK-NEXT:    [[TMP1:%.*]] = and <2 x i32> [[A:%.*]], <i32 -58312, i32 -58312>
+; CHECK-NEXT:    [[E:%.*]] = or <2 x i32> [[TMP1]], <i32 32962, i32 32962>
 ; CHECK-NEXT:    ret <2 x i32> [[E]]
 ;
   %B = or <2 x i32> %A, <i32 32962, i32 32962>

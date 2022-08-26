@@ -93,7 +93,7 @@ void LoopUnroll::runOnOperation() {
     // an outer one may delete gathered inner ones).
     getOperation().walk([&](AffineForOp forOp) {
       Optional<uint64_t> tripCount = getConstantTripCount(forOp);
-      if (tripCount.hasValue() && tripCount.getValue() <= unrollFullThreshold)
+      if (tripCount && *tripCount <= unrollFullThreshold)
         loops.push_back(forOp);
     });
     for (auto forOp : loops)
@@ -122,14 +122,16 @@ void LoopUnroll::runOnOperation() {
 LogicalResult LoopUnroll::runOnAffineForOp(AffineForOp forOp) {
   // Use the function callback if one was provided.
   if (getUnrollFactor)
-    return loopUnrollByFactor(forOp, getUnrollFactor(forOp));
+    return loopUnrollByFactor(forOp, getUnrollFactor(forOp),
+                              /*annotateFn=*/nullptr, cleanUpUnroll);
   // Unroll completely if full loop unroll was specified.
   if (unrollFull)
     return loopUnrollFull(forOp);
   // Otherwise, unroll by the given unroll factor.
   if (unrollUpToFactor)
     return loopUnrollUpToFactor(forOp, unrollFactor);
-  return loopUnrollByFactor(forOp, unrollFactor);
+  return loopUnrollByFactor(forOp, unrollFactor, /*annotateFn=*/nullptr,
+                            cleanUpUnroll);
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLoopUnrollPass(

@@ -9,6 +9,7 @@
 #ifndef _LIBCPP___ALGORITHM_RANGES_BINARY_SEARCH_H
 #define _LIBCPP___ALGORITHM_RANGES_BINARY_SEARCH_H
 
+#include <__algorithm/iterator_operations.h>
 #include <__algorithm/lower_bound.h>
 #include <__config>
 #include <__functional/identity.h>
@@ -23,7 +24,7 @@
 #  pragma GCC system_header
 #endif
 
-#if _LIBCPP_STD_VER > 17 && !defined(_LIBCPP_HAS_NO_INCOMPLETE_RANGES)
+#if _LIBCPP_STD_VER > 17
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
@@ -34,7 +35,7 @@ struct __fn {
             indirect_strict_weak_order<const _Type*, projected<_Iter, _Proj>> _Comp = ranges::less>
   _LIBCPP_HIDE_FROM_ABI constexpr
   bool operator()(_Iter __first, _Sent __last, const _Type& __value, _Comp __comp = {}, _Proj __proj = {}) const {
-    auto __ret = std::__lower_bound_impl(__first, __last, __value, __comp, __proj);
+    auto __ret = std::__lower_bound_impl<_RangeAlgPolicy>(__first, __last, __value, __comp, __proj);
     return __ret != __last && !std::invoke(__comp, __value, std::invoke(__proj, *__first));
   }
 
@@ -44,7 +45,7 @@ struct __fn {
   bool operator()(_Range&& __r, const _Type& __value, _Comp __comp = {}, _Proj __proj = {}) const {
     auto __first = ranges::begin(__r);
     auto __last = ranges::end(__r);
-    auto __ret = std::__lower_bound_impl(__first, __last, __value, __comp, __proj);
+    auto __ret = std::__lower_bound_impl<_RangeAlgPolicy>(__first, __last, __value, __comp, __proj);
     return __ret != __last && !std::invoke(__comp, __value, std::invoke(__proj, *__first));
   }
 };
@@ -57,6 +58,6 @@ inline namespace __cpo {
 
 _LIBCPP_END_NAMESPACE_STD
 
-#endif // _LIBCPP_STD_VER > 17 && !defined(_LIBCPP_HAS_NO_INCOMPLETE_RANGES)
+#endif // _LIBCPP_STD_VER > 17
 
 #endif // _LIBCPP___ALGORITHM_RANGES_BINARY_SEARCH_H

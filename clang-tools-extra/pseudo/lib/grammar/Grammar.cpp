@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang-pseudo/Grammar.h"
+#include "clang-pseudo/grammar/Grammar.h"
 #include "clang/Basic/TokenKinds.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -59,8 +59,13 @@ std::string Grammar::dumpRule(RuleID RID) const {
   llvm::raw_string_ostream OS(Result);
   const Rule &R = T->Rules[RID];
   OS << symbolName(R.Target) << " :=";
-  for (SymbolID SID : R.seq())
-    OS << " " << symbolName(SID);
+  for (unsigned I = 0; I < R.Size; ++I) {
+    OS << " " << symbolName(R.Sequence[I]);
+    if (R.RecoveryIndex == I)
+      OS << " [recover=" << T->AttributeValues[R.Recovery] << "]";
+  }
+  if (R.Guarded)
+    OS << " [guard]";
   return Result;
 }
 

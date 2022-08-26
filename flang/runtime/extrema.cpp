@@ -419,11 +419,14 @@ public:
   void Reinitialize() { extremum_ = nullptr; }
   template <typename A> void GetResult(A *p, int /*zeroBasedDim*/ = -1) const {
     static_assert(std::is_same_v<A, Type>);
+    std::size_t byteSize{array_.ElementBytes()};
     if (extremum_) {
-      std::memcpy(p, extremum_, charLen_);
+      std::memcpy(p, extremum_, byteSize);
     } else {
-      // empty array: result is all zero-valued characters
-      std::memset(p, 0, charLen_);
+      // Empty array; fill with character 0 for MAXVAL.
+      // For MINVAL, fill with 127 if ASCII as required
+      // by the standard, otherwise set all of the bits.
+      std::memset(p, IS_MAXVAL ? 0 : KIND == 1 ? 127 : 255, byteSize);
     }
   }
   bool Accumulate(const Type *x) {

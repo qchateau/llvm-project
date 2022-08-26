@@ -13,6 +13,7 @@ def build_invocation(compile_flags):
 
 # Assume that llvm-jitlink is in the config.llvm_tools_dir.
 llvm_jitlink = os.path.join(config.llvm_tools_dir, 'llvm-jitlink')
+lli = os.path.join(config.llvm_tools_dir, 'lli')
 if config.host_os == 'Darwin':
   orc_rt_path = '%s/libclang_rt.orc_osx.a' % config.compiler_rt_libdir
 else:
@@ -28,14 +29,21 @@ config.substitutions.append(
 config.substitutions.append(
     ('%clangxx ',
      build_invocation(config.cxx_mode_flags + [config.target_cflags])))
+if config.host_os == 'Windows':
+  config.substitutions.append(
+      ('%llvm_jitlink', (llvm_jitlink + ' -orc-runtime=' +
+       orc_rt_path + ' -no-process-syms=true -slab-allocate=64MB')))
+else:
+  config.substitutions.append(
+      ('%llvm_jitlink', (llvm_jitlink + ' -orc-runtime=' + orc_rt_path)))
 config.substitutions.append(
-    ('%llvm_jitlink', (llvm_jitlink + ' -orc-runtime=' + orc_rt_path)))
+    ('%lli_orc_jitlink', (lli + ' -jit-kind=orc -jit-linker=jitlink -orc-runtime=' + orc_rt_path)))
 
 # Default test suffixes.
-config.suffixes = ['.c', '.cpp', '.S']
+config.suffixes = ['.c', '.cpp', '.S', '.ll']
 
 # Exclude Inputs directories.
 config.excludes = ['Inputs']
 
-if config.host_os not in ['Darwin', 'FreeBSD', 'Linux']:
+if config.host_os not in ['Darwin', 'FreeBSD', 'Linux', 'Windows']:
   config.unsupported = True
