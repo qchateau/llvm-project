@@ -178,6 +178,8 @@ class Preprocessor {
   IdentifierInfo *Ident__is_target_vendor;         // __is_target_vendor
   IdentifierInfo *Ident__is_target_os;             // __is_target_os
   IdentifierInfo *Ident__is_target_environment;    // __is_target_environment
+  IdentifierInfo *Ident__is_target_variant_os;
+  IdentifierInfo *Ident__is_target_variant_environment;
   IdentifierInfo *Ident__FLT_EVAL_METHOD__;        // __FLT_EVAL_METHOD
 
   // Weak, only valid (and set) while InMacroArgs is true.
@@ -1373,6 +1375,11 @@ public:
   StringRef getLastMacroWithSpelling(SourceLocation Loc,
                                      ArrayRef<TokenValue> Tokens) const;
 
+  /// Get the predefines for this processor.
+  /// Used by some third-party tools to inspect and add predefines (see
+  /// https://github.com/llvm/llvm-project/issues/57483).
+  const std::string &getPredefines() const { return Predefines; }
+
   /// Set the predefines for this Preprocessor.
   ///
   /// These predefines are automatically injected when parsing the main file.
@@ -2544,7 +2551,7 @@ public:
   /// Find the module that owns the source or header file that
   /// \p Loc points to. If the location is in a file that was included
   /// into a module, or is outside any module, returns nullptr.
-  Module *getModuleForLocation(SourceLocation Loc);
+  Module *getModuleForLocation(SourceLocation Loc, bool AllowTextual);
 
   /// We want to produce a diagnostic at location IncLoc concerning an
   /// unreachable effect at location MLoc (eg, where a desired entity was

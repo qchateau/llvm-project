@@ -18,6 +18,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/DialectInterface.h"
+#include "mlir/IR/OpImplementation.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/Twine.h"
 
@@ -37,10 +38,6 @@ public:
 
   /// Emit an error to the reader.
   virtual InFlightDiagnostic emitError(const Twine &msg = {}) = 0;
-
-  //===--------------------------------------------------------------------===//
-  // IR
-  //===--------------------------------------------------------------------===//
 
   /// Read out a list of elements, invoking the provided callback for each
   /// element. The callback function may be in any of the following forms:
@@ -71,6 +68,10 @@ public:
     return success();
   }
 
+  //===--------------------------------------------------------------------===//
+  // IR
+  //===--------------------------------------------------------------------===//
+
   /// Read a reference to the given attribute.
   virtual LogicalResult readAttribute(Attribute &result) = 0;
   template <typename T>
@@ -78,14 +79,14 @@ public:
     return readList(attrs, [this](T &attr) { return readAttribute(attr); });
   }
   template <typename T>
-  LogicalResult parseAttribute(T &result) {
+  LogicalResult readAttribute(T &result) {
     Attribute baseResult;
-    if (failed(parseAttribute(baseResult)))
+    if (failed(readAttribute(baseResult)))
       return failure();
     if ((result = baseResult.dyn_cast<T>()))
       return success();
-    return emitError() << "expected attribute of type: "
-                       << llvm::getTypeName<T>() << ", but got: " << baseResult;
+    return emitError() << "expected " << llvm::getTypeName<T>()
+                       << ", but got: " << baseResult;
   }
 
   /// Read a reference to the given type.
@@ -94,17 +95,60 @@ public:
   LogicalResult readTypes(SmallVectorImpl<T> &types) {
     return readList(types, [this](T &type) { return readType(type); });
   }
+  template <typename T>
+  LogicalResult readType(T &result) {
+    Type baseResult;
+    if (failed(readType(baseResult)))
+      return failure();
+    if ((result = baseResult.dyn_cast<T>()))
+      return success();
+    return emitError() << "expected " << llvm::getTypeName<T>()
+                       << ", but got: " << baseResult;
+  }
+
+  /// Read a handle to a dialect resource.
+  template <typename ResourceT>
+  FailureOr<ResourceT> readResourceHandle() {
+    FailureOr<AsmDialectResourceHandle> handle = readResourceHandle();
+    if (failed(handle))
+      return failure();
+    if (auto *result = dyn_cast<ResourceT>(&*handle))
+      return std::move(*result);
+    return emitError() << "provided resource handle differs from the "
+                          "expected resource type";
+  }
 
   //===--------------------------------------------------------------------===//
   // Primitives
   //===--------------------------------------------------------------------===//
 
   /// Read a variable width integer.
-  // TODO: Add a signed variant when necessary.
   virtual LogicalResult readVarInt(uint64_t &result) = 0;
+
+  /// Read a signed variable width integer.
+  virtual LogicalResult readSignedVarInt(int64_t &result) = 0;
+  LogicalResult readSignedVarInts(SmallVectorImpl<int64_t> &result) {
+    return readList(result,
+                    [this](int64_t &value) { return readSignedVarInt(value); });
+  }
+
+  /// Read an APInt that is known to have been encoded with the given width.
+  virtual FailureOr<APInt> readAPIntWithKnownWidth(unsigned bitWidth) = 0;
+
+  /// Read an APFloat that is known to have been encoded with the given
+  /// semantics.
+  virtual FailureOr<APFloat>
+  readAPFloatWithKnownSemantics(const llvm::fltSemantics &semantics) = 0;
 
   /// Read a string from the bytecode.
   virtual LogicalResult readString(StringRef &result) = 0;
+
+  /// Read a blob from the bytecode.
+  virtual LogicalResult readBlob(ArrayRef<char> &result) = 0;
+
+private:
+  /// Read a handle to a dialect resource.
+  virtual FailureOr<AsmDialectResourceHandle> readResourceHandle() = 0;
 };
 
 //===----------------------------------------------------------------------===//
@@ -147,20 +191,48 @@ public:
     writeList(types, [this](T type) { writeType(type); });
   }
 
+  /// Write the given handle to a dialect resource.
+  virtual void
+  writeResourceHandle(const AsmDialectResourceHandle &resource) = 0;
+
   //===--------------------------------------------------------------------===//
   // Primitives
   //===--------------------------------------------------------------------===//
 
   /// Write a variable width integer to the output stream. This should be the
   /// preferred method for emitting integers whenever possible.
-  // TODO: Add a signed variant when necessary.
   virtual void writeVarInt(uint64_t value) = 0;
+
+  /// Write a signed variable width integer to the output stream. This should be
+  /// the preferred method for emitting signed integers whenever possible.
+  virtual void writeSignedVarInt(int64_t value) = 0;
+  void writeSignedVarInts(ArrayRef<int64_t> value) {
+    writeList(value, [this](int64_t value) { writeSignedVarInt(value); });
+  }
+
+  /// Write an APInt to the bytecode stream whose bitwidth will be known
+  /// externally at read time. This method is useful for encoding APInt values
+  /// when the width is known via external means, such as via a type. This
+  /// method should generally only be invoked if you need an APInt, otherwise
+  /// use the varint methods above. APInt values are generally encoded using
+  /// zigzag encoding, to enable more efficient encodings for negative values.
+  virtual void writeAPIntWithKnownWidth(const APInt &value) = 0;
+
+  /// Write an APFloat to the bytecode stream whose semantics will be known
+  /// externally at read time. This method is useful for encoding APFloat values
+  /// when the semantics are known via external means, such as via a type.
+  virtual void writeAPFloatWithKnownSemantics(const APFloat &value) = 0;
 
   /// Write a string to the bytecode, which is owned by the caller and is
   /// guaranteed to not die before the end of the bytecode process. This should
   /// only be called if such a guarantee can be made, such as when the string is
   /// owned by an attribute or type.
   virtual void writeOwnedString(StringRef str) = 0;
+
+  /// Write a blob to the bytecode, which is owned by the caller and is
+  /// guaranteed to not die before the end of the bytecode process. The blob is
+  /// written as-is, with no additional compression or compaction.
+  virtual void writeOwnedBlob(ArrayRef<char> blob) = 0;
 };
 
 //===----------------------------------------------------------------------===//

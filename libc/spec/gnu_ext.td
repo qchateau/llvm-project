@@ -130,12 +130,42 @@ def GnuExtensions : StandardSpec<"GNUExtensions"> {
       ]
   >;
 
+  HeaderSpec SendFile = HeaderSpec<
+      "sys/sendfile.h",
+      [], // Macros
+      [OffTType, SizeTType, SSizeTType,], // Types
+      [], // Enumerations
+      [
+          FunctionSpec<
+              "sendfile",
+              RetValSpec<SSizeTType>,
+              [ArgSpec<IntType>, ArgSpec<IntType>, ArgSpec<OffTPtr>, ArgSpec<SizeTType>]
+          >,
+      ]
+  >;
+
+  HeaderSpec UniStd = HeaderSpec<
+    "unistd.h",
+    [], // Macros
+    [], // Types
+    [], // Enumerations
+    [
+        FunctionSpec<
+            "dup2",
+            RetValSpec<IntType>,
+            [ArgSpec<IntType>, ArgSpec<IntType>, ArgSpec<IntType>]
+        >,
+    ]
+  >;
+
   let Headers = [
     CType,
     FEnv,
     Math,
     PThread,
+    SendFile,
     StdIO,
     String,
+    UniStd,
   ];
 }

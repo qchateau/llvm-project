@@ -351,12 +351,6 @@ Tool *ToolChain::getOffloadBundler() const {
   return OffloadBundler.get();
 }
 
-Tool *ToolChain::getOffloadWrapper() const {
-  if (!OffloadWrapper)
-    OffloadWrapper.reset(new tools::OffloadWrapper(*this));
-  return OffloadWrapper.get();
-}
-
 Tool *ToolChain::getOffloadPackager() const {
   if (!OffloadPackager)
     OffloadPackager.reset(new tools::OffloadPackager(*this));
@@ -406,8 +400,6 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
   case Action::OffloadUnbundlingJobClass:
     return getOffloadBundler();
 
-  case Action::OffloadWrapperJobClass:
-    return getOffloadWrapper();
   case Action::OffloadPackagerJobClass:
     return getOffloadPackager();
   case Action::LinkerWrapperJobClass:
@@ -1107,7 +1099,7 @@ void ToolChain::AddHIPIncludeArgs(const ArgList &DriverArgs,
                                   ArgStringList &CC1Args) const {}
 
 llvm::SmallVector<ToolChain::BitCodeLibraryInfo, 12>
-ToolChain::getHIPDeviceLibs(const ArgList &DriverArgs) const {
+ToolChain::getDeviceLibs(const ArgList &DriverArgs) const {
   return {};
 }
 

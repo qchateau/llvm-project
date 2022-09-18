@@ -619,13 +619,16 @@ void BinaryFunction::print(raw_ostream &OS, std::string Annotation,
   // Dump new exception ranges for the function.
   if (!CallSites.empty()) {
     OS << "EH table:\n";
-    for (const CallSite &CSI : CallSites) {
-      OS << "  [" << *CSI.Start << ", " << *CSI.End << ") landing pad : ";
-      if (CSI.LP)
-        OS << *CSI.LP;
-      else
-        OS << "0";
-      OS << ", action : " << CSI.Action << '\n';
+    for (const FunctionFragment &FF : getLayout().fragments()) {
+      for (const auto &FCSI : getCallSites(FF.getFragmentNum())) {
+        const CallSite &CSI = FCSI.second;
+        OS << "  [" << *CSI.Start << ", " << *CSI.End << ") landing pad : ";
+        if (CSI.LP)
+          OS << *CSI.LP;
+        else
+          OS << "0";
+        OS << ", action : " << CSI.Action << '\n';
+      }
     }
     OS << '\n';
   }
@@ -1745,6 +1748,43 @@ void BinaryFunction::postProcessJumpTables() {
   TakenBranches.erase(NewEnd, TakenBranches.end());
 }
 
+bool BinaryFunction::validateExternallyReferencedOffsets() {
+  SmallPtrSet<MCSymbol *, 4> JTTargets;
+  for (const JumpTable *JT : llvm::make_second_range(JumpTables))
+    JTTargets.insert(JT->Entries.begin(), JT->Entries.end());
+
+  bool HasUnclaimedReference = false;
+  for (uint64_t Destination : ExternallyReferencedOffsets) {
+    // Ignore __builtin_unreachable().
+    if (Destination == getSize())
+      continue;
+    // Ignore constant islands
+    if (isInConstantIsland(Destination + getAddress()))
+      continue;
+
+    if (BinaryBasicBlock *BB = getBasicBlockAtOffset(Destination)) {
+      // Check if the externally referenced offset is a recognized jump table
+      // target.
+      if (JTTargets.contains(BB->getLabel()))
+        continue;
+
+      if (opts::Verbosity >= 1) {
+        errs() << "BOLT-WARNING: unclaimed data to code reference (possibly "
+               << "an unrecognized jump table entry) to " << BB->getName()
+               << " in " << *this << "\n";
+      }
+      auto L = BC.scopeLock();
+      addEntryPoint(*BB);
+    } else {
+      errs() << "BOLT-WARNING: unknown data to code reference to offset "
+             << Twine::utohexstr(Destination) << " in " << *this << "\n";
+      setIgnored();
+    }
+    HasUnclaimedReference = true;
+  }
+  return !HasUnclaimedReference;
+}
+
 bool BinaryFunction::postProcessIndirectBranches(
     MCPlusBuilder::AllocatorIdTy AllocId) {
   auto addUnknownControlFlow = [&](BinaryBasicBlock &BB) {
@@ -1824,13 +1864,9 @@ bool BinaryFunction::postProcessIndirectBranches(
       // If this block contains an epilogue code and has an indirect branch,
       // then most likely it's a tail call. Otherwise, we cannot tell for sure
       // what it is and conservatively reject the function's CFG.
-      bool IsEpilogue = false;
-      for (const MCInst &Instr : BB) {
-        if (BC.MIB->isLeave(Instr) || BC.MIB->isPop(Instr)) {
-          IsEpilogue = true;
-          break;
-        }
-      }
+      bool IsEpilogue = llvm::any_of(BB, [&](const MCInst &Instr) {
+        return BC.MIB->isLeave(Instr) || BC.MIB->isPop(Instr);
+      });
       if (IsEpilogue) {
         BC.MIB->convertJmpToTailCall(Instr);
         BB.removeAllSuccessors();
@@ -1868,6 +1904,14 @@ bool BinaryFunction::postProcessIndirectBranches(
 
   if (HasFixedIndirectBranch)
     return false;
+
+  // Validate that all data references to function offsets are claimed by
+  // recognized jump tables. Register externally referenced blocks as entry
+  // points.
+  if (!opts::StrictMode && hasInternalReference()) {
+    if (!validateExternallyReferencedOffsets())
+      return false;
+  }
 
   if (HasUnknownControlFlow && !BC.HasRelocations)
     return false;
@@ -4423,12 +4467,14 @@ void BinaryFunction::printLoopInfo(raw_ostream &OS) const {
   OS << "\n";
 
   std::stack<BinaryLoop *> St;
-  for_each(*BLI, [&](BinaryLoop *L) { St.push(L); });
+  for (BinaryLoop *L : *BLI)
+    St.push(L);
   while (!St.empty()) {
     BinaryLoop *L = St.top();
     St.pop();
 
-    for_each(*L, [&](BinaryLoop *Inner) { St.push(Inner); });
+    for (BinaryLoop *Inner : *L)
+      St.push(Inner);
 
     if (!hasValidProfile())
       continue;

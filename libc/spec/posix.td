@@ -32,8 +32,6 @@ def POSIX : StandardSpec<"POSIX"> {
   ConstType ConstRestrictedCharPtr = ConstType<RestrictedCharPtr>;
 
   NamedType ModeTType = NamedType<"mode_t">;
-  NamedType OffTType = NamedType<"off_t">;
-  NamedType SSizeTType = NamedType<"ssize_t">;
 
   NamedType PThreadAttrTType = NamedType<"pthread_attr_t">;
   PtrType PThreadAttrTPtr = PtrType<PThreadAttrTType>;
@@ -264,9 +262,29 @@ def POSIX : StandardSpec<"POSIX"> {
     [], // Enumerations
     [
         FunctionSpec<
+          "access",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstCharPtr>, ArgSpec<IntType>]
+        >,
+        FunctionSpec<
           "chdir",
           RetValSpec<IntType>,
           [ArgSpec<ConstCharPtr>]
+        >,
+        FunctionSpec<
+          "dup",
+          RetValSpec<IntType>,
+          [ArgSpec<IntType>]
+        >,
+        FunctionSpec<
+          "dup2",
+          RetValSpec<IntType>,
+          [ArgSpec<IntType>, ArgSpec<IntType>]
+        >,
+        FunctionSpec<
+          "dup3",
+          RetValSpec<IntType>,
+          [ArgSpec<IntType>, ArgSpec<IntType>, ArgSpec<IntType>]
         >,
         FunctionSpec<
           "fchdir",
@@ -284,6 +302,11 @@ def POSIX : StandardSpec<"POSIX"> {
           [ArgSpec<IntType>]
         >,
         FunctionSpec<
+          "ftruncate",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstCharPtr>, ArgSpec<OffTType>]
+        >,
+        FunctionSpec<
           "link",
           RetValSpec<IntType>,
           [ArgSpec<ConstCharPtr>, ArgSpec<ConstCharPtr>]
@@ -297,6 +320,16 @@ def POSIX : StandardSpec<"POSIX"> {
           "lseek",
           RetValSpec<OffTType>,
           [ArgSpec<IntType>, ArgSpec<OffTType>, ArgSpec<IntType>]
+        >,
+        FunctionSpec<
+          "pread",
+          RetValSpec<SSizeTType>,
+          [ArgSpec<IntType>, ArgSpec<VoidPtr>, ArgSpec<SizeTType>, ArgSpec<OffTType>]
+        >,
+        FunctionSpec<
+          "pwrite",
+          RetValSpec<SSizeTType>,
+          [ArgSpec<IntType>, ArgSpec<ConstVoidPtr>, ArgSpec<SizeTType>, ArgSpec<OffTType>]
         >,
         FunctionSpec<
           "read",
@@ -327,6 +360,11 @@ def POSIX : StandardSpec<"POSIX"> {
           "symlinkat",
           RetValSpec<IntType>,
           [ArgSpec<IntType>, ArgSpec<ConstCharPtr>, ArgSpec<IntType>, ArgSpec<ConstCharPtr>]
+        >,
+        FunctionSpec<
+          "truncate",
+          RetValSpec<IntType>,
+          [ArgSpec<IntType>, ArgSpec<OffTType>]
         >,
         FunctionSpec<
           "unlink",
@@ -427,6 +465,29 @@ def POSIX : StandardSpec<"POSIX"> {
     ]
   >;
 
+  NamedType RLimTType = NamedType<"rlim_t">;
+  NamedType StructRLimitType = NamedType<"struct rlimit">;
+  PtrType StructRLimitPtr = PtrType<StructRLimitType>;
+  ConstType ConstStructRLimitPtr = ConstType<StructRLimitType>;
+  HeaderSpec SysResource = HeaderSpec<
+    "sys/resource.h",
+    [], // Macros
+    [RLimTType, StructRLimitType], // Types
+    [], // Enumerations
+    [
+        FunctionSpec<
+          "getrlimit",
+          RetValSpec<IntType>,
+          [ArgSpec<StructRLimitPtr>]
+        >,
+        FunctionSpec<
+          "setrlimit",
+          RetValSpec<IntType>,
+          [ArgSpec<ConstStructRLimitPtr>]
+        >,
+    ]
+  >;
+
   HeaderSpec SysStat = HeaderSpec<
     "sys/stat.h",
     [], // Macros
@@ -457,6 +518,22 @@ def POSIX : StandardSpec<"POSIX"> {
             "mkdirat",
             RetValSpec<IntType>,
             [ArgSpec<IntType>, ArgSpec<ConstCharPtr>, ArgSpec<ModeTType>]
+        >,
+    ]
+  >;
+
+  NamedType StructUtsName = NamedType<"struct utsname">;
+  PtrType StructUtsNamePtr = PtrType<StructUtsName>;
+  HeaderSpec SysUtsName = HeaderSpec<
+    "sys/utsname.h",
+    [], // Macros
+    [StructUtsName], // Types
+    [], // Enumerations
+    [
+        FunctionSpec<
+            "uname",
+            RetValSpec<IntType>,
+            [ArgSpec<StructUtsNamePtr>]
         >,
     ]
   >;
@@ -726,7 +803,9 @@ def POSIX : StandardSpec<"POSIX"> {
     StdIO,
     StdLib,
     SysMMan,
+    SysResource,
     SysStat,
+    SysUtsName,
     UniStd,
     String
   ];

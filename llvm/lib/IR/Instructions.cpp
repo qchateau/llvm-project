@@ -14,6 +14,7 @@
 #include "llvm/IR/Instructions.h"
 #include "LLVMContextImpl.h"
 #include "llvm/ADT/None.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Attributes.h"
@@ -2511,7 +2512,7 @@ static bool isReplicationMaskWithParams(ArrayRef<int> Mask,
 bool ShuffleVectorInst::isReplicationMask(ArrayRef<int> Mask,
                                           int &ReplicationFactor, int &VF) {
   // undef-less case is trivial.
-  if (none_of(Mask, [](int MaskElt) { return MaskElt == UndefMaskElem; })) {
+  if (!llvm::is_contained(Mask, UndefMaskElem)) {
     ReplicationFactor =
         Mask.take_while([](int MaskElt) { return MaskElt == 0; }).size();
     if (ReplicationFactor == 0 || Mask.size() % ReplicationFactor != 0)
@@ -2567,6 +2568,37 @@ bool ShuffleVectorInst::isReplicationMask(int &ReplicationFactor,
   ReplicationFactor = ShuffleMask.size() / VF;
 
   return isReplicationMaskWithParams(ShuffleMask, ReplicationFactor, VF);
+}
+
+bool ShuffleVectorInst::isOneUseSingleSourceMask(ArrayRef<int> Mask, int VF) {
+  if (VF <= 0 || Mask.size() < static_cast<unsigned>(VF) ||
+      Mask.size() % VF != 0)
+    return false;
+  for (unsigned K = 0, Sz = Mask.size(); K < Sz; K += VF) {
+    ArrayRef<int> SubMask = Mask.slice(K, VF);
+    if (all_of(SubMask, [](int Idx) { return Idx == UndefMaskElem; }))
+      continue;
+    SmallBitVector Used(VF, false);
+    for_each(SubMask, [&Used, VF](int Idx) {
+      if (Idx != UndefMaskElem && Idx < VF)
+        Used.set(Idx);
+    });
+    if (!Used.all())
+      return false;
+  }
+  return true;
+}
+
+/// Return true if this shuffle mask is a replication mask.
+bool ShuffleVectorInst::isOneUseSingleSourceMask(int VF) const {
+  // Not possible to express a shuffle mask for a scalable vector for this
+  // case.
+  if (isa<ScalableVectorType>(getType()))
+    return false;
+  if (!isSingleSourceMask(ShuffleMask))
+    return false;
+
+  return isOneUseSingleSourceMask(ShuffleMask, VF);
 }
 
 //===----------------------------------------------------------------------===//

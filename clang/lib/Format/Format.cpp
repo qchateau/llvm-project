@@ -1869,7 +1869,7 @@ private:
         std::string Brace;
         if (Token->BraceCount < 0) {
           assert(Token->BraceCount == -1);
-          Brace = '{';
+          Brace = "\n{";
         } else {
           Brace = '\n' + std::string(Token->BraceCount, '}');
         }
@@ -1902,31 +1902,30 @@ private:
   void removeBraces(SmallVectorImpl<AnnotatedLine *> &Lines,
                     tooling::Replacements &Result) {
     const auto &SourceMgr = Env.getSourceManager();
-    bool EndsWithComment = false;
-    for (AnnotatedLine *Line : Lines) {
+    const auto End = Lines.end();
+    for (auto I = Lines.begin(); I != End; ++I) {
+      const auto Line = *I;
       removeBraces(Line->Children, Result);
-      if (Line->Affected) {
-        for (FormatToken *Token = Line->First; Token && !Token->Finalized;
-             Token = Token->Next) {
-          if (!Token->Optional)
-            continue;
-          assert(Token->isOneOf(tok::l_brace, tok::r_brace));
-          assert(Token->Previous || Token == Line->First);
-          const FormatToken *Next = Token->Next;
-          assert(Next || Token == Line->Last);
-          const auto Start =
-              (!Token->Previous && EndsWithComment) ||
-                      (Next && !(Next->isOneOf(tok::kw_else, tok::comment) &&
-                                 Next->NewlinesBefore > 0))
-                  ? Token->Tok.getLocation()
-                  : Token->WhitespaceRange.getBegin();
-          const auto Range =
-              CharSourceRange::getCharRange(Start, Token->Tok.getEndLoc());
-          cantFail(Result.add(tooling::Replacement(SourceMgr, Range, "")));
-        }
+      if (!Line->Affected)
+        continue;
+      const auto NextLine = I + 1 == End ? nullptr : I[1];
+      for (auto Token = Line->First; Token && !Token->Finalized;
+           Token = Token->Next) {
+        if (!Token->Optional)
+          continue;
+        assert(Token->isOneOf(tok::l_brace, tok::r_brace));
+        auto Next = Token->Next;
+        assert(Next || Token == Line->Last);
+        if (!Next && NextLine)
+          Next = NextLine->First;
+        const auto Start =
+            Next && Next->NewlinesBefore == 0 && Next->isNot(tok::eof)
+                ? Token->Tok.getLocation()
+                : Token->WhitespaceRange.getBegin();
+        const auto Range =
+            CharSourceRange::getCharRange(Start, Token->Tok.getEndLoc());
+        cantFail(Result.add(tooling::Replacement(SourceMgr, Range, "")));
       }
-      assert(Line->Last);
-      EndsWithComment = Line->Last->is(tok::comment);
     }
   }
 };
@@ -2540,7 +2539,7 @@ private:
         "UIView",
     };
 
-    for (auto Line : AnnotatedLines) {
+    for (auto *Line : AnnotatedLines) {
       if (Line->First && (Line->First->TokenText.startswith("#") ||
                           Line->First->TokenText == "__pragma" ||
                           Line->First->TokenText == "_Pragma")) {
@@ -3274,13 +3273,13 @@ reformat(const FormatStyle &Style, StringRef Code,
 
     if (Style.InsertBraces) {
       Passes.emplace_back([&](const Environment &Env) {
-        return BracesInserter(Env, Expanded).process();
+        return BracesInserter(Env, Expanded).process(/*SkipAnnotation=*/true);
       });
     }
 
     if (Style.RemoveBracesLLVM) {
       Passes.emplace_back([&](const Environment &Env) {
-        return BracesRemover(Env, Expanded).process();
+        return BracesRemover(Env, Expanded).process(/*SkipAnnotation=*/true);
       });
     }
 
@@ -3306,7 +3305,7 @@ reformat(const FormatStyle &Style, StringRef Code,
   if (Style.isJavaScript() &&
       Style.JavaScriptQuotes != FormatStyle::JSQS_Leave) {
     Passes.emplace_back([&](const Environment &Env) {
-      return JavaScriptRequoter(Env, Expanded).process();
+      return JavaScriptRequoter(Env, Expanded).process(/*SkipAnnotation=*/true);
     });
   }
 

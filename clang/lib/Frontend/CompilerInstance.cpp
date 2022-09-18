@@ -12,6 +12,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/LangStandard.h"
 #include "clang/Basic/SourceManager.h"
@@ -25,6 +26,7 @@
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/Frontend/LogDiagnosticPrinter.h"
+#include "clang/Frontend/SARIFDiagnosticPrinter.h"
 #include "clang/Frontend/SerializedDiagnosticPrinter.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
@@ -346,6 +348,8 @@ CompilerInstance::createDiagnostics(DiagnosticOptions *Opts,
   // implementing -verify.
   if (Client) {
     Diags->setClient(Client, ShouldOwnClient);
+  } else if (Opts->getFormat() == DiagnosticOptions::SARIF) {
+    Diags->setClient(new SARIFDiagnosticPrinter(llvm::errs(), Opts));
   } else
     Diags->setClient(new TextDiagnosticPrinter(llvm::errs(), Opts));
 
@@ -777,12 +781,7 @@ void CompilerInstance::clearOutputFiles(bool EraseFiles) {
       continue;
     }
 
-    // If '-working-directory' was passed, the output filename should be
-    // relative to that.
-    SmallString<128> NewOutFile(OF.Filename);
-    FileMgr->FixupRelativePath(NewOutFile);
-
-    llvm::Error E = OF.File->keep(NewOutFile);
+    llvm::Error E = OF.File->keep(OF.Filename);
     if (!E)
       continue;
 
@@ -844,6 +843,15 @@ CompilerInstance::createOutputFileImpl(StringRef OutputPath, bool Binary,
                                        bool CreateMissingDirectories) {
   assert((!CreateMissingDirectories || UseTemporary) &&
          "CreateMissingDirectories is only allowed when using temporary files");
+
+  // If '-working-directory' was passed, the output filename should be
+  // relative to that.
+  Optional<SmallString<128>> AbsPath;
+  if (OutputPath != "-" && !llvm::sys::path::is_absolute(OutputPath)) {
+    AbsPath.emplace(OutputPath);
+    FileMgr->FixupRelativePath(*AbsPath);
+    OutputPath = *AbsPath;
+  }
 
   std::unique_ptr<llvm::raw_fd_ostream> OS;
   Optional<StringRef> OSFile;

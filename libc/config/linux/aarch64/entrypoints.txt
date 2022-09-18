@@ -93,12 +93,16 @@ set(TARGET_LIBC_ENTRYPOINTS
     libc.src.stdlib.free
 
     # stdio.h entrypoints
+    libc.src.stdio.remove
     libc.src.stdio.sprintf
     libc.src.stdio.snprintf
 
     # sys/mman.h entrypoints
     libc.src.sys.mman.mmap
     libc.src.sys.mman.munmap
+
+    # sys/sendfile entrypoints
+    libc.src.sys.sendfile.sendfile
 
     # sys/stat.h entrypoints
     libc.src.sys.stat.chmod
@@ -107,20 +111,31 @@ set(TARGET_LIBC_ENTRYPOINTS
     libc.src.sys.stat.mkdir
     libc.src.sys.stat.mkdirat
 
+    # sys/utsname.h entrypoints
+    libc.src.sys.utsname.uname
+
     # unistd.h entrypoints
+    libc.src.unistd.access
     libc.src.unistd.chdir
     libc.src.unistd.close
+    libc.src.unistd.dup
+    libc.src.unistd.dup2
+    libc.src.unistd.dup3
     libc.src.unistd.fchdir
     libc.src.unistd.fsync
+    libc.src.unistd.ftruncate
     libc.src.unistd.link
     libc.src.unistd.linkat
     libc.src.unistd.lseek
+    libc.src.unistd.pread
+    libc.src.unistd.pwrite
     libc.src.unistd.read
     libc.src.unistd.readlink
     libc.src.unistd.readlinkat
     libc.src.unistd.rmdir
     libc.src.unistd.symlink
     libc.src.unistd.symlinkat
+    libc.src.unistd.truncate
     libc.src.unistd.unlink
     libc.src.unistd.unlinkat
     libc.src.unistd.write
@@ -144,6 +159,10 @@ set(TARGET_LIBM_ENTRYPOINTS
     libc.src.fenv.feupdateenv
 
     # math.h entrypoints
+    libc.src.math.acosf
+    libc.src.math.asinf
+    libc.src.math.atanf
+    libc.src.math.atanhf    
     libc.src.math.copysign
     libc.src.math.copysignf
     libc.src.math.copysignl

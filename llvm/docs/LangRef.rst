@@ -5813,7 +5813,7 @@ The current supported opcode vocabulary is limited:
 - ``DW_OP_LLVM_arg, N`` is used in debug intrinsics that refer to more than one
   value, such as one that calculates the sum of two registers. This is always
   used in combination with an ordered list of values, such that
-  ``DW_OP_LLVM_arg, N`` refers to the ``N``th element in that list. For
+  ``DW_OP_LLVM_arg, N`` refers to the ``N``\ :sup:`th` element in that list. For
   example, ``!DIExpression(DW_OP_LLVM_arg, 0, DW_OP_LLVM_arg, 1, DW_OP_minus,
   DW_OP_stack_value)`` used with the list ``(%reg1, %reg2)`` would evaluate to
   ``%reg1 - reg2``. This list of values should be provided by the containing
@@ -14467,6 +14467,8 @@ trapping or setting ``errno``.
 When specified with the fast-math-flag 'afn', the result may be approximated
 using a less accurate calculation.
 
+.. _int_fabs:
+
 '``llvm.fabs.*``' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -19129,6 +19131,54 @@ Examples:
       ;; For all lanes below %evl, %r is lane-wise equivalent to %also.r
 
       %t = fneg <4 x float> %a
+      %also.r = select <4 x i1> %mask, <4 x float> %t, <4 x float> undef
+
+
+.. _int_vp_fabs:
+
+'``llvm.vp.fabs.*``' Intrinsics
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+This is an overloaded intrinsic.
+
+::
+
+      declare <16 x float>  @llvm.vp.fabs.v16f32 (<16 x float> <op>, <16 x i1> <mask>, i32 <vector_length>)
+      declare <vscale x 4 x float>  @llvm.vp.fabs.nxv4f32 (<vscale x 4 x float> <op>, <vscale x 4 x i1> <mask>, i32 <vector_length>)
+      declare <256 x double>  @llvm.vp.fabs.v256f64 (<256 x double> <op>, <256 x i1> <mask>, i32 <vector_length>)
+
+Overview:
+"""""""""
+
+Predicated floating-point absolute value of a vector of floating-point values.
+
+
+Arguments:
+""""""""""
+
+The first operand and the result have the same vector of floating-point type.
+The second operand is the vector mask and has the same number of elements as the
+result vector type. The third operand is the explicit vector length of the
+operation.
+
+Semantics:
+""""""""""
+
+The '``llvm.vp.fabs``' intrinsic performs floating-point absolute value
+(:ref:`fabs <int_fabs>`) of the first vector operand on each enabled lane.  The
+result on disabled lanes is undefined.
+
+Examples:
+"""""""""
+
+.. code-block:: llvm
+
+      %r = call <4 x float> @llvm.vp.fabs.v4f32(<4 x float> %a, <4 x i1> %mask, i32 %evl)
+      ;; For all lanes below %evl, %r is lane-wise equivalent to %also.r
+
+      %t = call <4 x float> @llvm.fabs.v4f32(<4 x float> %a)
       %also.r = select <4 x i1> %mask, <4 x float> %t, <4 x float> undef
 
 

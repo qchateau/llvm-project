@@ -1427,7 +1427,7 @@ public:
     if (!CurrentToken)
       return LT_Invalid;
     NonTemplateLess.clear();
-    if (CurrentToken->is(tok::hash)) {
+    if (!Line.InMacroBody && CurrentToken->is(tok::hash)) {
       // We were not yet allowed to use C++17 optional when this was being
       // written. So we used LT_Invalid to mark that the line is not a
       // preprocessor directive.
@@ -1924,7 +1924,7 @@ private:
           !Current.Next->isBinaryOperator() &&
           !Current.Next->isOneOf(tok::semi, tok::colon, tok::l_brace,
                                  tok::comma, tok::period, tok::arrow,
-                                 tok::coloncolon)) {
+                                 tok::coloncolon, tok::kw_noexcept)) {
         if (FormatToken *AfterParen = Current.MatchingParen->Next) {
           // Make sure this isn't the return type of an Obj-C block declaration
           if (AfterParen->isNot(tok::caret)) {
@@ -2153,7 +2153,7 @@ private:
       // before the parentheses, this is unlikely to be a cast.
       if (LeftOfParens->Tok.getIdentifierInfo() &&
           !LeftOfParens->isOneOf(Keywords.kw_in, tok::kw_return, tok::kw_case,
-                                 tok::kw_delete)) {
+                                 tok::kw_delete, tok::kw_throw)) {
         return false;
       }
 
@@ -2371,6 +2371,9 @@ private:
     if (PrevToken->is(tok::r_brace) && Tok.is(tok::star) &&
         !PrevToken->MatchingParen)
       return TT_PointerOrReference;
+
+    if (PrevToken->endsSequence(tok::r_square, tok::l_square, tok::kw_delete))
+      return TT_UnaryOperator;
 
     if (PrevToken->Tok.isLiteral() ||
         PrevToken->isOneOf(tok::r_paren, tok::r_square, tok::kw_true,
@@ -3312,6 +3315,10 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
       !Right.isOneOf(tok::semi, tok::r_paren, tok::hashhash)) {
     return true;
   }
+  if (Left.is(tok::kw_throw) && Right.is(tok::l_paren) && Right.MatchingParen &&
+      Right.MatchingParen->is(TT_CastRParen)) {
+    return true;
+  }
   if (Style.isJson() && Left.is(tok::string_literal) && Right.is(tok::colon))
     return false;
   if (Left.is(Keywords.kw_assert) && Style.Language == FormatStyle::LK_Java)
@@ -4234,7 +4241,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return false;
   }
   if (Right.is(tok::less) && Left.isNot(tok::l_paren) &&
-      Line.startsWith(tok::hash)) {
+      Line.Type == LT_ImportStatement) {
     return true;
   }
   if (Right.is(TT_TrailingUnaryOperator))

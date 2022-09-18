@@ -309,14 +309,10 @@ static bool foldVGPRCopyIntoRegSequence(MachineInstr &MI,
   bool IsAGPR = TRI->isAGPRClass(DstRC);
 
   for (unsigned I = 1, N = MI.getNumOperands(); I != N; I += 2) {
-    Register SrcReg = MI.getOperand(I).getReg();
-    unsigned SrcSubReg = MI.getOperand(I).getSubReg();
-
-    const TargetRegisterClass *SrcRC = MRI.getRegClass(SrcReg);
+    const TargetRegisterClass *SrcRC =
+        TRI->getRegClassForOperandReg(MRI, MI.getOperand(I));
     assert(TRI->isSGPRClass(SrcRC) &&
            "Expected SGPR REG_SEQUENCE to only have SGPR inputs");
-
-    SrcRC = TRI->getSubRegClass(SrcRC, SrcSubReg);
     const TargetRegisterClass *NewSrcRC = TRI->getEquivalentVGPRClass(SrcRC);
 
     Register TmpReg = MRI.createVirtualRegister(NewSrcRC);
@@ -575,7 +571,7 @@ static bool hoistAndMergeSGPRInits(unsigned Reg,
   // Try to schedule SGPR initializations as early as possible in the MBB.
   for (auto &Init : Inits) {
     auto &Defs = Init.second;
-    for (auto MI : Defs) {
+    for (auto *MI : Defs) {
       auto MBB = MI->getParent();
       MachineInstr &BoundaryMI = *getFirstNonPrologue(MBB, TII);
       MachineBasicBlock::reverse_iterator B(BoundaryMI);
@@ -924,7 +920,7 @@ void SIFixSGPRCopies::analyzeVGPRToSGPRCopy(V2SCopyInfo& Info) {
         for (auto &U : MRI->use_instructions(Reg))
           Users.push_back(&U);
     }
-    for (auto U : Users) {
+    for (auto *U : Users) {
       if (TII->isSALU(*U))
         Info.SChain.insert(U);
       AnalysisWorklist.push_back(U);
@@ -992,10 +988,8 @@ void SIFixSGPRCopies::lowerVGPR2SGPRCopies(MachineFunction &MF) {
 
   SmallSet<MachineInstr *, 4> OutOfOrderProcessedCopies;
 
-  for (MachineFunction::iterator BI = MF.begin(), BE = MF.end(); BI != BE;
-       ++BI) {
-    MachineBasicBlock *MBB = &*BI;
-    for (MachineBasicBlock::iterator I = MBB->begin(), E = MBB->end(); I != E;
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineBasicBlock::iterator I = MBB.begin(), E = MBB.end(); I != E;
          ++I) {
       MachineInstr *MI = &*I;
       if (!needProcessing(*MI))
@@ -1012,7 +1006,7 @@ void SIFixSGPRCopies::lowerVGPR2SGPRCopies(MachineFunction &MF) {
               const TargetRegisterClass *DestRC =
                   TRI->getEquivalentSGPRClass(SrcRC);
               Register NewDst = MRI->createVirtualRegister(DestRC);
-              MachineBasicBlock *BlockToInsertCopy = MBB;
+              MachineBasicBlock *BlockToInsertCopy = &MBB;
               MachineBasicBlock::iterator PointToInsertCopy = I;
               if (MI->isPHI()) {
                 BlockToInsertCopy =
@@ -1111,8 +1105,8 @@ void SIFixSGPRCopies::lowerVGPR2SGPRCopies(MachineFunction &MF) {
     Register DstReg = MI->getOperand(0).getReg();
     Register SrcReg = MI->getOperand(1).getReg();
     unsigned SubReg = MI->getOperand(1).getSubReg();
-    const TargetRegisterClass *SrcRC = TRI->getRegClassForReg(*MRI, SrcReg);
-    SrcRC = TRI->getSubRegClass(SrcRC, SubReg);
+    const TargetRegisterClass *SrcRC =
+        TRI->getRegClassForOperandReg(*MRI, MI->getOperand(1));
     size_t SrcSize = TRI->getRegSizeInBits(*SrcRC);
     if (SrcSize == 16) {
       // HACK to handle possible 16bit VGPR source
