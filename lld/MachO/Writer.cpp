@@ -902,10 +902,10 @@ static void sortSegmentsAndSections() {
 
       if (!isecPriorities.empty()) {
         if (auto *merged = dyn_cast<ConcatOutputSection>(osec)) {
-          llvm::stable_sort(merged->inputs,
-                            [&](InputSection *a, InputSection *b) {
-                              return isecPriorities[a] > isecPriorities[b];
-                            });
+          llvm::stable_sort(
+              merged->inputs, [&](InputSection *a, InputSection *b) {
+                return isecPriorities.lookup(a) > isecPriorities.lookup(b);
+              });
         }
       }
     }
@@ -959,6 +959,12 @@ template <class LP> void Writer::createOutputSections() {
       if (osec->name == section_names::ehFrame &&
           segname == segment_names::text)
         osec->align = target->wordSize;
+
+      // MC keeps the default 1-byte alignment for __thread_vars, even though it
+      // contains pointers that are fixed up by dyld, which requires proper
+      // alignment.
+      if (isThreadLocalVariables(osec->flags))
+        osec->align = std::max<uint32_t>(osec->align, target->wordSize);
 
       getOrCreateOutputSegment(segname)->addOutputSection(osec);
     }
@@ -1179,8 +1185,9 @@ template <class LP> void Writer::run() {
   if (in.initOffsets->isNeeded())
     in.initOffsets->setUp();
 
-  // Do not proceed if there was an undefined symbol.
+  // Do not proceed if there were undefined or duplicate symbols.
   reportPendingUndefinedSymbols();
+  reportPendingDuplicateSymbols();
   if (errorCount())
     return;
 

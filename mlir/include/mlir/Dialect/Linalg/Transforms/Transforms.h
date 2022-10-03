@@ -125,6 +125,21 @@ bool areElementwiseOpsFusable(OpOperand *fusedOperand);
 FailureOr<Operation *> fuseElementwiseOps(RewriterBase &rewriter,
                                           OpOperand *fusedOperand);
 
+/// Maps the top level `scf.foreach_thread` op to GPU Thread Blocks. Mapping is
+/// one-to-one and the induction variables of `scf.foreach_thread` are rewritten
+/// to gpu.block_id according to the thread_dim_apping attribute. Dynamic,
+/// `scf.foreach_thread` trip counts are currently not supported. Dynamic block
+/// dim sizes are currently not supported.
+LogicalResult rewriteTopLevelForeachThreadToGpuBlocks(
+    RewriterBase &rewriter, scf::ForeachThreadOp foreachThreadOp,
+    function_ref<void(RewriterBase &, scf::ForeachThreadOp,
+                      SmallVector<Value> &)>
+        blockIdGenerator,
+    SmallVector<int64_t> &gridDims);
+
+/// Finds the top level scf::ForeachThreadOp of given target.
+FailureOr<scf::ForeachThreadOp> findTopLevelForeachThreadOp(Operation *target);
+
 /// Searches `scf.foreach_thread` ops nested under `target` and maps each such
 /// op to GPU threads. Mapping is one-to-one and the induction variables of
 /// `scf.foreach_thread` are rewritten to gpu.thread_id according to the
@@ -1348,14 +1363,22 @@ public:
   }
 };
 
-/// Function signature to control reduction splitting. This returns a pair
-/// containing a ratio and a dimension index. The ratio is used to split the
-/// reduction dimension. The dimension index is used to control where the extra
-/// dimension is added to the intermediate tensor shape. If the ratio value is
-/// less or equal to 1 then nothing will be done.
+/// Split Reduction options.
+struct SplitReductionOptions {
+  // Ratio used to split the reduction dimension.  If the ratio is <= 1, nothing
+  // will be done.
+  int64_t ratio = 0;
+  // Index where the extra dimension is added to the intermediate tensor shape.
+  unsigned index = 0;
+  // If the inner dimension after splitting is parallel or reduction.
+  bool innerParallel = false;
+};
+
+/// Function signature to control reduction splitting. This returns
+/// `SplitReductionOptions`.
 // TODO: don't use unsigned unless doing bit manipulation.
 using ControlSplitReductionFn =
-    std::function<std::pair<int64_t, unsigned>(LinalgOp op)>;
+    std::function<SplitReductionOptions(LinalgOp op)>;
 
 /// Patterns to apply `splitReduction` below.
 void populateSplitReductionPattern(

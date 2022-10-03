@@ -198,9 +198,6 @@ check-generated-output)
 
     # Reject code with trailing whitespace
     ! grep -rn '[[:blank:]]$' libcxx/include libcxx/src libcxx/test libcxx/benchmarks || false
-
-    # Reject patches that introduce dependency cycles in the headers.
-    python3 libcxx/utils/graph_header_deps.py >/dev/null
 ;;
 generic-cxx03)
     clean
@@ -494,13 +491,6 @@ bootstrapping-build)
 
     echo "--- Installing libc++ and libc++abi to a fake location"
     ${NINJA} -C "${BUILD_DIR}" install-runtimes
-;;
-legacy-test-config)
-    clean
-    generate-cmake -DLIBCXX_TEST_CONFIG="legacy.cfg.in" \
-                   -DLIBCXXABI_TEST_CONFIG="${MONOREPO_ROOT}/libcxxabi/test/lit.site.cfg.in" \
-                   -DLIBUNWIND_TEST_CONFIG="${MONOREPO_ROOT}/libunwind/test/lit.site.cfg.in"
-    check-runtimes
 ;;
 legacy-project-build)
     clean

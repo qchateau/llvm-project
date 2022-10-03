@@ -474,6 +474,9 @@ public:
 
   bool isInStdNamespace() const;
 
+  // Return true if this is a FileContext Decl.
+  bool isFileContextDecl() const;
+
   ASTContext &getASTContext() const LLVM_READONLY;
 
   /// Helper to get the language options from the ASTContext.
@@ -1664,10 +1667,14 @@ class DeclContext {
 
     /// Indicates if the function uses Floating Point Constrained Intrinsics
     uint64_t UsesFPIntrin : 1;
+
+    // Indicates this function is a constrained friend, where the constraint
+    // refers to an enclosing template for hte purposes of [temp.friend]p9.
+    uint64_t FriendConstraintRefersToEnclosingTemplate : 1;
   };
 
   /// Number of non-inherited bits in FunctionDeclBitfields.
-  enum { NumFunctionDeclBits = 28 };
+  enum { NumFunctionDeclBits = 29 };
 
   /// Stores the bits used by CXXConstructorDecl. If modified
   /// NumCXXConstructorDeclBits and the accessor
@@ -1679,12 +1686,12 @@ class DeclContext {
     /// For the bits in FunctionDeclBitfields.
     uint64_t : NumFunctionDeclBits;
 
-    /// 23 bits to fit in the remaining available space.
+    /// 22 bits to fit in the remaining available space.
     /// Note that this makes CXXConstructorDeclBitfields take
     /// exactly 64 bits and thus the width of NumCtorInitializers
     /// will need to be shrunk if some bit is added to NumDeclContextBitfields,
     /// NumFunctionDeclBitfields or CXXConstructorDeclBitfields.
-    uint64_t NumCtorInitializers : 20;
+    uint64_t NumCtorInitializers : 19;
     uint64_t IsInheritingConstructor : 1;
 
     /// Whether this constructor has a trail-allocated explicit specifier.

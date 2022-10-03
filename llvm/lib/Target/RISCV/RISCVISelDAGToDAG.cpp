@@ -1068,8 +1068,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     // might allow it to be compressed.
     bool IsANDIOrZExt =
         isInt<12>(C2) ||
-        (C2 == UINT64_C(0xFFFF) &&
-         (Subtarget->hasStdExtZbb() || Subtarget->hasStdExtZbp())) ||
+        (C2 == UINT64_C(0xFFFF) && Subtarget->hasStdExtZbb()) ||
         (C2 == UINT64_C(0xFFFFFFFF) && Subtarget->hasStdExtZba());
     if (IsANDIOrZExt && (isInt<12>(N1C->getSExtValue()) || !N0.hasOneUse()))
       break;
@@ -2247,8 +2246,6 @@ bool RISCVDAGToDAGISel::hasAllNBitUsers(SDNode *Node, unsigned Bits) const {
           Node->getOpcode() == ISD::MUL || Node->getOpcode() == ISD::SHL ||
           Node->getOpcode() == ISD::SRL || Node->getOpcode() == ISD::AND ||
           Node->getOpcode() == ISD::SIGN_EXTEND_INREG ||
-          Node->getOpcode() == RISCVISD::GREV ||
-          Node->getOpcode() == RISCVISD::GORC ||
           isa<ConstantSDNode>(Node)) &&
          "Unexpected opcode");
 
@@ -2369,6 +2366,7 @@ bool RISCVDAGToDAGISel::selectVLOp(SDValue N, SDValue &VL) {
 bool RISCVDAGToDAGISel::selectVSplat(SDValue N, SDValue &SplatVal) {
   if (N.getOpcode() != RISCVISD::VMV_V_X_VL || !N.getOperand(0).isUndef())
     return false;
+  assert(N.getNumOperands() == 3 && "Unexpected number of operands");
   SplatVal = N.getOperand(1);
   return true;
 }
@@ -2382,6 +2380,7 @@ static bool selectVSplatSimmHelper(SDValue N, SDValue &SplatVal,
   if (N.getOpcode() != RISCVISD::VMV_V_X_VL || !N.getOperand(0).isUndef() ||
       !isa<ConstantSDNode>(N.getOperand(1)))
     return false;
+  assert(N.getNumOperands() == 3 && "Unexpected number of operands");
 
   int64_t SplatImm =
       cast<ConstantSDNode>(N.getOperand(1))->getSExtValue();
@@ -2510,8 +2509,6 @@ bool RISCVDAGToDAGISel::doPeepholeSExtW(SDNode *N) {
   case RISCV::SUBW:
   case RISCV::MULW:
   case RISCV::SLLIW:
-  case RISCV::GREVIW:
-  case RISCV::GORCIW:
     // Result is already sign extended just remove the sext.w.
     // NOTE: We only handle the nodes that are selected with hasAllWUsers.
     ReplaceUses(N, N0.getNode());
@@ -2671,6 +2668,20 @@ bool RISCVDAGToDAGISel::performCombineVMergeAndVOps(SDNode *N, bool IsTA) {
   // The last operand of unmasked intrinsic should be sew or chain.
   bool HasChainOp =
       True.getOperand(True.getNumOperands() - 1).getValueType() == MVT::Other;
+
+  if (HasChainOp) {
+    // Avoid creating cycles in the DAG. We must ensure that none of the other
+    // operands depend on True through it's Chain.
+    SmallVector<const SDNode *, 4> LoopWorklist;
+    SmallPtrSet<const SDNode *, 16> Visited;
+    LoopWorklist.push_back(False.getNode());
+    LoopWorklist.push_back(Mask.getNode());
+    LoopWorklist.push_back(VL.getNode());
+    if (SDNode *Glued = N->getGluedNode())
+      LoopWorklist.push_back(Glued);
+    if (SDNode::hasPredecessorHelper(True.getNode(), Visited, LoopWorklist))
+      return false;
+  }
 
   // Need True has same VL with N.
   unsigned TrueVLIndex = True.getNumOperands() - HasChainOp - 2;

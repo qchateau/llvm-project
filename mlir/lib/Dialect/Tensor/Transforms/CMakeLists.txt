@@ -14,7 +14,8 @@ add_mlir_dialect_library(MLIRTensorTransforms
 
   LINK_LIBS PUBLIC
   MLIRAffineDialect
-  MLIRArithmeticDialect
+  MLIRAffineUtils
+  MLIRArithDialect
   MLIRBufferizationDialect
   MLIRBufferizationTransforms
   MLIRIR

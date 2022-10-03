@@ -50,6 +50,9 @@ Improvements and New Features
 
 Deprecations and Removals
 -------------------------
+- ``unary_function`` and ``binary_function`` are no longer provided in C++17 and newer Standard modes.
+  They can be re-enabled with ``_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION``.
+
 - Several incidental transitive includes have been removed from libc++. Those
   includes are removed based on the language version used. Incidental transitive
   inclusions of the following headers have been removed:
@@ -69,6 +72,10 @@ Deprecations and Removals
   incidental transitive includes more aggressively, in particular regardless
   of the language version in use.
 
+- The legacy testing system for libc++, libc++abi and libunwind has been removed.
+  All known clients have been migrated to the new configuration system, but please
+  reach out to the libc++ developers if you find something missing in the new
+  configuration system.
 
 Upcoming Deprecations and Removals
 ----------------------------------
@@ -82,6 +89,12 @@ API Changes
 - ``_LIBCPP_ENABLE_NODISCARD`` and ``_LIBCPP_DISABLE_NODISCARD_AFTER_CXX17`` are no longer respected.
   Any standards-required ``[[nodiscard]]`` applications in C++20 are now always enabled. Any extended applications
   are now enabled by default and can be disabled by defining ``_LIBCPP_DISABLE_NODISCARD_EXT``.
+
+- ``_LIBCPP_VERSION`` was previously defined to e.g. ``15001`` to represent LLVM 15.0.01, but this value had been
+  left undocumented. Starting with LLVM 16, ``_LIBCPP_VERSION`` will contain the version of LLVM represented as
+  ``XXYYZZ``. In other words, ``_LIBCPP_VERSION`` is gaining a digit. This should not be an issue for existing
+  code, since using e.g. ``_LIBCPP_VERSION > 15000`` will still give the right answer now that ``_LIBCPP_VERSION``
+  is defined as e.g. ``160000`` (with one more digit).
 
 ABI Affecting Changes
 ---------------------

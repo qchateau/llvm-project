@@ -247,6 +247,12 @@ def : Flag<["-"], "fno-slp-vectorize-aggressive">, Group<clang_ignored_legacy_op
 def mmpx : Flag<["-"], "mmpx">, Group<clang_ignored_legacy_options_Group>;
 def mno_mpx : Flag<["-"], "mno-mpx">, Group<clang_ignored_legacy_options_Group>;
 
+// Retired with clang-16.0, to provide a deprecation period; it should
+// be removed in Clang 18 or later.
+def enable_trivial_var_init_zero : Flag<["-"], "enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang">,
+  Flags<[CC1Option, CoreOption, NoArgumentUnused]>,
+  Group<clang_ignored_legacy_options_Group>;
+
 // Group that ignores all gcc optimizations that won't be implemented
 def clang_ignored_gcc_optimization_f_Group : OptionGroup<
   "<clang_ignored_gcc_optimization_f_Group>">, Group<f_Group>, Flags<[Ignored]>;
@@ -652,11 +658,12 @@ def A : JoinedOrSeparate<["-"], "A">, Flags<[RenderJoined]>, Group<gfortran_Grou
 def B : JoinedOrSeparate<["-"], "B">, MetaVarName<"<prefix>">,
     HelpText<"Search $prefix$file for executables, libraries, and data files. "
     "If $prefix is a directory, search $prefix/$file">;
+def gcc_install_dir_EQ : Joined<["--"], "gcc-install-dir=">,
+  HelpText<"Use GCC installation in the specified directory. The directory ends with path components like 'lib{,32,64}/gcc{,-cross}/$triple/$version'. "
+  "Note: executables (e.g. ld) used by the compiler are not overridden by the selected GCC installation">;
 def gcc_toolchain : Joined<["--"], "gcc-toolchain=">, Flags<[NoXarchOption]>,
-  HelpText<"Search for GCC installation in the specified directory on targets which commonly use GCC. "
-  "The directory usually contains 'lib{,32,64}/gcc{,-cross}/$triple' and 'include'. If specified, "
-  "sysroot is skipped for GCC detection. Note: executables (e.g. ld) used by the compiler are not "
-  "overridden by the selected GCC installation">;
+  HelpText<"Specify a directory where Clang can find 'include' and 'lib{,32,64}/gcc{,-cross}/$triple/$version'. "
+  "Clang will use the GCC installation with the largest version">;
 def CC : Flag<["-"], "CC">, Flags<[CC1Option]>, Group<Preprocessor_Group>,
     HelpText<"Include comments from within macros in preprocessed output">,
     MarshallingInfoFlag<PreprocessorOutputOpts<"ShowMacroComments">>;
@@ -823,10 +830,10 @@ def Xopenmp_target : Separate<["-"], "Xopenmp-target">, Group<CompileOnly_Group>
 def Xopenmp_target_EQ : JoinedAndSeparate<["-"], "Xopenmp-target=">, Group<CompileOnly_Group>,
   HelpText<"Pass <arg> to the target offloading toolchain identified by <triple>.">,
   MetaVarName<"<triple> <arg>">;
-def z : Separate<["-"], "z">, Flags<[LinkerInput, RenderAsInput]>,
+def z : Separate<["-"], "z">, Flags<[LinkerInput]>,
   HelpText<"Pass -z <arg> to the linker">, MetaVarName<"<arg>">,
   Group<Link_Group>;
-def offload_link : Flag<["--"], "offload-link">, Group<Link_Group>,
+def offload_link : Flag<["--", "-"], "offload-link">, Group<Link_Group>,
   HelpText<"Use the new offloading linker to perform the link job.">;
 def Xlinker : Separate<["-"], "Xlinker">, Flags<[LinkerInput, RenderAsInput]>,
   HelpText<"Pass <arg> to the linker">, MetaVarName<"<arg>">,
@@ -848,8 +855,8 @@ def autocomplete : Joined<["--"], "autocomplete=">;
 def bind__at__load : Flag<["-"], "bind_at_load">;
 def bundle__loader : Separate<["-"], "bundle_loader">;
 def bundle : Flag<["-"], "bundle">;
-def b : JoinedOrSeparate<["-"], "b">, Flags<[LinkerInput, RenderAsInput]>,
-  HelpText<"Pass -b <arg> to the linker on AIX (only).">, MetaVarName<"<arg>">,
+def b : JoinedOrSeparate<["-"], "b">, Flags<[LinkerInput]>,
+  HelpText<"Pass -b <arg> to the linker on AIX">, MetaVarName<"<arg>">,
   Group<Link_Group>;
 // OpenCL-only Options
 def cl_opt_disable : Flag<["-"], "cl-opt-disable">, Group<opencl_Group>, Flags<[CC1Option]>,
@@ -899,8 +906,9 @@ def cl_ext_EQ : CommaJoined<["-"], "cl-ext=">, Group<opencl_Group>, Flags<[CC1Op
 def client__name : JoinedOrSeparate<["-"], "client_name">;
 def combine : Flag<["-", "--"], "combine">, Flags<[NoXarchOption, Unsupported]>;
 def compatibility__version : JoinedOrSeparate<["-"], "compatibility_version">;
-def config : Separate<["--"], "config">, Flags<[NoXarchOption, CoreOption]>,
-  HelpText<"Specifies configuration file">;
+def config : Joined<["--"], "config=">, Flags<[NoXarchOption, CoreOption]>, MetaVarName<"<file>">,
+  HelpText<"Specify configuration file">;
+def : Separate<["--"], "config">, Alias<config>;
 def no_default_config : Flag<["--"], "no-default-config">, Flags<[NoXarchOption, CoreOption]>,
   HelpText<"Disable loading default configuration files">;
 def config_system_dir_EQ : Joined<["--"], "config-system-dir=">, Flags<[NoXarchOption, CoreOption, HelpHidden]>,
@@ -925,7 +933,7 @@ def cuda_include_ptx_EQ : Joined<["--"], "cuda-include-ptx=">, Flags<[NoXarchOpt
   HelpText<"Include PTX for the following GPU architecture (e.g. sm_35) or 'all'. May be specified more than once.">;
 def no_cuda_include_ptx_EQ : Joined<["--"], "no-cuda-include-ptx=">, Flags<[NoXarchOption]>,
   HelpText<"Do not include PTX for the following GPU architecture (e.g. sm_35) or 'all'. May be specified more than once.">;
-def offload_arch_EQ : Joined<["--"], "offload-arch=">, Flags<[NoXarchOption]>,
+def offload_arch_EQ : Joined<["--", "-"], "offload-arch=">, Flags<[NoXarchOption]>,
   HelpText<"CUDA offloading device architecture (e.g. sm_35), or HIP offloading target ID in the form of a "
            "device architecture followed by target ID features delimited by a colon. Each target ID feature "
            "is a pre-defined string followed by a plus or minus sign (e.g. gfx908:xnack+:sramecc-).  May be "
@@ -937,7 +945,7 @@ def hip_link : Flag<["--"], "hip-link">,
   HelpText<"Link clang-offload-bundler bundles for HIP">;
 def no_hip_rt: Flag<["-"], "no-hip-rt">,
   HelpText<"Do not link against HIP runtime libraries">;
-def no_offload_arch_EQ : Joined<["--"], "no-offload-arch=">, Flags<[NoXarchOption]>,
+def no_offload_arch_EQ : Joined<["--", "-"], "no-offload-arch=">, Flags<[NoXarchOption]>,
   HelpText<"Remove CUDA/HIP offloading device architecture (e.g. sm_35, gfx906) from the list of devices to compile for. "
            "'all' resets the list to its default value.">;
 def emit_static_lib : Flag<["--"], "emit-static-lib">,
@@ -1179,13 +1187,18 @@ defm autolink : BoolFOption<"autolink",
 // In the future this option will be supported by other offloading
 // languages and accept other values such as CPU/GPU architectures,
 // offload kinds and target aliases.
-def offload_EQ : CommaJoined<["--"], "offload=">, Flags<[NoXarchOption]>,
+def offload_EQ : CommaJoined<["--", "-"], "offload=">, Flags<[NoXarchOption]>,
   HelpText<"Specify comma-separated list of offloading target triples (CUDA and HIP only)">;
 
 // C++ Coroutines TS
 defm coroutines_ts : BoolFOption<"coroutines-ts",
   LangOpts<"Coroutines">, Default<cpp20.KeyPath>,
   PosFlag<SetTrue, [CC1Option], "Enable support for the C++ Coroutines TS">,
+  NegFlag<SetFalse>>;
+
+defm coro_aligned_allocation : BoolFOption<"coro-aligned-allocation",
+  LangOpts<"CoroAlignedAllocation">, DefaultFalse,
+  PosFlag<SetTrue, [CC1Option], "Prefer aligned allocation for C++ Coroutines">,
   NegFlag<SetFalse>>;
 
 defm experimental_library : BoolFOption<"experimental-library",
@@ -1761,7 +1774,7 @@ def sanitize_address_destructor_EQ
 defm sanitize_memory_param_retval
     : BoolFOption<"sanitize-memory-param-retval",
         CodeGenOpts<"SanitizeMemoryParamRetval">,
-        DefaultFalse,
+        DefaultTrue,
         PosFlag<SetTrue, [CC1Option], "Enable">, NegFlag<SetFalse, [], "Disable">,
         BothFlags<[], " detection of uninitialized parameters and return values">>;
 //// Note: This flag was introduced when it was necessary to distinguish between
@@ -2221,6 +2234,8 @@ Specify Visual Studio C runtime library. "static" and "static_dbg" correspond
 to the cl flags /MT and /MTd which use the multithread, static version. "dll"
 and "dll_dbg" correspond to the cl flags /MD and /MDd which use the multithread,
 dll version.}]>;
+def fms_omit_default_lib : Joined<["-"], "fms-omit-default-lib">,
+  Group<f_Group>, Flags<[NoXarchOption, CoreOption]>;
 defm delayed_template_parsing : BoolFOption<"delayed-template-parsing",
   LangOpts<"DelayedTemplateParsing">, DefaultFalse,
   PosFlag<SetTrue, [CC1Option], "Parse templated function definitions at the end of the translation unit">,
@@ -2611,15 +2626,15 @@ defm openmp_optimistic_collapse : BoolFOption<"openmp-optimistic-collapse",
   PosFlag<SetTrue, [CC1Option]>, NegFlag<SetFalse>, BothFlags<[NoArgumentUnused, HelpHidden]>>;
 def static_openmp: Flag<["-"], "static-openmp">,
   HelpText<"Use the static host OpenMP runtime while linking.">;
-def offload_new_driver : Flag<["--"], "offload-new-driver">, Flags<[CC1Option]>, Group<f_Group>,
+def offload_new_driver : Flag<["--", "-"], "offload-new-driver">, Flags<[CC1Option]>, Group<f_Group>,
   MarshallingInfoFlag<LangOpts<"OffloadingNewDriver">>, HelpText<"Use the new driver for offloading compilation.">;
-def no_offload_new_driver : Flag<["--"], "no-offload-new-driver">, Flags<[CC1Option]>, Group<f_Group>,
+def no_offload_new_driver : Flag<["--", "-"], "no-offload-new-driver">, Flags<[CC1Option]>, Group<f_Group>,
   HelpText<"Don't Use the new driver for offloading compilation.">;
-def offload_device_only : Flag<["--"], "offload-device-only">,
+def offload_device_only : Flag<["--", "-"], "offload-device-only">,
   HelpText<"Only compile for the offloading device.">;
-def offload_host_only : Flag<["--"], "offload-host-only">,
+def offload_host_only : Flag<["--", "-"], "offload-host-only">,
   HelpText<"Only compile for the offloading host.">;
-def offload_host_device : Flag<["--"], "offload-host-device">,
+def offload_host_device : Flag<["--", "-"], "offload-host-device">,
   HelpText<"Only compile for the offloading host.">;
 def cuda_device_only : Flag<["--"], "cuda-device-only">, Alias<offload_device_only>,
   HelpText<"Compile CUDA code for device only">;
@@ -2628,10 +2643,10 @@ def cuda_host_only : Flag<["--"], "cuda-host-only">, Alias<offload_host_only>,
 def cuda_compile_host_device : Flag<["--"], "cuda-compile-host-device">, Alias<offload_host_device>,
   HelpText<"Compile CUDA code for both host and device (default). Has no "
            "effect on non-CUDA compilations.">;
-def fopenmp_new_driver : Flag<["-"], "fopenmp-new-driver">, Flags<[CC1Option]>, Group<f_Group>,
+def fopenmp_new_driver : Flag<["-"], "fopenmp-new-driver">, Flags<[HelpHidden]>,
   HelpText<"Use the new driver for OpenMP offloading.">;
-def fno_openmp_new_driver : Flag<["-"], "fno-openmp-new-driver">, Flags<[CC1Option]>, Group<Action_Group>,
-  Alias<no_offload_new_driver>, HelpText<"Don't use the new driver for OpenMP offloading.">;
+def fno_openmp_new_driver : Flag<["-"], "fno-openmp-new-driver">, Flags<[HelpHidden]>,
+  HelpText<"Don't use the new driver for OpenMP offloading.">;
 def fno_optimize_sibling_calls : Flag<["-"], "fno-optimize-sibling-calls">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Disable tail call optimization, keeping the call stack accurate">,
   MarshallingInfoFlag<CodeGenOpts<"DisableTailCalls">>;
@@ -2782,9 +2797,6 @@ def ftrivial_auto_var_init : Joined<["-"], "ftrivial-auto-var-init=">, Group<f_G
   NormalizedValuesScope<"LangOptions::TrivialAutoVarInitKind">,
   NormalizedValues<["Uninitialized", "Zero", "Pattern"]>,
   MarshallingInfoEnum<LangOpts<"TrivialAutoVarInit">, "Uninitialized">;
-def enable_trivial_var_init_zero : Flag<["-"], "enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang">,
-  Flags<[CC1Option, CoreOption, NoArgumentUnused]>,
-  HelpText<"Trivial automatic variable initialization to zero is only here for benchmarks, it'll eventually be removed, and I'm OK with that because I'm only using it to benchmark">;
 def ftrivial_auto_var_init_stop_after : Joined<["-"], "ftrivial-auto-var-init-stop-after=">, Group<f_Group>,
   Flags<[CC1Option, CoreOption]>, HelpText<"Stop initializing trivial automatic stack variables after the specified number of instances">,
   MarshallingInfoInt<LangOpts<"TrivialAutoVarInitStopAfter">>;
@@ -3209,6 +3221,12 @@ def gsimple_template_names_EQ
       HelpText<"Use simple template names in DWARF, or include the full "
                "template name with a modified prefix for validation">,
       Values<"simple,mangled">, Flags<[CC1Option, NoDriverOption]>;
+def gsrc_hash_EQ : Joined<["-"], "gsrc-hash=">,
+  Group<g_flags_Group>, Flags<[CC1Option, NoDriverOption]>,
+  Values<"md5,sha1,sha256">,
+  NormalizedValues<["DSH_MD5", "DSH_SHA1", "DSH_SHA256"]>,
+  NormalizedValuesScope<"CodeGenOptions">,
+  MarshallingInfoEnum<CodeGenOpts<"DebugSrcHash">, "DSH_MD5">;
 def gno_simple_template_names : Flag<["-"], "gno-simple-template-names">,
                                 Group<g_flags_Group>;
 def ggnu_pubnames : Flag<["-"], "ggnu-pubnames">, Group<g_flags_Group>, Flags<[CC1Option]>;
@@ -4047,7 +4065,7 @@ def nostdincxx : Flag<["-"], "nostdinc++">, Flags<[CC1Option]>,
 def nostdlib : Flag<["-"], "nostdlib">, Group<Link_Group>;
 def nostdlibxx : Flag<["-"], "nostdlib++">;
 def object : Flag<["-"], "object">;
-def o : JoinedOrSeparate<["-"], "o">, Flags<[NoXarchOption, RenderAsInput,
+def o : JoinedOrSeparate<["-"], "o">, Flags<[NoXarchOption,
   CC1Option, CC1AsOption, FC1Option, FlangOption]>,
   HelpText<"Write output to <file>">, MetaVarName<"<file>">,
   MarshallingInfoString<FrontendOpts<"OutputFile">>;
@@ -6161,10 +6179,6 @@ def fnative_half_arguments_and_returns : Flag<["-"], "fnative-half-arguments-and
   HelpText<"Use the native __fp16 type for arguments and returns (and skip ABI-specific lowering)">,
   MarshallingInfoFlag<LangOpts<"NativeHalfArgsAndReturns">>,
   ImpliedByAnyOf<[open_cl.KeyPath, render_script.KeyPath, hlsl.KeyPath]>;
-def fallow_half_arguments_and_returns : Flag<["-"], "fallow-half-arguments-and-returns">,
-  HelpText<"Allow function arguments and returns of type half">,
-  MarshallingInfoFlag<LangOpts<"HalfArgsAndReturns">>,
-  ImpliedByAnyOf<[fnative_half_arguments_and_returns.KeyPath]>;
 def fdefault_calling_conv_EQ : Joined<["-"], "fdefault-calling-conv=">,
   HelpText<"Set default calling convention">,
   Values<"cdecl,fastcall,stdcall,vectorcall,regcall">,
@@ -6649,6 +6663,15 @@ def _SLASH_Zc_wchar_t_ : CLFlag<"Zc:wchar_t-">,
   HelpText<"Disable C++ builtin type wchar_t">;
 def _SLASH_Z7 : CLFlag<"Z7">,
   HelpText<"Enable CodeView debug information in object files">;
+def _SLASH_ZH_MD5 : CLFlag<"ZH:MD5">,
+  HelpText<"Use MD5 for file checksums in debug info (default)">,
+  Alias<gsrc_hash_EQ>, AliasArgs<["md5"]>;
+def _SLASH_ZH_SHA1 : CLFlag<"ZH:SHA1">,
+  HelpText<"Use SHA1 for file checksums in debug info">,
+  Alias<gsrc_hash_EQ>, AliasArgs<["sha1"]>;
+def _SLASH_ZH_SHA_256 : CLFlag<"ZH:SHA_256">,
+  HelpText<"Use SHA256 for file checksums in debug info">,
+  Alias<gsrc_hash_EQ>, AliasArgs<["sha256"]>;
 def _SLASH_Zi : CLFlag<"Zi">, Alias<_SLASH_Z7>,
   HelpText<"Like /Z7">;
 def _SLASH_Zp : CLJoined<"Zp">,
@@ -6672,6 +6695,8 @@ def _SLASH_tune : CLCompileJoined<"tune:">,
 def _SLASH_QIntel_jcc_erratum : CLFlag<"QIntel-jcc-erratum">,
   HelpText<"Align branches within 32-byte boundaries to mitigate the performance impact of the Intel JCC erratum.">,
   Alias<mbranches_within_32B_boundaries>;
+def _SLASH_arm64EC : CLFlag<"arm64EC">,
+  HelpText<"Set build target to arm64ec">;
 
 // Non-aliases:
 
@@ -6778,7 +6803,7 @@ def _SLASH_volatile_ms  : Option<["/", "-"], "volatile:ms", KIND_FLAG>,
   HelpText<"Volatile loads and stores have acquire and release semantics">;
 def _SLASH_clang : CLJoined<"clang:">,
   HelpText<"Pass <arg> to the clang driver">, MetaVarName<"<arg>">;
-def _SLASH_Zl : CLFlag<"Zl">,
+def _SLASH_Zl : CLFlag<"Zl">, Alias<fms_omit_default_lib>,
   HelpText<"Do not let object file auto-link default libraries">;
 
 def _SLASH_Yc : CLJoined<"Yc">,
@@ -6834,9 +6859,6 @@ def _SLASH_Zc_forScope : CLIgnoredFlag<"Zc:forScope">;
 def _SLASH_Zc_inline : CLIgnoredFlag<"Zc:inline">;
 def _SLASH_Zc_rvalueCast : CLIgnoredFlag<"Zc:rvalueCast">;
 def _SLASH_Zc_ternary : CLIgnoredFlag<"Zc:ternary">;
-def _SLASH_ZH_MD5 : CLIgnoredFlag<"ZH:MD5">;
-def _SLASH_ZH_SHA1 : CLIgnoredFlag<"ZH:SHA1">;
-def _SLASH_ZH_SHA_256 : CLIgnoredFlag<"ZH:SHA_256">;
 def _SLASH_Zm : CLIgnoredJoined<"Zm">;
 def _SLASH_Zo : CLIgnoredFlag<"Zo">;
 def _SLASH_Zo_ : CLIgnoredFlag<"Zo-">;

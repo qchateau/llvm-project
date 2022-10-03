@@ -448,12 +448,22 @@ static SDValue getCopyFromPartsVector(SelectionDAG &DAG, const SDLoc &DL,
   // Handle cases such as i8 -> <1 x i1>
   EVT ValueSVT = ValueVT.getVectorElementType();
   if (ValueVT.getVectorNumElements() == 1 && ValueSVT != PartEVT) {
-    if (ValueSVT.getSizeInBits() == PartEVT.getSizeInBits())
+    unsigned ValueSize = ValueSVT.getSizeInBits();
+    if (ValueSize == PartEVT.getSizeInBits()) {
       Val = DAG.getNode(ISD::BITCAST, DL, ValueSVT, Val);
-    else
+    } else if (ValueSVT.isFloatingPoint() && PartEVT.isInteger()) {
+      // It's possible a scalar floating point type gets softened to integer and
+      // then promoted to a larger integer. If PartEVT is the larger integer
+      // we need to truncate it and then bitcast to the FP type.
+      assert(ValueSVT.bitsLT(PartEVT) && "Unexpected types");
+      EVT IntermediateType = EVT::getIntegerVT(*DAG.getContext(), ValueSize);
+      Val = DAG.getNode(ISD::TRUNCATE, DL, IntermediateType, Val);
+      Val = DAG.getBitcast(ValueSVT, Val);
+    } else {
       Val = ValueVT.isFloatingPoint()
                 ? DAG.getFPExtendOrRound(Val, DL, ValueSVT)
                 : DAG.getAnyExtOrTrunc(Val, DL, ValueSVT);
+    }
   }
 
   return DAG.getBuildVector(ValueVT, DL, Val);
@@ -679,7 +689,11 @@ static void getCopyToPartsVector(SelectionDAG &DAG, const SDLoc &DL,
       SDValue Widened = widenVectorToPartType(DAG, Val, DL, WidenVT);
       Val = DAG.getAnyExtOrTrunc(Widened, DL, PartVT);
     } else {
-      if (ValueVT.getVectorElementCount().isScalar()) {
+      // Don't extract an integer from a float vector. This can happen if the
+      // FP type gets softened to integer and then promoted. The promotion
+      // prevents it from being picked up by the earlier bitcast case.
+      if (ValueVT.getVectorElementCount().isScalar() &&
+          (!ValueVT.isFloatingPoint() || !PartVT.isInteger())) {
         Val = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, PartVT, Val,
                           DAG.getVectorIdxConstant(0, DL));
       } else {
@@ -1681,12 +1695,7 @@ SDValue SelectionDAGBuilder::getValueImpl(const Value *V) {
       else
         Op = DAG.getConstant(0, getCurSDLoc(), EltVT);
 
-      if (isa<ScalableVectorType>(VecTy))
-        return NodeMap[V] = DAG.getSplatVector(VT, getCurSDLoc(), Op);
-
-      SmallVector<SDValue, 16> Ops;
-      Ops.assign(cast<FixedVectorType>(VecTy)->getNumElements(), Op);
-      return NodeMap[V] = DAG.getBuildVector(VT, getCurSDLoc(), Ops);
+      return NodeMap[V] = DAG.getSplat(VT, getCurSDLoc(), Op);
     }
 
     llvm_unreachable("Unknown vector constant");
@@ -3893,10 +3902,7 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
   if (IsVectorGEP && !N.getValueType().isVector()) {
     LLVMContext &Context = *DAG.getContext();
     EVT VT = EVT::getVectorVT(Context, N.getValueType(), VectorElementCount);
-    if (VectorElementCount.isScalable())
-      N = DAG.getSplatVector(VT, dl, N);
-    else
-      N = DAG.getSplatBuildVector(VT, dl, N);
+    N = DAG.getSplat(VT, dl, N);
   }
 
   for (gep_type_iterator GTI = gep_type_begin(&I), E = gep_type_end(&I);
@@ -3968,10 +3974,7 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
       if (!IdxN.getValueType().isVector() && IsVectorGEP) {
         EVT VT = EVT::getVectorVT(*Context, IdxN.getValueType(),
                                   VectorElementCount);
-        if (VectorElementCount.isScalable())
-          IdxN = DAG.getSplatVector(VT, dl, IdxN);
-        else
-          IdxN = DAG.getSplatBuildVector(VT, dl, IdxN);
+        IdxN = DAG.getSplat(VT, dl, IdxN);
       }
 
       // If the index is smaller or larger than intptr_t, truncate or extend
@@ -4435,16 +4438,16 @@ static bool getUniformBase(const Value *Ptr, SDValue &Base, SDValue &Index,
   if (BasePtr->getType()->isVectorTy() || !IndexVal->getType()->isVectorTy())
     return false;
 
+  uint64_t ScaleVal = DL.getTypeAllocSize(GEP->getResultElementType());
+
+  // Target may not support the required addressing mode.
+  if (ScaleVal != 1 &&
+      !TLI.isLegalScaleForGatherScatter(ScaleVal, ElemSize))
+    return false;
+
   Base = SDB->getValue(BasePtr);
   Index = SDB->getValue(IndexVal);
   IndexType = ISD::SIGNED_SCALED;
-
-  // MGATHER/MSCATTER are only required to support scaling by one or by the
-  // element size. Other scales may be produced using target-specific DAG
-  // combines.
-  uint64_t ScaleVal = DL.getTypeAllocSize(GEP->getResultElementType());
-  if (ScaleVal != ElemSize && ScaleVal != 1)
-    return false;
 
   Scale =
       DAG.getTargetConstant(ScaleVal, SDB->getCurSDLoc(), TLI.getPointerTy(DL));
@@ -4865,6 +4868,8 @@ void SelectionDAGBuilder::visitTargetIntrinsic(const CallInst &I,
 
   // Create the node.
   SDValue Result;
+  // In some cases, custom collection of operands from CallInst I may be needed.
+  TLI.CollectTargetIntrinsicOperands(I, Ops, DAG);
   if (IsTgtIntrinsic) {
     // This is target intrinsic that touches memory
     Result =
@@ -7234,14 +7239,8 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
     SDValue TripCount = getValue(I.getOperand(1));
     auto VecTy = CCVT.changeVectorElementType(ElementVT);
 
-    SDValue VectorIndex, VectorTripCount;
-    if (VecTy.isScalableVector()) {
-      VectorIndex = DAG.getSplatVector(VecTy, sdl, Index);
-      VectorTripCount = DAG.getSplatVector(VecTy, sdl, TripCount);
-    } else {
-      VectorIndex = DAG.getSplatBuildVector(VecTy, sdl, Index);
-      VectorTripCount = DAG.getSplatBuildVector(VecTy, sdl, TripCount);
-    }
+    SDValue VectorIndex = DAG.getSplat(VecTy, sdl, Index);
+    SDValue VectorTripCount = DAG.getSplat(VecTy, sdl, TripCount);
     SDValue VectorStep = DAG.getStepVector(sdl, VecTy);
     SDValue VectorInduction = DAG.getNode(
         ISD::UADDSAT, sdl, VecTy, VectorIndex, VectorStep);
@@ -7296,11 +7295,6 @@ void SelectionDAGBuilder::visitConstrainedFPIntrinsic(
     const ConstrainedFPIntrinsic &FPI) {
   SDLoc sdl = getCurSDLoc();
 
-  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
-  SmallVector<EVT, 4> ValueVTs;
-  ComputeValueVTs(TLI, DAG.getDataLayout(), FPI.getType(), ValueVTs);
-  ValueVTs.push_back(MVT::Other); // Out chain
-
   // We do not need to serialize constrained FP intrinsics against
   // each other or against (nonvolatile) loads, so they can be
   // chained like loads.
@@ -7344,7 +7338,9 @@ void SelectionDAGBuilder::visitConstrainedFPIntrinsic(
     }
   };
 
-  SDVTList VTs = DAG.getVTList(ValueVTs);
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+  EVT VT = TLI.getValueType(DAG.getDataLayout(), FPI.getType());
+  SDVTList VTs = DAG.getVTList(VT, MVT::Other);
   fp::ExceptionBehavior EB = *FPI.getExceptionBehavior();
 
   SDNodeFlags Flags;
@@ -7366,8 +7362,7 @@ void SelectionDAGBuilder::visitConstrainedFPIntrinsic(
     Opcode = ISD::STRICT_FMA;
     // Break fmuladd into fmul and fadd.
     if (TM.Options.AllowFPOpFusion == FPOpFusion::Strict ||
-        !TLI.isFMAFasterThanFMulAndFAdd(DAG.getMachineFunction(),
-                                        ValueVTs[0])) {
+        !TLI.isFMAFasterThanFMulAndFAdd(DAG.getMachineFunction(), VT)) {
       Opers.pop_back();
       SDValue Mul = DAG.getNode(ISD::STRICT_FMUL, sdl, VTs, Opers, Flags);
       pushOutChain(Mul, EB);
@@ -7701,6 +7696,25 @@ void SelectionDAGBuilder::visitVectorPredicationIntrinsic(
   case ISD::EXPERIMENTAL_VP_STRIDED_STORE:
     visitVPStridedStore(VPIntrin, OpValues);
     break;
+  case ISD::VP_FMULADD: {
+    assert(OpValues.size() == 5 && "Unexpected number of operands");
+    SDNodeFlags SDFlags;
+    if (auto *FPMO = dyn_cast<FPMathOperator>(&VPIntrin))
+      SDFlags.copyFMF(*FPMO);
+    if (TM.Options.AllowFPOpFusion != FPOpFusion::Strict &&
+        TLI.isFMAFasterThanFMulAndFAdd(DAG.getMachineFunction(), ValueVTs[0])) {
+      setValue(&VPIntrin, DAG.getNode(ISD::VP_FMA, DL, VTs, OpValues, SDFlags));
+    } else {
+      SDValue Mul = DAG.getNode(
+          ISD::VP_FMUL, DL, VTs,
+          {OpValues[0], OpValues[1], OpValues[3], OpValues[4]}, SDFlags);
+      SDValue Add =
+          DAG.getNode(ISD::VP_FADD, DL, VTs,
+                      {Mul, OpValues[2], OpValues[3], OpValues[4]}, SDFlags);
+      setValue(&VPIntrin, Add);
+    }
+    break;
+  }
   }
 }
 
