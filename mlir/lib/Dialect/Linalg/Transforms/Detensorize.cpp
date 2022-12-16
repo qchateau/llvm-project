@@ -55,10 +55,9 @@ bool canBeDetensored(TensorType tensorType) {
 bool shouldBeDetensored(Operation *op, TypeConverter typeConverter) {
   GenericOp genericOp = dyn_cast_or_null<GenericOp>(op);
   return genericOp &&
-         llvm::all_of(
-             genericOp.getInputAndOutputOperands(), [&](OpOperand *opOperand) {
-               return !typeConverter.isLegal(opOperand->get().getType());
-             });
+         llvm::all_of(genericOp->getOpOperands(), [&](OpOperand &opOperand) {
+           return !typeConverter.isLegal(opOperand.get().getType());
+         });
 }
 
 /// A conversion patttern for detensoring `linalg.generic` ops.
@@ -188,7 +187,7 @@ struct LinalgDetensorize
     /// For the following snippet:
     /// ...
     /// ^bb1(%6: tensor<i32>, %9: tensor<i32>):
-    ///   %7 = linalg.init_tensor [] : tensor<i32>
+    ///   %7 = tensor.empty() : tensor<i32>
     ///   %8 = linalg.generic #attrs
     ///     ins(%6, %6 : tensor<i32>, tensor<i32>)
     ///     outs(%7 : tensor<i32>) {

@@ -91,6 +91,7 @@ END-SCRIPT
 #include <errno.h>
 #include <exception>
 #include <execution>
+#include <expected>
 #include <fenv.h>
 #if !defined(_LIBCPP_HAS_NO_FILESYSTEM_LIBRARY)
 #   include <filesystem>
@@ -98,7 +99,7 @@ END-SCRIPT
 #include <float.h>
 #include <format>
 #include <forward_list>
-#if !defined(_LIBCPP_HAS_NO_LOCALIZATION)
+#if !defined(_LIBCPP_HAS_NO_LOCALIZATION) && !defined(_LIBCPP_HAS_NO_FSTREAM)
 #   include <fstream>
 #endif
 #include <functional>
@@ -136,6 +137,7 @@ END-SCRIPT
 #include <map>
 #include <math.h>
 #include <memory>
+#include <memory_resource>
 #if !defined(_LIBCPP_HAS_NO_THREADS)
 #   include <mutex>
 #endif

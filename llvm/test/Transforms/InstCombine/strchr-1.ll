@@ -46,7 +46,7 @@ define void @test_simplify3() {
 
 define void @test_simplify4(i32 %chr) {
 ; CHECK-LABEL: @test_simplify4(
-; CHECK-NEXT:    [[MEMCHR:%.*]] = call ptr @memchr(ptr noundef nonnull @hello, i32 [[CHR:%.*]], i32 14)
+; CHECK-NEXT:    [[MEMCHR:%.*]] = call ptr @memchr(ptr noundef nonnull dereferenceable(1) @hello, i32 [[CHR:%.*]], i32 14)
 ; CHECK-NEXT:    store ptr [[MEMCHR]], ptr @chp, align 4
 ; CHECK-NEXT:    ret void
 ;
@@ -87,7 +87,7 @@ define i1 @test_simplify7(i32 %C) {
 ; CHECK-NEXT:    [[TMP1:%.*]] = trunc i32 [[C:%.*]] to i16
 ; CHECK-NEXT:    [[TMP2:%.*]] = and i16 [[TMP1]], 255
 ; CHECK-NEXT:    [[MEMCHR_BOUNDS:%.*]] = icmp ult i16 [[TMP2]], 16
-; CHECK-NEXT:    [[TMP3:%.*]] = shl i16 1, [[TMP2]]
+; CHECK-NEXT:    [[TMP3:%.*]] = shl nuw i16 1, [[TMP2]]
 ; CHECK-NEXT:    [[TMP4:%.*]] = and i16 [[TMP3]], 9217
 ; CHECK-NEXT:    [[MEMCHR_BITS:%.*]] = icmp ne i16 [[TMP4]], 0
 ; CHECK-NEXT:    [[MEMCHR1:%.*]] = select i1 [[MEMCHR_BOUNDS]], i1 [[MEMCHR_BITS]], i1 false

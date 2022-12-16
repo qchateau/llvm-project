@@ -59,7 +59,7 @@ static MCRegister findScratchNonCalleeSaveRegister(MachineRegisterInfo &MRI,
 static void getVGPRSpillLaneOrTempRegister(MachineFunction &MF,
                                            LivePhysRegs &LiveRegs,
                                            Register &TempSGPR,
-                                           Optional<int> &FrameIndex,
+                                           std::optional<int> &FrameIndex,
                                            bool IsFP) {
   SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
   MachineFrameInfo &FrameInfo = MF.getFrameInfo();
@@ -328,7 +328,7 @@ void SIFrameLowering::emitEntryFunctionFlatScratchInit(
                       AMDGPU::FLAT_SCR_HI)
     .addReg(FlatScrInitLo, RegState::Kill)
     .addImm(8);
-  LShr->getOperand(3).setIsDead(true); // Mark SCC as dead.
+  LShr->getOperand(3).setIsDead(); // Mark SCC as dead.
 }
 
 // Note SGPRSpill stack IDs should only be used for SGPR spilling to VGPRs, not
@@ -773,8 +773,8 @@ void SIFrameLowering::emitPrologue(MachineFunction &MF,
   // turn on all lanes before doing the spill to memory.
   Register ScratchExecCopy;
 
-  Optional<int> FPSaveIndex = FuncInfo->FramePointerSaveIndex;
-  Optional<int> BPSaveIndex = FuncInfo->BasePointerSaveIndex;
+  std::optional<int> FPSaveIndex = FuncInfo->FramePointerSaveIndex;
+  std::optional<int> BPSaveIndex = FuncInfo->BasePointerSaveIndex;
 
   // VGPRs used for SGPR->VGPR spills
   for (const SIMachineFunctionInfo::SGPRSpillVGPR &Reg :
@@ -990,8 +990,8 @@ void SIFrameLowering::emitEpilogue(MachineFunction &MF,
   const Register BasePtrReg =
       TRI.hasBasePointer(MF) ? TRI.getBaseRegister() : Register();
 
-  Optional<int> FPSaveIndex = FuncInfo->FramePointerSaveIndex;
-  Optional<int> BPSaveIndex = FuncInfo->BasePointerSaveIndex;
+  std::optional<int> FPSaveIndex = FuncInfo->FramePointerSaveIndex;
+  std::optional<int> BPSaveIndex = FuncInfo->BasePointerSaveIndex;
 
   if (RoundedSize != 0 && hasFP(MF)) {
     auto Add = BuildMI(MBB, MBBI, DL, TII->get(AMDGPU::S_ADD_I32), StackPtrReg)
@@ -1188,6 +1188,7 @@ void SIFrameLowering::processFunctionBeforeFrameFinalized(
         // correct register value. But not sure the register value alone is
         for (MachineInstr &MI : MBB) {
           if (MI.isDebugValue() && MI.getOperand(0).isFI() &&
+              !MFI.isFixedObjectIndex(MI.getOperand(0).getIndex()) &&
               SpillFIs[MI.getOperand(0).getIndex()]) {
             MI.getOperand(0).ChangeToRegister(Register(), false /*isDef*/);
           }

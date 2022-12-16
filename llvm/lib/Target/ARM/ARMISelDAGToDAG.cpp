@@ -35,6 +35,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetOptions.h"
+#include <optional>
 
 using namespace llvm;
 
@@ -57,8 +58,10 @@ class ARMDAGToDAGISel : public SelectionDAGISel {
   const ARMSubtarget *Subtarget;
 
 public:
+  static char ID;
+
   explicit ARMDAGToDAGISel(ARMBaseTargetMachine &tm, CodeGenOpt::Level OptLevel)
-      : SelectionDAGISel(tm, OptLevel) {}
+      : SelectionDAGISel(ID, tm, OptLevel) {}
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     // Reset the subtarget each time through.
@@ -358,6 +361,8 @@ private:
   void replaceDAGValue(const SDValue &N, SDValue M);
 };
 }
+
+char ARMDAGToDAGISel::ID = 0;
 
 /// isInt32Immediate - This method tests to see if the node is a 32-bit constant
 /// operand. If so Imm will receive the 32-bit value.
@@ -3530,12 +3535,12 @@ void ARMDAGToDAGISel::SelectCMP_SWAP(SDNode *N) {
   CurDAG->RemoveDeadNode(N);
 }
 
-static Optional<std::pair<unsigned, unsigned>>
+static std::optional<std::pair<unsigned, unsigned>>
 getContiguousRangeOfSetBits(const APInt &A) {
   unsigned FirstOne = A.getBitWidth() - A.countLeadingZeros() - 1;
   unsigned LastOne = A.countTrailingZeros();
   if (A.countPopulation() != (FirstOne - LastOne + 1))
-    return Optional<std::pair<unsigned,unsigned>>();
+    return std::nullopt;
   return std::make_pair(FirstOne, LastOne);
 }
 

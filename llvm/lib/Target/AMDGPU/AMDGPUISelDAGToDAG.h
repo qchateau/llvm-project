@@ -91,6 +91,8 @@ class AMDGPUDAGToDAGISel : public SelectionDAGISel {
   bool fp16SrcZerosHighBits(unsigned Opc) const;
 
 public:
+  static char ID;
+
   explicit AMDGPUDAGToDAGISel(TargetMachine *TM = nullptr,
                               CodeGenOpt::Level OptLevel = CodeGenOpt::Default);
   ~AMDGPUDAGToDAGISel() override = default;
@@ -110,7 +112,6 @@ protected:
 
 private:
   std::pair<SDValue, SDValue> foldFrameIndex(SDValue N) const;
-  bool isNoNanSrc(SDValue N) const;
   bool isInlineImmediate(const SDNode *N, bool Negated = false) const;
   bool isNegInlineImmediate(const SDNode *N) const {
     return isInlineImmediate(N, true);
@@ -213,7 +214,6 @@ private:
                                SDValue &Offset) const;
   bool SelectMOVRELOffset(SDValue Index, SDValue &Base, SDValue &Offset) const;
 
-  bool SelectVOP3Mods_NNaN(SDValue In, SDValue &Src, SDValue &SrcMods) const;
   bool SelectVOP3ModsImpl(SDValue In, SDValue &Src, unsigned &SrcMods,
                           bool AllowAbs = true) const;
   bool SelectVOP3Mods(SDValue In, SDValue &Src, SDValue &SrcMods) const;

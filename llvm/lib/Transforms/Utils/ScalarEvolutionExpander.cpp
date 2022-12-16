@@ -576,8 +576,7 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *const *op_begin,
     // Fold a GEP with constant operands.
     if (Constant *CLHS = dyn_cast<Constant>(V))
       if (Constant *CRHS = dyn_cast<Constant>(Idx))
-        return ConstantExpr::getGetElementPtr(Type::getInt8Ty(Ty->getContext()),
-                                              CLHS, CRHS);
+        return Builder.CreateGEP(Builder.getInt8Ty(), CLHS, CRHS);
 
     // Do a quick scan to see if we have this GEP nearby.  If so, reuse it.
     unsigned ScanLimit = 6;
@@ -1926,6 +1925,7 @@ SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
     if (Value *V = SimplifyPHINode(Phi)) {
       if (V->getType() != Phi->getType())
         continue;
+      SE.forgetValue(Phi);
       Phi->replaceAllUsesWith(V);
       DeadInsts.emplace_back(Phi);
       ++NumElim;

@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+
 #ifndef _LIBCPP___RANGES_VIEW_INTERFACE_H
 #define _LIBCPP___RANGES_VIEW_INTERFACE_H
 
@@ -99,7 +100,7 @@ public:
   constexpr auto size()
     requires forward_range<_D2> && sized_sentinel_for<sentinel_t<_D2>, iterator_t<_D2>>
   {
-    return ranges::end(__derived()) - ranges::begin(__derived());
+    return std::__to_unsigned_like(ranges::end(__derived()) - ranges::begin(__derived()));
   }
 
   template<class _D2 = _Derived>
@@ -107,7 +108,7 @@ public:
   constexpr auto size() const
     requires forward_range<const _D2> && sized_sentinel_for<sentinel_t<const _D2>, iterator_t<const _D2>>
   {
-    return ranges::end(__derived()) - ranges::begin(__derived());
+    return std::__to_unsigned_like(ranges::end(__derived()) - ranges::begin(__derived()));
   }
 
   template<class _D2 = _Derived>

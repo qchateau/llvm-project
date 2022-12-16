@@ -98,7 +98,7 @@ public:
         return ArrayRef<dependency_directives_scan::Directive>(
             Directives->value());
     }
-    return None;
+    return std::nullopt;
   }
 
   /// \returns The error.
@@ -271,7 +271,7 @@ public:
 
 /// A virtual file system optimized for the dependency discovery.
 ///
-/// It is primarily designed to work with source files whose contents was was
+/// It is primarily designed to work with source files whose contents was
 /// preprocessed to remove any tokens that are unlikely to affect the dependency
 /// computation.
 ///
@@ -374,6 +374,13 @@ private:
                                     const CachedFileSystemEntry &Entry) {
     return SharedCache.getShardForFilename(Filename)
         .getOrInsertEntryForFilename(Filename, Entry);
+  }
+
+  void printImpl(raw_ostream &OS, PrintType Type,
+                 unsigned IndentLevel) const override {
+    printIndent(OS, IndentLevel);
+    OS << "DependencyScanningFilesystem\n";
+    getUnderlyingFS().print(OS, Type, IndentLevel + 1);
   }
 
   /// The global cache shared between worker threads.

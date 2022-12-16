@@ -192,7 +192,7 @@ getDesignators(const InitListExpr *Syn) {
 class InlayHintVisitor : public RecursiveASTVisitor<InlayHintVisitor> {
 public:
   InlayHintVisitor(std::vector<InlayHint> &Results, ParsedAST &AST,
-                   const Config &Cfg, llvm::Optional<Range> RestrictRange)
+                   const Config &Cfg, std::optional<Range> RestrictRange)
       : Results(Results), AST(AST.getASTContext()), Tokens(AST.getTokens()),
         Cfg(Cfg), RestrictRange(std::move(RestrictRange)),
         MainFileID(AST.getSourceManager().getMainFileID()),
@@ -581,9 +581,8 @@ private:
   static const ParmVarDecl *getParamDefinition(const ParmVarDecl *P) {
     if (auto *Callee = dyn_cast<FunctionDecl>(P->getDeclContext())) {
       if (auto *Def = Callee->getDefinition()) {
-        auto I = std::distance(
-            Callee->param_begin(),
-            std::find(Callee->param_begin(), Callee->param_end(), P));
+        auto I = std::distance(Callee->param_begin(),
+                               llvm::find(Callee->parameters(), P));
         if (I < Callee->getNumParams()) {
           return Def->getParamDecl(I);
         }
@@ -647,11 +646,11 @@ private:
     // TokenBuffer will return null if e.g. R corresponds to only part of a
     // macro expansion.
     if (!Spelled || Spelled->empty())
-      return llvm::None;
+      return std::nullopt;
     // Hint must be within the main file, not e.g. a non-preamble include.
     if (SM.getFileID(Spelled->front().location()) != SM.getMainFileID() ||
         SM.getFileID(Spelled->back().location()) != SM.getMainFileID())
-      return llvm::None;
+      return std::nullopt;
     return Range{sourceLocToPosition(SM, Spelled->front().location()),
                  sourceLocToPosition(SM, Spelled->back().endLocation())};
   }
@@ -680,7 +679,7 @@ private:
   ASTContext &AST;
   const syntax::TokenBuffer &Tokens;
   const Config &Cfg;
-  llvm::Optional<Range> RestrictRange;
+  std::optional<Range> RestrictRange;
   FileID MainFileID;
   StringRef MainFileBuf;
   const HeuristicResolver *Resolver;
@@ -699,7 +698,7 @@ private:
 } // namespace
 
 std::vector<InlayHint> inlayHints(ParsedAST &AST,
-                                  llvm::Optional<Range> RestrictRange) {
+                                  std::optional<Range> RestrictRange) {
   std::vector<InlayHint> Results;
   const auto &Cfg = Config::current();
   if (!Cfg.InlayHints.Enabled)

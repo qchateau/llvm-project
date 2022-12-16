@@ -145,8 +145,10 @@ namespace {
     unsigned GlobalBaseReg = 0;
 
   public:
+    static char ID;
+
     explicit PPCDAGToDAGISel(PPCTargetMachine &tm, CodeGenOpt::Level OptLevel)
-        : SelectionDAGISel(tm, OptLevel), TM(tm) {}
+        : SelectionDAGISel(ID, tm, OptLevel), TM(tm) {}
 
     bool runOnMachineFunction(MachineFunction &MF) override {
       // Make sure we re-emit a set of the global base reg if necessary
@@ -260,7 +262,7 @@ namespace {
     /// signed 16-bit immediate.
     bool SelectDForm(SDNode *Parent, SDValue N, SDValue &Disp, SDValue &Base) {
       return PPCLowering->SelectOptimalAddrMode(Parent, N, Disp, Base, *CurDAG,
-                                                None) == PPC::AM_DForm;
+                                                std::nullopt) == PPC::AM_DForm;
     }
 
     /// SelectPCRelForm - Returns true if address N can be represented by
@@ -268,21 +270,22 @@ namespace {
     bool SelectPCRelForm(SDNode *Parent, SDValue N, SDValue &Disp,
                          SDValue &Base) {
       return PPCLowering->SelectOptimalAddrMode(Parent, N, Disp, Base, *CurDAG,
-                                                None) == PPC::AM_PCRel;
+                                                std::nullopt) == PPC::AM_PCRel;
     }
 
     /// SelectPDForm - Returns true if address N can be represented by Prefixed
     /// DForm addressing mode (a base register, plus a signed 34-bit immediate.
     bool SelectPDForm(SDNode *Parent, SDValue N, SDValue &Disp, SDValue &Base) {
       return PPCLowering->SelectOptimalAddrMode(Parent, N, Disp, Base, *CurDAG,
-                                                None) == PPC::AM_PrefixDForm;
+                                                std::nullopt) ==
+             PPC::AM_PrefixDForm;
     }
 
     /// SelectXForm - Returns true if address N can be represented by the
     /// addressing mode of XForm instructions (an indexed [r+r] operation).
     bool SelectXForm(SDNode *Parent, SDValue N, SDValue &Disp, SDValue &Base) {
       return PPCLowering->SelectOptimalAddrMode(Parent, N, Disp, Base, *CurDAG,
-                                                None) == PPC::AM_XForm;
+                                                std::nullopt) == PPC::AM_XForm;
     }
 
     /// SelectForceXForm - Given the specified address, force it to be
@@ -300,7 +303,8 @@ namespace {
     /// bit signed displacement.
     /// Returns false if it can be represented by [r+imm], which are preferred.
     bool SelectAddrIdx(SDValue N, SDValue &Base, SDValue &Index) {
-      return PPCLowering->SelectAddressRegReg(N, Base, Index, *CurDAG, None);
+      return PPCLowering->SelectAddressRegReg(N, Base, Index, *CurDAG,
+                                              std::nullopt);
     }
 
     /// SelectAddrIdx4 - Given the specified address, check to see if it can be
@@ -337,7 +341,8 @@ namespace {
     /// displacement.
     bool SelectAddrImm(SDValue N, SDValue &Disp,
                        SDValue &Base) {
-      return PPCLowering->SelectAddressRegImm(N, Disp, Base, *CurDAG, None);
+      return PPCLowering->SelectAddressRegImm(N, Disp, Base, *CurDAG,
+                                              std::nullopt);
     }
 
     /// SelectAddrImmX4 - Returns true if the address N can be represented by
@@ -441,6 +446,8 @@ private:
   };
 
 } // end anonymous namespace
+
+char PPCDAGToDAGISel::ID = 0;
 
 /// getGlobalBaseReg - Output the instructions required to put the
 /// base address to use for accessing globals into a register.
@@ -6571,8 +6578,9 @@ void PPCDAGToDAGISel::PeepholeCROps() {
             Op2Set = true;
           else if (Op.getMachineOpcode() == PPC::CRUNSET)
             Op2Unset = true;
-          else if (Op.getMachineOpcode() == PPC::CRNOR &&
-                   Op.getOperand(0) == Op.getOperand(1))
+          else if ((Op.getMachineOpcode() == PPC::CRNOR &&
+                    Op.getOperand(0) == Op.getOperand(1)) ||
+                   Op.getMachineOpcode() == PPC::CRNOT)
             Op2Not = true;
         }
         [[fallthrough]];
@@ -6595,8 +6603,9 @@ void PPCDAGToDAGISel::PeepholeCROps() {
             Op1Set = true;
           else if (Op.getMachineOpcode() == PPC::CRUNSET)
             Op1Unset = true;
-          else if (Op.getMachineOpcode() == PPC::CRNOR &&
-                   Op.getOperand(0) == Op.getOperand(1))
+          else if ((Op.getMachineOpcode() == PPC::CRNOR &&
+                    Op.getOperand(0) == Op.getOperand(1)) ||
+                   Op.getMachineOpcode() == PPC::CRNOT)
             Op1Not = true;
         }
         }

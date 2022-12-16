@@ -208,7 +208,7 @@ public:
     return ConstantExpr::getSub(C, ConstantInt::get(C->getType(), 1));
   }
 
-  llvm::Optional<std::pair<
+  std::optional<std::pair<
       CmpInst::Predicate,
       Constant *>> static getFlippedStrictnessPredicateAndConstant(CmpInst::
                                                                        Predicate
@@ -378,12 +378,12 @@ public:
   LoopInfo *getLoopInfo() const { return LI; }
 
   // Call target specific combiners
-  Optional<Instruction *> targetInstCombineIntrinsic(IntrinsicInst &II);
-  Optional<Value *>
+  std::optional<Instruction *> targetInstCombineIntrinsic(IntrinsicInst &II);
+  std::optional<Value *>
   targetSimplifyDemandedUseBitsIntrinsic(IntrinsicInst &II, APInt DemandedMask,
                                          KnownBits &Known,
                                          bool &KnownBitsComputed);
-  Optional<Value *> targetSimplifyDemandedVectorEltsIntrinsic(
+  std::optional<Value *> targetSimplifyDemandedVectorEltsIntrinsic(
       IntrinsicInst &II, APInt DemandedElts, APInt &UndefElts,
       APInt &UndefElts2, APInt &UndefElts3,
       std::function<void(Instruction *, unsigned, APInt, APInt &)>
@@ -397,7 +397,7 @@ public:
     assert(New && !New->getParent() &&
            "New instruction already inserted into a basic block!");
     BasicBlock *BB = Old.getParent();
-    BB->getInstList().insert(Old.getIterator(), New); // Insert inst
+    New->insertInto(BB, Old.getIterator()); // Insert inst
     Worklist.push(New);
     return New;
   }

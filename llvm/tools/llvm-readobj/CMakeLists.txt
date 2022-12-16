@@ -27,6 +27,9 @@ add_llvm_tool(llvm-readobj
   Win64EHDumper.cpp
   WindowsResourceDumper.cpp
   XCOFFDumper.cpp
+  DEPENDS
+  ReadobjOptsTableGen
+  GENERATE_DRIVER
   )
 
 add_llvm_tool_symlink(llvm-readelf llvm-readobj)

@@ -43,6 +43,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
@@ -357,14 +358,14 @@ private:
   /// If WithFrameRecord is true, then __hwasan_tls will be used to access the
   /// ring buffer for storing stack allocations on targets that support it.
   struct ShadowMapping {
-    int Scale;
+    uint8_t Scale;
     uint64_t Offset;
     bool InGlobal;
     bool InTls;
     bool WithFrameRecord;
 
     void init(Triple &TargetTriple, bool InstrumentWithCalls);
-    uint64_t getObjectAlignment() const { return 1ULL << Scale; }
+    Align getObjectAlignment() const { return Align(1ULL << Scale); }
   };
 
   ShadowMapping Mapping;
@@ -497,12 +498,10 @@ void HWAddressSanitizer::createHwasanCtorComdat() {
       new GlobalVariable(M, Int8Arr0Ty, true, GlobalVariable::ExternalLinkage,
                          nullptr, "__start_hwasan_globals");
   Start->setVisibility(GlobalValue::HiddenVisibility);
-  Start->setDSOLocal(true);
   auto Stop =
       new GlobalVariable(M, Int8Arr0Ty, true, GlobalVariable::ExternalLinkage,
                          nullptr, "__stop_hwasan_globals");
   Stop->setVisibility(GlobalValue::HiddenVisibility);
-  Stop->setDSOLocal(true);
 
   // Null-terminated so actually 8 bytes, which are required in order to align
   // the note properly.
@@ -516,7 +515,6 @@ void HWAddressSanitizer::createHwasanCtorComdat() {
   Note->setSection(".note.hwasan.globals");
   Note->setComdat(NoteComdat);
   Note->setAlignment(Align(4));
-  Note->setDSOLocal(true);
 
   // The pointers in the note need to be relative so that the note ends up being
   // placed in rodata, which is the standard location for notes.
@@ -585,7 +583,8 @@ void HWAddressSanitizer::initializeModule() {
   UseShortGranules =
       ClUseShortGranules.getNumOccurrences() ? ClUseShortGranules : NewRuntime;
   OutlinedChecks =
-      TargetTriple.isAArch64() && TargetTriple.isOSBinFormatELF() &&
+      (TargetTriple.isAArch64() || TargetTriple.isRISCV64()) &&
+      TargetTriple.isOSBinFormatELF() &&
       (ClInlineAllChecks.getNumOccurrences() ? !ClInlineAllChecks : !Recover);
 
   if (ClMatchAllTag.getNumOccurrences()) {
@@ -760,12 +759,13 @@ void HWAddressSanitizer::getInterestingMemoryOperands(
     if (!ClInstrumentAtomics || ignoreAccess(I, RMW->getPointerOperand()))
       return;
     Interesting.emplace_back(I, RMW->getPointerOperandIndex(), true,
-                             RMW->getValOperand()->getType(), None);
+                             RMW->getValOperand()->getType(), std::nullopt);
   } else if (AtomicCmpXchgInst *XCHG = dyn_cast<AtomicCmpXchgInst>(I)) {
     if (!ClInstrumentAtomics || ignoreAccess(I, XCHG->getPointerOperand()))
       return;
     Interesting.emplace_back(I, XCHG->getPointerOperandIndex(), true,
-                             XCHG->getCompareOperand()->getType(), None);
+                             XCHG->getCompareOperand()->getType(),
+                             std::nullopt);
   } else if (auto CI = dyn_cast<CallInst>(I)) {
     for (unsigned ArgNo = 0; ArgNo < CI->arg_size(); ArgNo++) {
       if (!ClInstrumentByval || !CI->isByValArgument(ArgNo) ||
@@ -797,7 +797,8 @@ static size_t TypeSizeToSizeIndex(uint32_t TypeSize) {
 }
 
 void HWAddressSanitizer::untagPointerOperand(Instruction *I, Value *Addr) {
-  if (TargetTriple.isAArch64() || TargetTriple.getArch() == Triple::x86_64)
+  if (TargetTriple.isAArch64() || TargetTriple.getArch() == Triple::x86_64 ||
+      TargetTriple.isRISCV64())
     return;
 
   IRBuilder<> IRB(I);
@@ -915,6 +916,15 @@ void HWAddressSanitizer::instrumentMemAccessInline(Value *Ptr, bool IsWrite,
         "{x0}",
         /*hasSideEffects=*/true);
     break;
+  case Triple::riscv64:
+    // The signal handler will find the data address in x10.
+    Asm = InlineAsm::get(
+        FunctionType::get(IRB.getVoidTy(), {PtrLong->getType()}, false),
+        "ebreak\naddiw x0, x11, " +
+            itostr(0x40 + (AccessInfo & HWASanAccessInfo::RuntimeMask)),
+        "{x10}",
+        /*hasSideEffects=*/true);
+    break;
   default:
     report_fatal_error("unsupported architecture");
   }
@@ -962,7 +972,7 @@ bool HWAddressSanitizer::instrumentMemAccess(InterestingMemoryOperand &O) {
   IRBuilder<> IRB(O.getInsn());
   if (isPowerOf2_64(O.TypeSize) &&
       (O.TypeSize / 8 <= (1ULL << (kNumberOfAccessSizes - 1))) &&
-      (!O.Alignment || *O.Alignment >= (1ULL << Mapping.Scale) ||
+      (!O.Alignment || *O.Alignment >= Mapping.getObjectAlignment() ||
        *O.Alignment >= O.TypeSize / 8)) {
     size_t AccessSizeIndex = TypeSizeToSizeIndex(O.TypeSize);
     if (InstrumentWithCalls) {
@@ -1006,9 +1016,9 @@ void HWAddressSanitizer::tagAlloca(IRBuilder<> &IRB, AllocaInst *AI, Value *Tag,
     if (ShadowSize)
       IRB.CreateMemSet(ShadowPtr, JustTag, ShadowSize, Align(1));
     if (Size != AlignedSize) {
-      IRB.CreateStore(
-          ConstantInt::get(Int8Ty, Size % Mapping.getObjectAlignment()),
-          IRB.CreateConstGEP1_32(Int8Ty, ShadowPtr, ShadowSize));
+      const uint8_t SizeRemainder = Size % Mapping.getObjectAlignment().value();
+      IRB.CreateStore(ConstantInt::get(Int8Ty, SizeRemainder),
+                      IRB.CreateConstGEP1_32(Int8Ty, ShadowPtr, ShadowSize));
       IRB.CreateStore(JustTag, IRB.CreateConstGEP1_32(
                                    Int8Ty, IRB.CreateBitCast(AI, Int8PtrTy),
                                    AlignedSize - 1));
@@ -1034,7 +1044,7 @@ unsigned HWAddressSanitizer::retagMask(unsigned AllocaNo) {
                                  48, 16,  120, 248, 56,  24,  8,   124, 252,
                                  60, 28,  12,  4,   126, 254, 62,  30,  14,
                                  6,  2,   127, 63,  31,  15,  7,   3,   1};
-  return FastMasks[AllocaNo % (sizeof(FastMasks) / sizeof(FastMasks[0]))];
+  return FastMasks[AllocaNo % std::size(FastMasks)];
 }
 
 Value *HWAddressSanitizer::applyTagMask(IRBuilder<> &IRB, Value *OldTag) {
@@ -1389,7 +1399,7 @@ bool HWAddressSanitizer::instrumentStack(memtag::StackInfo &SInfo,
       for (auto &II : Info.LifetimeEnd)
         II->eraseFromParent();
     }
-    memtag::alignAndPadAlloca(Info, Align(Mapping.getObjectAlignment()));
+    memtag::alignAndPadAlloca(Info, Mapping.getObjectAlignment());
   }
   for (auto &I : SInfo.UnrecognizedLifetimes)
     I->eraseFromParent();
@@ -1515,7 +1525,7 @@ void HWAddressSanitizer::instrumentGlobal(GlobalVariable *GV, uint8_t Tag) {
   NewGV->setLinkage(GlobalValue::PrivateLinkage);
   NewGV->copyMetadata(GV, 0);
   NewGV->setAlignment(
-      MaybeAlign(std::max(GV->getAlignment(), Mapping.getObjectAlignment())));
+      std::max(GV->getAlign().valueOrOne(), Mapping.getObjectAlignment()));
 
   // It is invalid to ICF two globals that have different tags. In the case
   // where the size of the global is a multiple of the tag granularity the

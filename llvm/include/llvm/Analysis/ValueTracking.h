@@ -15,7 +15,6 @@
 #define LLVM_ANALYSIS_VALUETRACKING_H
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -328,7 +327,7 @@ bool getConstantDataArrayInfo(const Value *V, ConstantDataArraySlice &Slice,
 /// character by default. If TrimAtNul is set to false, then this returns any
 /// trailing null characters as well as any other characters that come after
 /// it.
-bool getConstantStringInfo(const Value *V, StringRef &Str, uint64_t Offset = 0,
+bool getConstantStringInfo(const Value *V, StringRef &Str,
                            bool TrimAtNul = true);
 
 /// If we can compute the length of the string pointed to by the specified
@@ -769,10 +768,6 @@ SelectPatternFlavor getInverseMinMaxFlavor(SelectPatternFlavor SPF);
 
 Intrinsic::ID getInverseMinMaxIntrinsic(Intrinsic::ID MinMaxID);
 
-/// Return the canonical inverse comparison predicate for the specified
-/// minimum/maximum flavor.
-CmpInst::Predicate getInverseMinMaxPred(SelectPatternFlavor SPF);
-
 /// Return the minimum or maximum constant value for the specified integer
 /// min/max flavor and type.
 APInt getMinMaxLimit(SelectPatternFlavor SPF, unsigned BitWidth);
@@ -817,38 +812,41 @@ bool matchSimpleRecurrence(const BinaryOperator *I, PHINode *&P, Value *&Start,
                            Value *&Step);
 
 /// Return true if RHS is known to be implied true by LHS.  Return false if
-/// RHS is known to be implied false by LHS.  Otherwise, return None if no
-/// implication can be made.
-/// A & B must be i1 (boolean) values or a vector of such values. Note that
-/// the truth table for implication is the same as <=u on i1 values (but not
+/// RHS is known to be implied false by LHS.  Otherwise, return std::nullopt if
+/// no implication can be made. A & B must be i1 (boolean) values or a vector of
+/// such values. Note that the truth table for implication is the same as <=u on
+/// i1 values (but not
 /// <=s!).  The truth table for both is:
 ///    | T | F (B)
 ///  T | T | F
 ///  F | T | T
 /// (A)
-Optional<bool> isImpliedCondition(const Value *LHS, const Value *RHS,
-                                  const DataLayout &DL, bool LHSIsTrue = true,
-                                  unsigned Depth = 0);
-Optional<bool> isImpliedCondition(const Value *LHS, CmpInst::Predicate RHSPred,
-                                  const Value *RHSOp0, const Value *RHSOp1,
-                                  const DataLayout &DL, bool LHSIsTrue = true,
-                                  unsigned Depth = 0);
+std::optional<bool> isImpliedCondition(const Value *LHS, const Value *RHS,
+                                       const DataLayout &DL,
+                                       bool LHSIsTrue = true,
+                                       unsigned Depth = 0);
+std::optional<bool> isImpliedCondition(const Value *LHS,
+                                       CmpInst::Predicate RHSPred,
+                                       const Value *RHSOp0, const Value *RHSOp1,
+                                       const DataLayout &DL,
+                                       bool LHSIsTrue = true,
+                                       unsigned Depth = 0);
 
 /// Return the boolean condition value in the context of the given instruction
 /// if it is known based on dominating conditions.
-Optional<bool> isImpliedByDomCondition(const Value *Cond,
-                                       const Instruction *ContextI,
-                                       const DataLayout &DL);
-Optional<bool> isImpliedByDomCondition(CmpInst::Predicate Pred,
-                                       const Value *LHS, const Value *RHS,
-                                       const Instruction *ContextI,
-                                       const DataLayout &DL);
+std::optional<bool> isImpliedByDomCondition(const Value *Cond,
+                                            const Instruction *ContextI,
+                                            const DataLayout &DL);
+std::optional<bool> isImpliedByDomCondition(CmpInst::Predicate Pred,
+                                            const Value *LHS, const Value *RHS,
+                                            const Instruction *ContextI,
+                                            const DataLayout &DL);
 
 /// If Ptr1 is provably equal to Ptr2 plus a constant offset, return that
 /// offset. For example, Ptr1 might be &A[42], and Ptr2 might be &A[40]. In
 /// this case offset would be -8.
-Optional<int64_t> isPointerOffset(const Value *Ptr1, const Value *Ptr2,
-                                  const DataLayout &DL);
+std::optional<int64_t> isPointerOffset(const Value *Ptr1, const Value *Ptr2,
+                                       const DataLayout &DL);
 } // end namespace llvm
 
 #endif // LLVM_ANALYSIS_VALUETRACKING_H

@@ -119,7 +119,7 @@ FunctionPass *llvm::createAMDGPUISelDag(TargetMachine *TM,
 AMDGPUDAGToDAGISel::AMDGPUDAGToDAGISel(
     TargetMachine *TM /*= nullptr*/,
     CodeGenOpt::Level OptLevel /*= CodeGenOpt::Default*/)
-    : SelectionDAGISel(*TM, OptLevel) {
+    : SelectionDAGISel(ID, *TM, OptLevel) {
   EnableLateStructurizeCFG = AMDGPUTargetMachine::EnableLateStructurizeCFG;
 }
 
@@ -314,17 +314,6 @@ void AMDGPUDAGToDAGISel::PreprocessISelDAG() {
     LLVM_DEBUG(dbgs() << "After PreProcess:\n";
                CurDAG->dump(););
   }
-}
-
-bool AMDGPUDAGToDAGISel::isNoNanSrc(SDValue N) const {
-  if (TM.Options.NoNaNsFPMath)
-    return true;
-
-  // TODO: Move into isKnownNeverNaN
-  if (N->getFlags().hasNoNaNs())
-    return true;
-
-  return CurDAG->isKnownNeverNaN(N);
 }
 
 bool AMDGPUDAGToDAGISel::isInlineImmediate(const SDNode *N,
@@ -1008,7 +997,7 @@ void AMDGPUDAGToDAGISel::SelectMAD_64_32(SDNode *N) {
   SDLoc SL(N);
   bool Signed = N->getOpcode() == AMDGPUISD::MAD_I64_I32;
   unsigned Opc;
-  if (Subtarget->getGeneration() == AMDGPUSubtarget::GFX11)
+  if (Subtarget->hasMADIntraFwdBug())
     Opc = Signed ? AMDGPU::V_MAD_I64_I32_gfx11_e64
                  : AMDGPU::V_MAD_U64_U32_gfx11_e64;
   else
@@ -1026,7 +1015,7 @@ void AMDGPUDAGToDAGISel::SelectMUL_LOHI(SDNode *N) {
   SDLoc SL(N);
   bool Signed = N->getOpcode() == ISD::SMUL_LOHI;
   unsigned Opc;
-  if (Subtarget->getGeneration() == AMDGPUSubtarget::GFX11)
+  if (Subtarget->hasMADIntraFwdBug())
     Opc = Signed ? AMDGPU::V_MAD_I64_I32_gfx11_e64
                  : AMDGPU::V_MAD_U64_U32_gfx11_e64;
   else
@@ -1369,7 +1358,7 @@ std::pair<SDValue, SDValue> AMDGPUDAGToDAGISel::foldFrameIndex(SDValue N) const 
   // use constant 0 for soffset. This value must be retained until
   // frame elimination and eliminateFrameIndex will choose the appropriate
   // frame register if need be.
-  return std::make_pair(TFI, CurDAG->getTargetConstant(0, DL, MVT::i32));
+  return std::pair(TFI, CurDAG->getTargetConstant(0, DL, MVT::i32));
 }
 
 bool AMDGPUDAGToDAGISel::SelectMUBUFScratchOffen(SDNode *Parent,
@@ -1915,7 +1904,7 @@ bool AMDGPUDAGToDAGISel::SelectSMRDOffset(SDValue ByteOffsetNode,
   // GFX9 and GFX10 have signed byte immediate offsets. The immediate
   // offset for S_BUFFER instructions is unsigned.
   int64_t ByteOffset = IsBuffer ? C->getZExtValue() : C->getSExtValue();
-  Optional<int64_t> EncodedOffset =
+  std::optional<int64_t> EncodedOffset =
       AMDGPU::getSMRDEncodedOffset(*Subtarget, ByteOffset, IsBuffer);
   if (EncodedOffset && Offset && !Imm32Only) {
     *Offset = CurDAG->getTargetConstant(*EncodedOffset, SL, MVT::i32);
@@ -2640,12 +2629,6 @@ bool AMDGPUDAGToDAGISel::SelectVOP3BMods(SDValue In, SDValue &Src,
   return false;
 }
 
-bool AMDGPUDAGToDAGISel::SelectVOP3Mods_NNaN(SDValue In, SDValue &Src,
-                                             SDValue &SrcMods) const {
-  SelectVOP3Mods(In, Src, SrcMods);
-  return isNoNanSrc(Src);
-}
-
 bool AMDGPUDAGToDAGISel::SelectVOP3NoMods(SDValue In, SDValue &Src) const {
   if (In.getOpcode() == ISD::FABS || In.getOpcode() == ISD::FNEG)
     return false;
@@ -3018,3 +3001,5 @@ void AMDGPUDAGToDAGISel::PostprocessISelDAG() {
     CurDAG->RemoveDeadNodes();
   } while (IsModified);
 }
+
+char AMDGPUDAGToDAGISel::ID = 0;

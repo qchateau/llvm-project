@@ -106,6 +106,7 @@ static void lto_initialize() {
 
     static LLVMContext Context;
     LTOContext = &Context;
+    LTOContext->setOpaquePointers(true);
     LTOContext->setDiagnosticHandler(
         std::make_unique<LTOToolDiagnosticHandler>(), true);
     initialized = true;
@@ -133,7 +134,10 @@ struct LibLTOCodeGenerator : LTOCodeGenerator {
   // Module must be destructed before its context gets destructed.
   ~LibLTOCodeGenerator() { resetMergedModule(); }
 
-  void init() { setDiagnosticHandler(handleLibLTODiagnostic, nullptr); }
+  void init() {
+    OwnedContext->setOpaquePointers(true);
+    setDiagnosticHandler(handleLibLTODiagnostic, nullptr);
+  }
 
   std::unique_ptr<MemoryBuffer> NativeObjectFile;
   std::unique_ptr<LLVMContext> OwnedContext;
@@ -271,6 +275,7 @@ lto_module_t lto_module_create_in_local_context(const void *mem, size_t length,
 
   // Create a local context. Ownership will be transferred to LTOModule.
   std::unique_ptr<LLVMContext> Context = std::make_unique<LLVMContext>();
+  Context->setOpaquePointers(true);
   Context->setDiagnosticHandler(std::make_unique<LTOToolDiagnosticHandler>(),
                                 true);
 
@@ -290,6 +295,8 @@ lto_module_t lto_module_create_in_codegen_context(const void *mem,
       codegen::InitTargetOptionsFromCodeGenFlags(Triple());
   ErrorOr<std::unique_ptr<LTOModule>> M = LTOModule::createFromBuffer(
       unwrap(cg)->getContext(), mem, length, Options, StringRef(path));
+  if (!M)
+    return nullptr;
   return wrap(M->release());
 }
 
@@ -394,7 +401,7 @@ bool lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model model) {
     unwrap(cg)->setCodePICModel(Reloc::DynamicNoPIC);
     return false;
   case LTO_CODEGEN_PIC_MODEL_DEFAULT:
-    unwrap(cg)->setCodePICModel(None);
+    unwrap(cg)->setCodePICModel(std::nullopt);
     return false;
   }
   sLastErrorString = "Unknown PIC model";
@@ -671,7 +678,7 @@ lto_bool_t thinlto_codegen_set_pic_model(thinlto_code_gen_t cg,
     unwrap(cg)->setCodePICModel(Reloc::DynamicNoPIC);
     return false;
   case LTO_CODEGEN_PIC_MODEL_DEFAULT:
-    unwrap(cg)->setCodePICModel(None);
+    unwrap(cg)->setCodePICModel(std::nullopt);
     return false;
   }
   sLastErrorString = "Unknown PIC model";

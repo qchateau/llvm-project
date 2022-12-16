@@ -127,6 +127,7 @@
 
 #include "InstrRefBasedImpl.h"
 #include "LiveDebugValues.h"
+#include <optional>
 
 using namespace llvm;
 using namespace LiveDebugValues;
@@ -740,7 +741,7 @@ public:
 
     // Examine the remaining variable locations: if we can find the same value
     // again, we can recover the location.
-    Optional<LocIdx> NewLoc;
+    std::optional<LocIdx> NewLoc;
     for (auto Loc : MTracker->locations())
       if (Loc.Value == OldValue)
         NewLoc = Loc.Idx;
@@ -1037,14 +1038,14 @@ void MLocTracker::writeRegMask(const MachineOperand *MO, unsigned CurBB,
   Masks.push_back(std::make_pair(MO, InstID));
 }
 
-Optional<SpillLocationNo> MLocTracker::getOrTrackSpillLoc(SpillLoc L) {
+std::optional<SpillLocationNo> MLocTracker::getOrTrackSpillLoc(SpillLoc L) {
   SpillLocationNo SpillID(SpillLocs.idFor(L));
 
   if (SpillID.id() == 0) {
     // If there is no location, and we have reached the limit of how many stack
     // slots to track, then don't track this one.
     if (SpillLocs.size() >= StackWorkingSetLimit)
-      return None;
+      return std::nullopt;
 
     // Spill location is untracked: create record for this one, and all
     // subregister slots too.
@@ -1277,7 +1278,7 @@ bool InstrRefBasedLDV::isCalleeSavedReg(Register R) const {
 // void InstrRefBasedLDV::printVarLocInMBB(..)
 #endif
 
-Optional<SpillLocationNo>
+std::optional<SpillLocationNo>
 InstrRefBasedLDV::extractSpillBaseRegAndOffset(const MachineInstr &MI) {
   assert(MI.hasOneMemOperand() &&
          "Spill instruction does not have exactly one memory operand?");
@@ -1292,11 +1293,11 @@ InstrRefBasedLDV::extractSpillBaseRegAndOffset(const MachineInstr &MI) {
   return MTracker->getOrTrackSpillLoc({Reg, Offset});
 }
 
-Optional<LocIdx>
+std::optional<LocIdx>
 InstrRefBasedLDV::findLocationForMemOperand(const MachineInstr &MI) {
-  Optional<SpillLocationNo> SpillLoc = extractSpillBaseRegAndOffset(MI);
+  std::optional<SpillLocationNo> SpillLoc = extractSpillBaseRegAndOffset(MI);
   if (!SpillLoc)
-    return None;
+    return std::nullopt;
 
   // Where in the stack slot is this value defined -- i.e., what size of value
   // is this? An important question, because it could be loaded into a register
@@ -1310,7 +1311,7 @@ InstrRefBasedLDV::findLocationForMemOperand(const MachineInstr &MI) {
   if (IdxIt == MTracker->StackSlotIdxes.end())
     // That index is not tracked. This is suprising, and unlikely to ever
     // occur, but the safe action is to indicate the variable is optimised out.
-    return None;
+    return std::nullopt;
 
   unsigned SpillID = MTracker->getSpillIDWithIdx(*SpillLoc, IdxIt->second);
   return MTracker->getSpillMLoc(SpillID);
@@ -1425,7 +1426,7 @@ bool InstrRefBasedLDV::transferDebugInstrRef(MachineInstr &MI,
 
   // Default machine value number is <None> -- if no instruction defines
   // the corresponding value, it must have been optimized out.
-  Optional<ValueIDNum> NewID;
+  std::optional<ValueIDNum> NewID;
 
   // Try to lookup the instruction number, and find the machine value number
   // that it defines. It could be an instruction, or a PHI.
@@ -1439,7 +1440,7 @@ bool InstrRefBasedLDV::transferDebugInstrRef(MachineInstr &MI,
     // a register def was folded into a stack store.
     if (OpNo == MachineFunction::DebugOperandMemNumber &&
         TargetInstr.hasOneMemOperand()) {
-      Optional<LocIdx> L = findLocationForMemOperand(TargetInstr);
+      std::optional<LocIdx> L = findLocationForMemOperand(TargetInstr);
       if (L)
         NewID = ValueIDNum(BlockNo, InstrIt->second.second, *L);
     } else if (OpNo != MachineFunction::DebugOperandMemNumber) {
@@ -1528,7 +1529,7 @@ bool InstrRefBasedLDV::transferDebugInstrRef(MachineInstr &MI,
 
         // If we didn't find anything: there's no way to express our value.
         if (!NewReg) {
-          NewID = None;
+          NewID = std::nullopt;
         } else {
           // Re-state the value as being defined within the subregister
           // that we found.
@@ -1538,14 +1539,14 @@ bool InstrRefBasedLDV::transferDebugInstrRef(MachineInstr &MI,
       }
     } else {
       // If we can't handle subregisters, unset the new value.
-      NewID = None;
+      NewID = std::nullopt;
     }
   }
 
-  // We, we have a value number or None. Tell the variable value tracker about
-  // it. The rest of this LiveDebugValues implementation acts exactly the same
-  // for DBG_INSTR_REFs as DBG_VALUEs (just, the former can refer to values that
-  // aren't immediately available).
+  // We, we have a value number or std::nullopt. Tell the variable value tracker
+  // about it. The rest of this LiveDebugValues implementation acts exactly the
+  // same for DBG_INSTR_REFs as DBG_VALUEs (just, the former can refer to values
+  // that aren't immediately available).
   DbgValueProperties Properties(Expr, false, false);
   SmallVector<DbgOpID> DbgOpIDs;
   if (NewID)
@@ -1560,7 +1561,7 @@ bool InstrRefBasedLDV::transferDebugInstrRef(MachineInstr &MI,
 
   // Pick a location for the machine value number, if such a location exists.
   // (This information could be stored in TransferTracker to make it faster).
-  Optional<LocIdx> FoundLoc;
+  std::optional<LocIdx> FoundLoc;
   for (auto Location : MTracker->locations()) {
     LocIdx CurL = Location.Idx;
     ValueIDNum ID = MTracker->readMLoc(CurL);
@@ -1627,7 +1628,8 @@ bool InstrRefBasedLDV::transferDebugPHI(MachineInstr &MI) {
     // a DBG_PHI. This can happen if DBG_PHIs are malformed, or refer to a
     // dead stack slot, for example.
     // Record a DebugPHIRecord with an empty value + location.
-    DebugPHINumToValue.push_back({InstrNum, MI.getParent(), None, None});
+    DebugPHINumToValue.push_back(
+        {InstrNum, MI.getParent(), std::nullopt, std::nullopt});
     return true;
   };
 
@@ -1656,7 +1658,7 @@ bool InstrRefBasedLDV::transferDebugPHI(MachineInstr &MI) {
     Register Base;
     StackOffset Offs = TFI->getFrameIndexReference(*MI.getMF(), FI, Base);
     SpillLoc SL = {Base, Offs};
-    Optional<SpillLocationNo> SpillNo = MTracker->getOrTrackSpillLoc(SL);
+    std::optional<SpillLocationNo> SpillNo = MTracker->getOrTrackSpillLoc(SL);
 
     // We might be able to find a value, but have chosen not to, to avoid
     // tracking too much stack information.
@@ -1751,7 +1753,8 @@ void InstrRefBasedLDV::transferRegisterDef(MachineInstr &MI) {
 
   // If this instruction writes to a spill slot, def that slot.
   if (hasFoldedStackStore(MI)) {
-    if (Optional<SpillLocationNo> SpillNo = extractSpillBaseRegAndOffset(MI)) {
+    if (std::optional<SpillLocationNo> SpillNo =
+            extractSpillBaseRegAndOffset(MI)) {
       for (unsigned int I = 0; I < MTracker->NumSlotIdxes; ++I) {
         unsigned SpillID = MTracker->getSpillIDWithIdx(*SpillNo, I);
         LocIdx L = MTracker->getSpillMLoc(SpillID);
@@ -1793,7 +1796,8 @@ void InstrRefBasedLDV::transferRegisterDef(MachineInstr &MI) {
 
   // Tell TTracker about any folded stack store.
   if (hasFoldedStackStore(MI)) {
-    if (Optional<SpillLocationNo> SpillNo = extractSpillBaseRegAndOffset(MI)) {
+    if (std::optional<SpillLocationNo> SpillNo =
+            extractSpillBaseRegAndOffset(MI)) {
       for (unsigned int I = 0; I < MTracker->NumSlotIdxes; ++I) {
         unsigned SpillID = MTracker->getSpillIDWithIdx(*SpillNo, I);
         LocIdx L = MTracker->getSpillMLoc(SpillID);
@@ -1834,22 +1838,22 @@ void InstrRefBasedLDV::performCopy(Register SrcRegNum, Register DstRegNum) {
   }
 }
 
-Optional<SpillLocationNo>
+std::optional<SpillLocationNo>
 InstrRefBasedLDV::isSpillInstruction(const MachineInstr &MI,
                                      MachineFunction *MF) {
   // TODO: Handle multiple stores folded into one.
   if (!MI.hasOneMemOperand())
-    return None;
+    return std::nullopt;
 
   // Reject any memory operand that's aliased -- we can't guarantee its value.
   auto MMOI = MI.memoperands_begin();
   const PseudoSourceValue *PVal = (*MMOI)->getPseudoValue();
   if (PVal->isAliased(MFI))
-    return None;
+    return std::nullopt;
 
   if (!MI.getSpillSize(TII) && !MI.getFoldedSpillSize(TII))
-    return None; // This is not a spill instruction, since no valid size was
-                 // returned from either function.
+    return std::nullopt; // This is not a spill instruction, since no valid size
+                         // was returned from either function.
 
   return extractSpillBaseRegAndOffset(MI);
 }
@@ -1864,11 +1868,11 @@ bool InstrRefBasedLDV::isLocationSpill(const MachineInstr &MI,
   return Reg != 0;
 }
 
-Optional<SpillLocationNo>
+std::optional<SpillLocationNo>
 InstrRefBasedLDV::isRestoreInstruction(const MachineInstr &MI,
                                        MachineFunction *MF, unsigned &Reg) {
   if (!MI.hasOneMemOperand())
-    return None;
+    return std::nullopt;
 
   // FIXME: Handle folded restore instructions with more than one memory
   // operand.
@@ -1876,7 +1880,7 @@ InstrRefBasedLDV::isRestoreInstruction(const MachineInstr &MI,
     Reg = MI.getOperand(0).getReg();
     return extractSpillBaseRegAndOffset(MI);
   }
-  return None;
+  return std::nullopt;
 }
 
 bool InstrRefBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI) {
@@ -1908,12 +1912,12 @@ bool InstrRefBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI) {
   // First, if there are any DBG_VALUEs pointing at a spill slot that is
   // written to, terminate that variable location. The value in memory
   // will have changed. DbgEntityHistoryCalculator doesn't try to detect this.
-  if (Optional<SpillLocationNo> Loc = isSpillInstruction(MI, MF)) {
+  if (std::optional<SpillLocationNo> Loc = isSpillInstruction(MI, MF)) {
     // Un-set this location and clobber, so that earlier locations don't
     // continue past this store.
     for (unsigned SlotIdx = 0; SlotIdx < MTracker->NumSlotIdxes; ++SlotIdx) {
       unsigned SpillID = MTracker->getSpillIDWithIdx(*Loc, SlotIdx);
-      Optional<LocIdx> MLoc = MTracker->getSpillMLoc(SpillID);
+      std::optional<LocIdx> MLoc = MTracker->getSpillMLoc(SpillID);
       if (!MLoc)
         continue;
 
@@ -1959,7 +1963,7 @@ bool InstrRefBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI) {
     unsigned SpillID = MTracker->getLocID(Loc, {Size, 0});
     DoTransfer(Reg, SpillID);
   } else {
-    Optional<SpillLocationNo> Loc = isRestoreInstruction(MI, MF, Reg);
+    std::optional<SpillLocationNo> Loc = isRestoreInstruction(MI, MF, Reg);
     if (!Loc)
       return false;
 
@@ -2705,7 +2709,7 @@ bool InstrRefBasedLDV::pickVPHILoc(
       continue;
     }
 
-    Optional<ValueIDNum> JoinedOpLoc =
+    std::optional<ValueIDNum> JoinedOpLoc =
         pickOperandPHILoc(Idx, MBB, LiveOuts, MOutLocs, BlockOrders);
 
     if (!JoinedOpLoc)
@@ -2718,7 +2722,7 @@ bool InstrRefBasedLDV::pickVPHILoc(
   return true;
 }
 
-Optional<ValueIDNum> InstrRefBasedLDV::pickOperandPHILoc(
+std::optional<ValueIDNum> InstrRefBasedLDV::pickOperandPHILoc(
     unsigned DbgOpIdx, const MachineBasicBlock &MBB, const LiveIdxT &LiveOuts,
     FuncValueTable &MOutLocs,
     const SmallVectorImpl<const MachineBasicBlock *> &BlockOrders) {
@@ -2780,7 +2784,7 @@ Optional<ValueIDNum> InstrRefBasedLDV::pickOperandPHILoc(
     CandidateLocs = NewCandidates;
   }
   if (CandidateLocs.empty())
-    return None;
+    return std::nullopt;
 
   // We now have a set of LocIdxes that contain the right output value in
   // each of the predecessors. Pick the lowest; if there's a register loc,
@@ -3952,7 +3956,7 @@ public:
 
 } // end namespace llvm
 
-Optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIs(
+std::optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIs(
     MachineFunction &MF, const ValueTable *MLiveOuts,
     const ValueTable *MLiveIns, MachineInstr &Here, uint64_t InstrNum) {
   assert(MLiveOuts && MLiveIns &&
@@ -3965,13 +3969,13 @@ Optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIs(
   if (SeenDbgPHIIt != SeenDbgPHIs.end())
     return SeenDbgPHIIt->second;
 
-  Optional<ValueIDNum> Result =
+  std::optional<ValueIDNum> Result =
       resolveDbgPHIsImpl(MF, MLiveOuts, MLiveIns, Here, InstrNum);
   SeenDbgPHIs.insert({&Here, Result});
   return Result;
 }
 
-Optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIsImpl(
+std::optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIsImpl(
     MachineFunction &MF, const ValueTable *MLiveOuts,
     const ValueTable *MLiveIns, MachineInstr &Here, uint64_t InstrNum) {
   // Pick out records of DBG_PHI instructions that have been observed. If there
@@ -3983,7 +3987,7 @@ Optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIsImpl(
 
   // No DBG_PHI means there can be no location.
   if (LowerIt == UpperIt)
-    return None;
+    return std::nullopt;
 
   // If any DBG_PHIs referred to a location we didn't understand, don't try to
   // compute a value. There might be scenarios where we could recover a value
@@ -3992,7 +3996,7 @@ Optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIsImpl(
   auto DBGPHIRange = make_range(LowerIt, UpperIt);
   for (const DebugPHIRecord &DBG_PHI : DBGPHIRange)
     if (!DBG_PHI.ValueRead)
-      return None;
+      return std::nullopt;
 
   // If there's only one DBG_PHI, then that is our value number.
   if (std::distance(LowerIt, UpperIt) == 1)
@@ -4076,7 +4080,7 @@ Optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIsImpl(
     for (auto &PHIIt : PHI->IncomingValues) {
       // Any undef input means DBG_PHIs didn't dominate the use point.
       if (Updater.UndefMap.find(&PHIIt.first->BB) != Updater.UndefMap.end())
-        return None;
+        return std::nullopt;
 
       ValueIDNum ValueToCheck;
       const ValueTable &BlockLiveOuts = MLiveOuts[PHIIt.first->BB.getNumber()];
@@ -4095,7 +4099,7 @@ Optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIsImpl(
       }
 
       if (BlockLiveOuts[Loc.asU64()] != ValueToCheck)
-        return None;
+        return std::nullopt;
     }
 
     // Record this value as validated.
