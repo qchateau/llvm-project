@@ -1918,7 +1918,7 @@ static ExprResult SemaBuiltinLaunder(Sema &S, CallExpr *TheCall) {
   }();
   if (DiagSelect) {
     S.Diag(TheCall->getBeginLoc(), diag::err_builtin_launder_invalid_arg)
-        << DiagSelect.value() << TheCall->getSourceRange();
+        << *DiagSelect << TheCall->getSourceRange();
     return ExprError();
   }
 
@@ -3226,9 +3226,9 @@ bool Sema::CheckAArch64BuiltinFunctionCall(const TargetInfo &TI,
 
   if (BuiltinID == AArch64::BI__builtin_arm_prefetch) {
     return SemaBuiltinConstantArgRange(TheCall, 1, 0, 1) ||
-      SemaBuiltinConstantArgRange(TheCall, 2, 0, 2) ||
-      SemaBuiltinConstantArgRange(TheCall, 3, 0, 1) ||
-      SemaBuiltinConstantArgRange(TheCall, 4, 0, 1);
+           SemaBuiltinConstantArgRange(TheCall, 2, 0, 3) ||
+           SemaBuiltinConstantArgRange(TheCall, 3, 0, 1) ||
+           SemaBuiltinConstantArgRange(TheCall, 4, 0, 1);
   }
 
   if (BuiltinID == AArch64::BI__builtin_arm_rsr64 ||
@@ -14748,7 +14748,7 @@ void Sema::CheckForIntOverflow (Expr *E) {
     else if (auto New = dyn_cast<CXXNewExpr>(E)) {
       if (New->isArray())
         if (auto ArraySize = New->getArraySize())
-          Exprs.push_back(ArraySize.value());
+          Exprs.push_back(*ArraySize);
     }
   } while (!Exprs.empty());
 }
