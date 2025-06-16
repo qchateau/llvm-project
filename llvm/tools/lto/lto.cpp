@@ -13,6 +13,7 @@
 
 #include "llvm-c/lto.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGen/CommandFlags.h"
@@ -88,6 +89,8 @@ struct LTOToolDiagnosticHandler : public DiagnosticHandler {
   }
 };
 
+static SmallVector<const char *> RuntimeLibcallSymbols;
+
 // Initialize the configured targets if they have not been initialized.
 static void lto_initialize() {
   if (!initialized) {
@@ -106,9 +109,9 @@ static void lto_initialize() {
 
     static LLVMContext Context;
     LTOContext = &Context;
-    LTOContext->setOpaquePointers(true);
     LTOContext->setDiagnosticHandler(
         std::make_unique<LTOToolDiagnosticHandler>(), true);
+    RuntimeLibcallSymbols = lto::LTO::getRuntimeLibcallSymbols(Triple());
     initialized = true;
   }
 }
@@ -134,10 +137,7 @@ struct LibLTOCodeGenerator : LTOCodeGenerator {
   // Module must be destructed before its context gets destructed.
   ~LibLTOCodeGenerator() { resetMergedModule(); }
 
-  void init() {
-    OwnedContext->setOpaquePointers(true);
-    setDiagnosticHandler(handleLibLTODiagnostic, nullptr);
-  }
+  void init() { setDiagnosticHandler(handleLibLTODiagnostic, nullptr); }
 
   std::unique_ptr<MemoryBuffer> NativeObjectFile;
   std::unique_ptr<LLVMContext> OwnedContext;
@@ -275,7 +275,6 @@ lto_module_t lto_module_create_in_local_context(const void *mem, size_t length,
 
   // Create a local context. Ownership will be transferred to LTOModule.
   std::unique_ptr<LLVMContext> Context = std::make_unique<LLVMContext>();
-  Context->setOpaquePointers(true);
   Context->setDiagnosticHandler(std::make_unique<LTOToolDiagnosticHandler>(),
                                 true);
 
@@ -303,11 +302,11 @@ lto_module_t lto_module_create_in_codegen_context(const void *mem,
 void lto_module_dispose(lto_module_t mod) { delete unwrap(mod); }
 
 const char* lto_module_get_target_triple(lto_module_t mod) {
-  return unwrap(mod)->getTargetTriple().c_str();
+  return unwrap(mod)->getTargetTriple().str().c_str();
 }
 
 void lto_module_set_target_triple(lto_module_t mod, const char *triple) {
-  return unwrap(mod)->setTargetTriple(StringRef(triple));
+  return unwrap(mod)->setTargetTriple(Triple(StringRef(triple)));
 }
 
 unsigned int lto_module_get_num_symbols(lto_module_t mod) {
@@ -476,8 +475,7 @@ void lto_set_debug_options(const char *const *options, int number) {
   // Need to put each suboption in a null-terminated string before passing to
   // parseCommandLineOptions().
   std::vector<std::string> Options;
-  for (int i = 0; i < number; ++i)
-    Options.push_back(options[i]);
+  llvm::append_range(Options, ArrayRef(options, number));
 
   llvm::parseCommandLineOptions(Options);
   optionParsingState = OptParsingState::Early;
@@ -498,10 +496,8 @@ void lto_codegen_debug_options_array(lto_code_gen_t cg,
                                      const char *const *options, int number) {
   assert(optionParsingState != OptParsingState::Early &&
          "early option processing already happened");
-  SmallVector<StringRef, 4> Options;
-  for (int i = 0; i < number; ++i)
-    Options.push_back(options[i]);
-  unwrap(cg)->setCodeGenDebugOptions(makeArrayRef(Options));
+  SmallVector<StringRef, 4> Options(ArrayRef(options, number));
+  unwrap(cg)->setCodeGenDebugOptions(ArrayRef(Options));
 }
 
 unsigned int lto_api_version() { return LTO_API_VERSION; }
@@ -533,20 +529,10 @@ thinlto_code_gen_t thinlto_create_codegen(void) {
     if (OptLevel < '0' || OptLevel > '3')
       report_fatal_error("Optimization level must be between 0 and 3");
     CodeGen->setOptLevel(OptLevel - '0');
-    switch (OptLevel) {
-    case '0':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::None);
-      break;
-    case '1':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::Less);
-      break;
-    case '2':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::Default);
-      break;
-    case '3':
-      CodeGen->setCodeGenOptLevel(CodeGenOpt::Aggressive);
-      break;
-    }
+    std::optional<CodeGenOptLevel> CGOptLevelOrNone =
+        CodeGenOpt::getLevel(OptLevel - '0');
+    assert(CGOptLevelOrNone);
+    CodeGen->setCodeGenOptLevel(*CGOptLevelOrNone);
   }
   return wrap(CodeGen);
 }
@@ -706,7 +692,6 @@ extern const char *lto_input_get_dependent_library(lto_input_t input,
 }
 
 extern const char *const *lto_runtime_lib_symbols_list(size_t *size) {
-  auto symbols = lto::LTO::getRuntimeLibcallSymbols();
-  *size = symbols.size();
-  return symbols.data();
+  *size = RuntimeLibcallSymbols.size();
+  return RuntimeLibcallSymbols.data();
 }

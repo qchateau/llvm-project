@@ -15,12 +15,12 @@
 #include "MCTargetDesc/MipsMCTargetDesc.h"
 #include "Mips.h"
 #include "Mips16ISelDAGToDAG.h"
+#include "MipsMachineFunction.h"
 #include "MipsSEISelDAGToDAG.h"
 #include "MipsSubtarget.h"
 #include "MipsTargetObjectFile.h"
 #include "MipsTargetTransformInfo.h"
 #include "TargetInfo/MipsTargetInfo.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
@@ -60,12 +60,20 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMipsTarget() {
 
   PassRegistry *PR = PassRegistry::getPassRegistry();
   initializeGlobalISel(*PR);
+  initializeMipsAsmPrinterPass(*PR);
   initializeMipsDelaySlotFillerPass(*PR);
   initializeMipsBranchExpansionPass(*PR);
   initializeMicroMipsSizeReducePass(*PR);
   initializeMipsPreLegalizerCombinerPass(*PR);
   initializeMipsPostLegalizerCombinerPass(*PR);
   initializeMipsMulMulBugFixPass(*PR);
+  initializeMipsDAGToDAGISelLegacyPass(*PR);
+}
+
+static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
+  if (TT.isOSBinFormatCOFF())
+    return std::make_unique<TargetLoweringObjectFileCOFF>();
+  return std::make_unique<MipsTargetObjectFile>();
 }
 
 static std::string computeDataLayout(const Triple &TT, StringRef CPU,
@@ -97,7 +105,7 @@ static std::string computeDataLayout(const Triple &TT, StringRef CPU,
   // aligned. On N64 64 bit registers are also available and the stack is
   // 128 bit aligned.
   if (ABI.IsN64() || ABI.IsN32())
-    Ret += "-n32:64-S128";
+    Ret += "-i128:128-n32:64-S128";
   else
     Ret += "-n32-S64";
 
@@ -121,12 +129,13 @@ MipsTargetMachine::MipsTargetMachine(const Target &T, const Triple &TT,
                                      const TargetOptions &Options,
                                      std::optional<Reloc::Model> RM,
                                      std::optional<CodeModel::Model> CM,
-                                     CodeGenOpt::Level OL, bool JIT,
+                                     CodeGenOptLevel OL, bool JIT,
                                      bool isLittle)
-    : LLVMTargetMachine(T, computeDataLayout(TT, CPU, Options, isLittle), TT,
-                        CPU, FS, Options, getEffectiveRelocModel(JIT, RM),
-                        getEffectiveCodeModel(CM, CodeModel::Small), OL),
-      isLittle(isLittle), TLOF(std::make_unique<MipsTargetObjectFile>()),
+    : CodeGenTargetMachineImpl(T, computeDataLayout(TT, CPU, Options, isLittle),
+                               TT, CPU, FS, Options,
+                               getEffectiveRelocModel(JIT, RM),
+                               getEffectiveCodeModel(CM, CodeModel::Small), OL),
+      isLittle(isLittle), TLOF(createTLOF(getTargetTriple())),
       ABI(MipsABIInfo::computeTargetABI(TT, CPU, Options.MCOptions)),
       Subtarget(nullptr),
       DefaultSubtarget(TT, CPU, FS, isLittle, *this, std::nullopt),
@@ -150,7 +159,7 @@ MipsebTargetMachine::MipsebTargetMachine(const Target &T, const Triple &TT,
                                          const TargetOptions &Options,
                                          std::optional<Reloc::Model> RM,
                                          std::optional<CodeModel::Model> CM,
-                                         CodeGenOpt::Level OL, bool JIT)
+                                         CodeGenOptLevel OL, bool JIT)
     : MipsTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, JIT, false) {}
 
 void MipselTargetMachine::anchor() {}
@@ -160,7 +169,7 @@ MipselTargetMachine::MipselTargetMachine(const Target &T, const Triple &TT,
                                          const TargetOptions &Options,
                                          std::optional<Reloc::Model> RM,
                                          std::optional<CodeModel::Model> CM,
-                                         CodeGenOpt::Level OL, bool JIT)
+                                         CodeGenOptLevel OL, bool JIT)
     : MipsTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, JIT, true) {}
 
 const MipsSubtarget *
@@ -225,6 +234,7 @@ public:
     // can break this requirement, so disable it when long branch pass is
     // enabled.
     EnableTailMerge = !getMipsSubtarget().enableLongBranchPass();
+    EnableLoopTermFold = true;
   }
 
   MipsTargetMachine &getMipsTargetMachine() const {
@@ -261,7 +271,7 @@ std::unique_ptr<CSEConfigBase> MipsPassConfig::getCSEConfig() const {
 
 void MipsPassConfig::addIRPasses() {
   TargetPassConfig::addIRPasses();
-  addPass(createAtomicExpandPass());
+  addPass(createAtomicExpandLegacyPass());
   if (getMipsSubtarget().os16())
     addPass(createMipsOs16Pass());
   if (getMipsSubtarget().inMips16HardFloat())
@@ -285,11 +295,17 @@ MipsTargetMachine::getTargetTransformInfo(const Function &F) const {
   if (Subtarget->allowMixed16_32()) {
     LLVM_DEBUG(errs() << "No Target Transform Info Pass Added\n");
     // FIXME: This is no longer necessary as the TTI returned is per-function.
-    return TargetTransformInfo(F.getParent()->getDataLayout());
+    return TargetTransformInfo(F.getDataLayout());
   }
 
   LLVM_DEBUG(errs() << "Target Transform Info Pass Added\n");
-  return TargetTransformInfo(MipsTTIImpl(this, F));
+  return TargetTransformInfo(std::make_unique<MipsTTIImpl>(this, F));
+}
+
+MachineFunctionInfo *MipsTargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return MipsFunctionInfo::create<MipsFunctionInfo>(Allocator, F, STI);
 }
 
 // Implemented by targets that want to run passes immediately before
@@ -339,7 +355,7 @@ bool MipsPassConfig::addLegalizeMachineIR() {
 }
 
 void MipsPassConfig::addPreRegBankSelect() {
-  bool IsOptNone = getOptLevel() == CodeGenOpt::None;
+  bool IsOptNone = getOptLevel() == CodeGenOptLevel::None;
   addPass(createMipsPostLegalizeCombiner(IsOptNone));
 }
 

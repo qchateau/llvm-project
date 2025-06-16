@@ -25,15 +25,12 @@ extern cl::opt<bool> AlignBlocks;
 extern cl::opt<bool> PreserveBlocksAlignment;
 extern cl::opt<unsigned> AlignFunctions;
 
-cl::opt<unsigned>
-AlignBlocksMinSize("align-blocks-min-size",
-  cl::desc("minimal size of the basic block that should be aligned"),
-  cl::init(0),
-  cl::ZeroOrMore,
-  cl::Hidden,
-  cl::cat(BoltOptCategory));
+static cl::opt<unsigned> AlignBlocksMinSize(
+    "align-blocks-min-size",
+    cl::desc("minimal size of the basic block that should be aligned"),
+    cl::init(0), cl::ZeroOrMore, cl::Hidden, cl::cat(BoltOptCategory));
 
-cl::opt<unsigned> AlignBlocksThreshold(
+static cl::opt<unsigned> AlignBlocksThreshold(
     "align-blocks-threshold",
     cl::desc(
         "align only blocks with frequency larger than containing function "
@@ -42,19 +39,17 @@ cl::opt<unsigned> AlignBlocksThreshold(
         "containing function."),
     cl::init(800), cl::Hidden, cl::cat(BoltOptCategory));
 
-cl::opt<unsigned> AlignFunctionsMaxBytes(
+static cl::opt<unsigned> AlignFunctionsMaxBytes(
     "align-functions-max-bytes",
     cl::desc("maximum number of bytes to use to align functions"), cl::init(32),
     cl::cat(BoltOptCategory));
 
-cl::opt<unsigned>
-BlockAlignment("block-alignment",
-  cl::desc("boundary to use for alignment of basic blocks"),
-  cl::init(16),
-  cl::ZeroOrMore,
-  cl::cat(BoltOptCategory));
+static cl::opt<unsigned>
+    BlockAlignment("block-alignment",
+                   cl::desc("boundary to use for alignment of basic blocks"),
+                   cl::init(16), cl::ZeroOrMore, cl::cat(BoltOptCategory));
 
-cl::opt<bool>
+static cl::opt<bool>
     UseCompactAligner("use-compact-aligner",
                       cl::desc("Use compact approach for aligning functions"),
                       cl::init(true), cl::cat(BoltOptCategory));
@@ -64,11 +59,9 @@ cl::opt<bool>
 namespace llvm {
 namespace bolt {
 
-namespace {
-
 // Align function to the specified byte-boundary (typically, 64) offsetting
 // the fuction by not more than the corresponding value
-void alignMaxBytes(BinaryFunction &Function) {
+static void alignMaxBytes(BinaryFunction &Function) {
   Function.setAlignment(opts::AlignFunctions);
   Function.setMaxAlignmentBytes(opts::AlignFunctionsMaxBytes);
   Function.setMaxColdAlignmentBytes(opts::AlignFunctionsMaxBytes);
@@ -78,7 +71,8 @@ void alignMaxBytes(BinaryFunction &Function) {
 // the fuction by not more than the minimum over
 // -- the size of the function
 // -- the specified number of bytes
-void alignCompact(BinaryFunction &Function, const MCCodeEmitter *Emitter) {
+static void alignCompact(BinaryFunction &Function,
+                         const MCCodeEmitter *Emitter) {
   const BinaryContext &BC = Function.getBinaryContext();
   size_t HotSize = 0;
   size_t ColdSize = 0;
@@ -100,8 +94,6 @@ void alignCompact(BinaryFunction &Function, const MCCodeEmitter *Emitter) {
     Function.setMaxColdAlignmentBytes(
       std::min(size_t(opts::AlignFunctionsMaxBytes), ColdSize));
 }
-
-} // end anonymous namespace
 
 void AlignerPass::alignBlocks(BinaryFunction &Function,
                               const MCCodeEmitter *Emitter) {
@@ -150,9 +142,9 @@ void AlignerPass::alignBlocks(BinaryFunction &Function,
   }
 }
 
-void AlignerPass::runOnFunctions(BinaryContext &BC) {
+Error AlignerPass::runOnFunctions(BinaryContext &BC) {
   if (!BC.HasRelocations)
-    return;
+    return Error::success();
 
   AlignHistogram.resize(opts::BlockAlignment);
 
@@ -165,20 +157,6 @@ void AlignerPass::runOnFunctions(BinaryContext &BC) {
       alignCompact(BF, Emitter.MCE.get());
     else
       alignMaxBytes(BF);
-
-    // Align objects that contains constant islands and no code
-    // to at least 8 bytes.
-    if (!BF.size() && BF.hasIslandsInfo()) {
-      const uint16_t Alignment = BF.getConstantIslandAlignment();
-      if (BF.getAlignment() < Alignment)
-        BF.setAlignment(Alignment);
-
-      if (BF.getMaxAlignmentBytes() < Alignment)
-        BF.setMaxAlignmentBytes(Alignment);
-
-      if (BF.getMaxColdAlignmentBytes() < Alignment)
-        BF.setMaxColdAlignmentBytes(Alignment);
-    }
 
     if (opts::AlignBlocks && !opts::PreserveBlocksAlignment)
       alignBlocks(BF, Emitter.MCE.get());
@@ -196,6 +174,7 @@ void AlignerPass::runOnFunctions(BinaryContext &BC) {
     dbgs() << "BOLT-DEBUG: total execution count of aligned blocks: "
            << AlignedBlocksCount << '\n';
   );
+  return Error::success();
 }
 
 } // end namespace bolt

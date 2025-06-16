@@ -18,6 +18,7 @@
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/BinaryStreamWriter.h"
 #include "llvm/Support/Parallel.h"
+#include "llvm/Support/TimeProfiler.h"
 
 using namespace llvm;
 using namespace llvm::codeview;
@@ -187,7 +188,7 @@ Error DbiStreamBuilder::generateFileInfoSubstream() {
   uint32_t NamesOffset = calculateNamesOffset();
 
   FileInfoBuffer = MutableBinaryByteStream(MutableArrayRef<uint8_t>(Data, Size),
-                                           llvm::support::little);
+                                           llvm::endianness::little);
 
   WritableBinaryStreamRef MetadataBuffer =
       WritableBinaryStreamRef(FileInfoBuffer).keep_front(NamesOffset);
@@ -301,7 +302,7 @@ Error DbiStreamBuilder::finalizeMsfLayout() {
         sizeof(object::FpoData) * OldFpoData.size();
     DbgStreams[(int)DbgHeaderType::FPO]->WriteFn =
         [this](BinaryStreamWriter &Writer) {
-          return Writer.writeArray(makeArrayRef(OldFpoData));
+          return Writer.writeArray(ArrayRef(OldFpoData));
         };
   }
 
@@ -381,6 +382,7 @@ void DbiStreamBuilder::createSectionMap(
 
 Error DbiStreamBuilder::commit(const msf::MSFLayout &Layout,
                                WritableBinaryStreamRef MsfBuffer) {
+  llvm::TimeTraceScope timeScope("Commit DBI stream");
   if (auto EC = finalize())
     return EC;
 
@@ -406,7 +408,7 @@ Error DbiStreamBuilder::commit(const msf::MSFLayout &Layout,
   if (!SectionContribs.empty()) {
     if (auto EC = Writer.writeEnum(DbiSecContribVer60))
       return EC;
-    if (auto EC = Writer.writeArray(makeArrayRef(SectionContribs)))
+    if (auto EC = Writer.writeArray(ArrayRef(SectionContribs)))
       return EC;
   }
 
@@ -415,7 +417,7 @@ Error DbiStreamBuilder::commit(const msf::MSFLayout &Layout,
     SecMapHeader SMHeader = {Size, Size};
     if (auto EC = Writer.writeObject(SMHeader))
       return EC;
-    if (auto EC = Writer.writeArray(makeArrayRef(SectionMap)))
+    if (auto EC = Writer.writeArray(ArrayRef(SectionMap)))
       return EC;
   }
 

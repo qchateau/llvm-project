@@ -14,6 +14,7 @@
 
 #include "AMDGPUInstrInfo.h"
 #include "AMDGPU.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
@@ -26,6 +27,9 @@ using namespace llvm;
 
 AMDGPUInstrInfo::AMDGPUInstrInfo(const GCNSubtarget &ST) { }
 
+Intrinsic::ID AMDGPU::getIntrinsicID(const MachineInstr &I) {
+  return I.getOperand(I.getNumExplicitDefs()).getIntrinsicID();
+}
 
 // TODO: Should largely merge with AMDGPUTTIImpl::isSourceOfDivergence.
 bool AMDGPUInstrInfo::isUniformMMO(const MachineMemOperand *MMO) {
@@ -34,8 +38,7 @@ bool AMDGPUInstrInfo::isUniformMMO(const MachineMemOperand *MMO) {
   // Sometimes LDS instructions have constant pointers.
   // If Ptr is null, then that means this mem operand contains a
   // PseudoSourceValue like GOT.
-  if (!Ptr || isa<UndefValue>(Ptr) ||
-      isa<Constant>(Ptr) || isa<GlobalValue>(Ptr))
+  if (!Ptr || isa<UndefValue, Constant, GlobalValue>(Ptr))
     return true;
 
   if (MMO->getAddrSpace() == AMDGPUAS::CONSTANT_ADDRESS_32BIT)

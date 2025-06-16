@@ -11,12 +11,14 @@
 
 #include "ClangTidyOptions.h"
 #include "ClangTidyProfiling.h"
+#include "FileExtensionsSet.h"
 #include "NoLintDirectiveHandler.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Tooling/Core/Diagnostic.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Regex.h"
+#include <optional>
 
 namespace clang {
 
@@ -68,15 +70,21 @@ class ClangTidyContext {
 public:
   /// Initializes \c ClangTidyContext instance.
   ClangTidyContext(std::unique_ptr<ClangTidyOptionsProvider> OptionsProvider,
-                   bool AllowEnablingAnalyzerAlphaCheckers = false);
+                   bool AllowEnablingAnalyzerAlphaCheckers = false,
+                   bool EnableModuleHeadersParsing = false);
   /// Sets the DiagnosticsEngine that diag() will emit diagnostics to.
   // FIXME: this is required initialization, and should be a constructor param.
   // Fix the context -> diag engine -> consumer -> context initialization cycle.
-  void setDiagnosticsEngine(DiagnosticsEngine *DiagEngine) {
+  void setDiagnosticsEngine(std::unique_ptr<DiagnosticOptions> DiagOpts,
+                            DiagnosticsEngine *DiagEngine) {
+    this->DiagOpts = std::move(DiagOpts);
     this->DiagEngine = DiagEngine;
   }
 
   ~ClangTidyContext();
+
+  ClangTidyContext(const ClangTidyContext &) = delete;
+  ClangTidyContext &operator=(const ClangTidyContext &) = delete;
 
   /// Report any errors detected using this method.
   ///
@@ -84,10 +92,10 @@ public:
   /// tablegen'd diagnostic IDs.
   /// FIXME: Figure out a way to manage ID spaces.
   DiagnosticBuilder diag(StringRef CheckName, SourceLocation Loc,
-                         StringRef Message,
+                         StringRef Description,
                          DiagnosticIDs::Level Level = DiagnosticIDs::Warning);
 
-  DiagnosticBuilder diag(StringRef CheckName, StringRef Message,
+  DiagnosticBuilder diag(StringRef CheckName, StringRef Description,
                          DiagnosticIDs::Level Level = DiagnosticIDs::Warning);
 
   DiagnosticBuilder diag(const tooling::Diagnostic &Error);
@@ -159,6 +167,14 @@ public:
   /// \c CurrentFile.
   ClangTidyOptions getOptionsForFile(StringRef File) const;
 
+  const FileExtensionsSet &getHeaderFileExtensions() const {
+    return HeaderFileExtensions;
+  }
+
+  const FileExtensionsSet &getImplementationFileExtensions() const {
+    return ImplementationFileExtensions;
+  }
+
   /// Returns \c ClangTidyStats containing issued and ignored diagnostic
   /// counters.
   const ClangTidyStats &getStats() const { return Stats; }
@@ -169,7 +185,7 @@ public:
 
   /// Control storage of profile date.
   void setProfileStoragePrefix(StringRef ProfilePrefix);
-  llvm::Optional<ClangTidyProfiling::StorageParams>
+  std::optional<ClangTidyProfiling::StorageParams>
   getProfileStorageParams() const;
 
   /// Should be called when starting to process new translation unit.
@@ -188,6 +204,12 @@ public:
     return AllowEnablingAnalyzerAlphaCheckers;
   }
 
+  // This method determines whether preprocessor-level module header parsing is
+  // enabled using the `--experimental-enable-module-headers-parsing` option.
+  bool canEnableModuleHeadersParsing() const {
+    return EnableModuleHeadersParsing;
+  }
+
   void setSelfContainedDiags(bool Value) { SelfContainedDiags = Value; }
 
   bool areDiagsSelfContained() const { return SelfContainedDiags; }
@@ -195,11 +217,10 @@ public:
   using DiagLevelAndFormatString = std::pair<DiagnosticIDs::Level, std::string>;
   DiagLevelAndFormatString getDiagLevelAndFormatString(unsigned DiagnosticID,
                                                        SourceLocation Loc) {
-    return DiagLevelAndFormatString(
-        static_cast<DiagnosticIDs::Level>(
-            DiagEngine->getDiagnosticLevel(DiagnosticID, Loc)),
-        std::string(
-            DiagEngine->getDiagnosticIDs()->getDescription(DiagnosticID)));
+    return {static_cast<DiagnosticIDs::Level>(
+                DiagEngine->getDiagnosticLevel(DiagnosticID, Loc)),
+            std::string(
+                DiagEngine->getDiagnosticIDs()->getDescription(DiagnosticID))};
   }
 
   void setOptionsCollector(llvm::StringSet<> *Collector) {
@@ -211,7 +232,8 @@ private:
   // Writes to Stats.
   friend class ClangTidyDiagnosticConsumer;
 
-  DiagnosticsEngine *DiagEngine;
+  std::unique_ptr<DiagnosticOptions> DiagOpts = nullptr;
+  DiagnosticsEngine *DiagEngine = nullptr;
   std::unique_ptr<ClangTidyOptionsProvider> OptionsProvider;
 
   std::string CurrentFile;
@@ -219,6 +241,9 @@ private:
 
   std::unique_ptr<CachedGlobList> CheckFilter;
   std::unique_ptr<CachedGlobList> WarningAsErrorFilter;
+
+  FileExtensionsSet HeaderFileExtensions;
+  FileExtensionsSet ImplementationFileExtensions;
 
   LangOptions LangOpts;
 
@@ -228,12 +253,13 @@ private:
 
   llvm::DenseMap<unsigned, std::string> CheckNamesByDiagnosticID;
 
-  bool Profile;
+  bool Profile = false;
   std::string ProfilePrefix;
 
   bool AllowEnablingAnalyzerAlphaCheckers;
+  bool EnableModuleHeadersParsing;
 
-  bool SelfContainedDiags;
+  bool SelfContainedDiags = false;
 
   NoLintDirectiveHandler NoLintHandler;
   llvm::StringSet<> *OptionsCollector = nullptr;
@@ -278,6 +304,10 @@ private:
   /// context.
   llvm::Regex *getHeaderFilter();
 
+  /// Returns the \c ExcludeHeaderFilter constructed for the options set in the
+  /// context.
+  llvm::Regex *getExcludeHeaderFilter();
+
   /// Updates \c LastErrorRelatesToUserCode and LastErrorPassesLineFilter
   /// according to the diagnostic \p Location.
   void checkFilters(SourceLocation Location, const SourceManager &Sources);
@@ -292,9 +322,10 @@ private:
   bool EnableNolintBlocks;
   std::vector<ClangTidyError> Errors;
   std::unique_ptr<llvm::Regex> HeaderFilter;
-  bool LastErrorRelatesToUserCode;
-  bool LastErrorPassesLineFilter;
-  bool LastErrorWasIgnored;
+  std::unique_ptr<llvm::Regex> ExcludeHeaderFilter;
+  bool LastErrorRelatesToUserCode = false;
+  bool LastErrorPassesLineFilter = false;
+  bool LastErrorWasIgnored = false;
 };
 
 } // end namespace tidy

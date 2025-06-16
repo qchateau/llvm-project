@@ -4,7 +4,7 @@
 target triple = "amdgcn-amd-amdhsa"
 
 ; Unknown functions are conservatively passed all implicit parameters
-declare void @unknown_call()
+declare fastcc void @unknown_call()
 ; Use the same constant as a sgpr parameter (for the kernel id) and for a vector operation
 define protected amdgpu_kernel void @kern(ptr %addr) !llvm.amdgcn.lds.kernel.id !0 {
 ; CHECK-LABEL: kern:
@@ -16,11 +16,11 @@ define protected amdgpu_kernel void @kern(ptr %addr) !llvm.amdgcn.lds.kernel.id 
 ; CHECK-NEXT:    s_setreg_b32 hwreg(HW_REG_FLAT_SCR_HI), s13
 ; CHECK-NEXT:    s_add_u32 s0, s0, s17
 ; CHECK-NEXT:    s_addc_u32 s1, s1, 0
-; CHECK-NEXT:    ; implicit-def: $vgpr3
-; CHECK-NEXT:    v_writelane_b32 v3, s16, 0
+; CHECK-NEXT:    ; implicit-def: $vgpr40 : SGPR spill to VGPR lane
+; CHECK-NEXT:    v_writelane_b32 v40, s16, 0
 ; CHECK-NEXT:    s_mov_b32 s13, s15
 ; CHECK-NEXT:    s_mov_b32 s12, s14
-; CHECK-NEXT:    v_readlane_b32 s14, v3, 0
+; CHECK-NEXT:    v_readlane_b32 s14, v40, 0
 ; CHECK-NEXT:    s_mov_b64 s[16:17], s[8:9]
 ; CHECK-NEXT:    s_load_dwordx2 s[8:9], s[16:17], 0x0
 ; CHECK-NEXT:    v_mov_b32_e32 v5, 42
@@ -59,4 +59,6 @@ define protected amdgpu_kernel void @kern(ptr %addr) !llvm.amdgcn.lds.kernel.id 
   ret void
 }
 
+!llvm.module.flags = !{!1}
 !0 = !{i32 42}
+!1 = !{i32 1, !"amdhsa_code_object_version", i32 500}

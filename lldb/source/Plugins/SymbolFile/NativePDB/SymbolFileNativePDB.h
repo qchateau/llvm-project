@@ -20,6 +20,7 @@
 #include "CompileUnitIndex.h"
 #include "PdbIndex.h"
 #include "PdbAstBuilder.h"
+#include <optional>
 
 namespace clang {
 class TagDecl;
@@ -76,7 +77,7 @@ public:
 
   void InitializeObject() override;
 
-  uint64_t GetDebugInfoSize() override;
+  uint64_t GetDebugInfoSize(bool load_all_debug_info = false) override;
 
   // Compile Unit function calls
 
@@ -93,7 +94,7 @@ public:
   bool ParseDebugMacros(lldb_private::CompileUnit &comp_unit) override;
 
   bool ParseSupportFiles(lldb_private::CompileUnit &comp_unit,
-                         FileSpecList &support_files) override;
+                         SupportFileList &support_files) override;
   size_t ParseTypes(lldb_private::CompileUnit &comp_unit) override;
 
   bool ParseImportedModules(
@@ -115,7 +116,7 @@ public:
   CompilerDeclContext GetDeclContextForUID(lldb::user_id_t uid) override;
   CompilerDeclContext GetDeclContextContainingUID(lldb::user_id_t uid) override;
   Type *ResolveTypeUID(lldb::user_id_t type_uid) override;
-  llvm::Optional<ArrayInfo> GetDynamicArrayInfoForUID(
+  std::optional<ArrayInfo> GetDynamicArrayInfoForUID(
       lldb::user_id_t type_uid,
       const lldb_private::ExecutionContext *exe_ctx) override;
 
@@ -137,23 +138,17 @@ public:
   void FindFunctions(const RegularExpression &regex, bool include_inlines,
                      SymbolContextList &sc_list) override;
 
-  llvm::Optional<PdbCompilandSymId> FindSymbolScope(PdbCompilandSymId id);
+  std::optional<PdbCompilandSymId> FindSymbolScope(PdbCompilandSymId id);
 
-  void FindTypes(ConstString name, const CompilerDeclContext &parent_decl_ctx,
-                 uint32_t max_matches,
-                 llvm::DenseSet<SymbolFile *> &searched_symbol_files,
-                 TypeMap &types) override;
-
-  void FindTypes(llvm::ArrayRef<CompilerContext> pattern, LanguageSet languages,
-                 llvm::DenseSet<SymbolFile *> &searched_symbol_files,
-                 TypeMap &types) override;
+  void FindTypes(const lldb_private::TypeQuery &match,
+                 lldb_private::TypeResults &results) override;
 
   llvm::Expected<lldb::TypeSystemSP>
   GetTypeSystemForLanguage(lldb::LanguageType language) override;
 
-  CompilerDeclContext
-  FindNamespace(ConstString name,
-                const CompilerDeclContext &parent_decl_ctx) override;
+  CompilerDeclContext FindNamespace(ConstString name,
+                                    const CompilerDeclContext &parent_decl_ctx,
+                                    bool only_root_namespaces) override;
 
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
@@ -162,9 +157,9 @@ public:
 
   PdbIndex &GetIndex() { return *m_index; };
 
-  void DumpClangAST(Stream &s) override;
+  void DumpClangAST(Stream &s, llvm::StringRef filter) override;
 
-  llvm::Optional<llvm::codeview::TypeIndex>
+  std::optional<llvm::codeview::TypeIndex>
   GetParentType(llvm::codeview::TypeIndex ti);
 
 private:
@@ -231,7 +226,7 @@ private:
   lldb::TypeSP GetOrCreateType(PdbTypeSymId type_id);
   lldb::TypeSP GetOrCreateType(llvm::codeview::TypeIndex ti);
   lldb::VariableSP GetOrCreateGlobalVariable(PdbGlobalSymId var_id);
-  Block &GetOrCreateBlock(PdbCompilandSymId block_id);
+  Block *GetOrCreateBlock(PdbCompilandSymId block_id);
   lldb::VariableSP GetOrCreateLocalVariable(PdbCompilandSymId scope_id,
                                             PdbCompilandSymId var_id,
                                             bool is_param);
@@ -239,7 +234,7 @@ private:
 
   lldb::FunctionSP CreateFunction(PdbCompilandSymId func_id,
                                   CompileUnit &comp_unit);
-  Block &CreateBlock(PdbCompilandSymId block_id);
+  Block *CreateBlock(PdbCompilandSymId block_id);
   lldb::VariableSP CreateLocalVariable(PdbCompilandSymId scope_id,
                                        PdbCompilandSymId var_id, bool is_param);
   lldb::TypeSP CreateTypedef(PdbGlobalSymId id);

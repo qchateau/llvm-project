@@ -6,53 +6,47 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "src/__support/CPP/new.h"
 #include "src/__support/File/file.h"
 #include "src/__support/error_or.h"
-#include "utils/UnitTest/MemoryMatcher.h"
-#include "utils/UnitTest/Test.h"
+#include "test/UnitTest/MemoryMatcher.h"
+#include "test/UnitTest/Test.h"
 
-#include <stdio.h>
-#include <stdlib.h>
+#include "hdr/types/size_t.h"
 
-using ModeFlags = __llvm_libc::File::ModeFlags;
-using MemoryView = __llvm_libc::memory::testing::MemoryView;
-using __llvm_libc::ErrorOr;
-using __llvm_libc::FileIOResult;
+using ModeFlags = LIBC_NAMESPACE::File::ModeFlags;
+using MemoryView = LIBC_NAMESPACE::testing::MemoryView;
+using LIBC_NAMESPACE::ErrorOr;
+using LIBC_NAMESPACE::File;
+using LIBC_NAMESPACE::FileIOResult;
 
-class StringFile : public __llvm_libc::File {
+class StringFile : public File {
   static constexpr size_t SIZE = 512;
   size_t pos;
   char str[SIZE] = {0};
   size_t eof_marker;
   bool write_append;
 
-  static FileIOResult str_read(__llvm_libc::File *f, void *data, size_t len);
-  static FileIOResult str_write(__llvm_libc::File *f, const void *data,
+  static FileIOResult str_read(LIBC_NAMESPACE::File *f, void *data, size_t len);
+  static FileIOResult str_write(LIBC_NAMESPACE::File *f, const void *data,
                                 size_t len);
-  static ErrorOr<long> str_seek(__llvm_libc::File *f, long offset, int whence);
-  static int str_close(__llvm_libc::File *f) { return 0; }
-  static int str_flush(__llvm_libc::File *f) { return 0; }
+  static ErrorOr<off_t> str_seek(LIBC_NAMESPACE::File *f, off_t offset,
+                                 int whence);
+  static int str_close(LIBC_NAMESPACE::File *f) {
+    delete reinterpret_cast<StringFile *>(f);
+    return 0;
+  }
 
 public:
   explicit StringFile(char *buffer, size_t buflen, int bufmode, bool owned,
                       ModeFlags modeflags)
-      : __llvm_libc::File(&str_write, &str_read, &str_seek, &str_close,
-                          &str_flush, buffer, buflen, bufmode, owned,
-                          modeflags),
+      : LIBC_NAMESPACE::File(&str_write, &str_read, &str_seek, &str_close,
+                             reinterpret_cast<uint8_t *>(buffer), buflen,
+                             bufmode, owned, modeflags),
         pos(0), eof_marker(0), write_append(false) {
-    if (modeflags & static_cast<ModeFlags>(__llvm_libc::File::OpenMode::APPEND))
+    if (modeflags &
+        static_cast<ModeFlags>(LIBC_NAMESPACE::File::OpenMode::APPEND))
       write_append = true;
-  }
-
-  void init(char *buffer, size_t buflen, int bufmode, bool owned,
-            ModeFlags modeflags) {
-    File::init(this, &str_write, &str_read, &str_seek, &str_close, &str_flush,
-               buffer, buflen, bufmode, owned, modeflags);
-    pos = eof_marker = 0;
-    if (modeflags & static_cast<ModeFlags>(__llvm_libc::File::OpenMode::APPEND))
-      write_append = true;
-    else
-      write_append = false;
   }
 
   void reset() { pos = 0; }
@@ -70,7 +64,7 @@ public:
   }
 };
 
-FileIOResult StringFile::str_read(__llvm_libc::File *f, void *data,
+FileIOResult StringFile::str_read(LIBC_NAMESPACE::File *f, void *data,
                                   size_t len) {
   StringFile *sf = static_cast<StringFile *>(f);
   if (sf->pos >= sf->eof_marker)
@@ -82,7 +76,7 @@ FileIOResult StringFile::str_read(__llvm_libc::File *f, void *data,
   return i;
 }
 
-FileIOResult StringFile::str_write(__llvm_libc::File *f, const void *data,
+FileIOResult StringFile::str_write(LIBC_NAMESPACE::File *f, const void *data,
                                    size_t len) {
   StringFile *sf = static_cast<StringFile *>(f);
   if (sf->write_append)
@@ -98,8 +92,8 @@ FileIOResult StringFile::str_write(__llvm_libc::File *f, const void *data,
   return i;
 }
 
-ErrorOr<long> StringFile::str_seek(__llvm_libc::File *f, long offset,
-                                   int whence) {
+ErrorOr<off_t> StringFile::str_seek(LIBC_NAMESPACE::File *f, off_t offset,
+                                    int whence) {
   StringFile *sf = static_cast<StringFile *>(f);
   if (whence == SEEK_SET)
     sf->pos = offset;
@@ -112,9 +106,11 @@ ErrorOr<long> StringFile::str_seek(__llvm_libc::File *f, long offset,
 
 StringFile *new_string_file(char *buffer, size_t buflen, int bufmode,
                             bool owned, const char *mode) {
-  StringFile *f = reinterpret_cast<StringFile *>(malloc(sizeof(StringFile)));
-  f->init(buffer, buflen, bufmode, owned, __llvm_libc::File::mode_flags(mode));
-  return f;
+  LIBC_NAMESPACE::AllocChecker ac;
+  // We will just assume the allocation succeeds. We cannot test anything
+  // otherwise.
+  return new (ac) StringFile(buffer, buflen, bufmode, owned,
+                             LIBC_NAMESPACE::File::mode_flags(mode));
 }
 
 TEST(LlvmLibcFileTest, WriteOnly) {

@@ -8,6 +8,7 @@
 
 #include "llvm/ExecutionEngine/Orc/COFFVCRuntimeSupport.h"
 
+#include "llvm/ExecutionEngine/Orc/COFF.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/LookupAndRecordAddrs.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -41,8 +42,8 @@ COFFVCRuntimeBootstrapper::loadStaticVCRuntime(JITDylib &JD,
   StringRef VCLibs[] = {"libvcruntime.lib", "libcmt.lib", "libcpmt.lib"};
   StringRef UCRTLibs[] = {"libucrt.lib"};
   std::vector<std::string> ImportedLibraries;
-  if (auto Err = loadVCRuntime(JD, ImportedLibraries, makeArrayRef(VCLibs),
-                               makeArrayRef(UCRTLibs)))
+  if (auto Err = loadVCRuntime(JD, ImportedLibraries, ArrayRef(VCLibs),
+                               ArrayRef(UCRTLibs)))
     return std::move(Err);
   return ImportedLibraries;
 }
@@ -53,8 +54,8 @@ COFFVCRuntimeBootstrapper::loadDynamicVCRuntime(JITDylib &JD,
   StringRef VCLibs[] = {"vcruntime.lib", "msvcrt.lib", "msvcprt.lib"};
   StringRef UCRTLibs[] = {"ucrt.lib"};
   std::vector<std::string> ImportedLibraries;
-  if (auto Err = loadVCRuntime(JD, ImportedLibraries, makeArrayRef(VCLibs),
-                               makeArrayRef(UCRTLibs)))
+  if (auto Err = loadVCRuntime(JD, ImportedLibraries, ArrayRef(VCLibs),
+                               ArrayRef(UCRTLibs)))
     return std::move(Err);
   return ImportedLibraries;
 }
@@ -81,13 +82,14 @@ Error COFFVCRuntimeBootstrapper::loadVCRuntime(
   auto LoadLibrary = [&](SmallString<256> LibPath, StringRef LibName) -> Error {
     sys::path::append(LibPath, LibName);
 
-    auto G = StaticLibraryDefinitionGenerator::Load(ObjLinkingLayer,
-                                                    LibPath.c_str());
+    std::set<std::string> NewImportedLibraries;
+    auto G = StaticLibraryDefinitionGenerator::Load(
+        ObjLinkingLayer, LibPath.c_str(),
+        COFFImportFileScanner(NewImportedLibraries));
     if (!G)
       return G.takeError();
 
-    for (auto &Lib : (*G)->getImportedDynamicLibraries())
-      ImportedLibraries.push_back(Lib);
+    llvm::append_range(ImportedLibraries, NewImportedLibraries);
 
     JD.addGenerator(std::move(*G));
 
@@ -160,7 +162,7 @@ COFFVCRuntimeBootstrapper::getMSVCToolchainPath() {
   if (!findVCToolChainViaCommandLine(*VFS, std::nullopt, std::nullopt,
                                      std::nullopt, VCToolChainPath, VSLayout) &&
       !findVCToolChainViaEnvironment(*VFS, VCToolChainPath, VSLayout) &&
-      !findVCToolChainViaSetupConfig(*VFS, VCToolChainPath, VSLayout) &&
+      !findVCToolChainViaSetupConfig(*VFS, {}, VCToolChainPath, VSLayout) &&
       !findVCToolChainViaRegistry(VCToolChainPath, VSLayout))
     return make_error<StringError>("Couldn't find msvc toolchain.",
                                    inconvertibleErrorCode());

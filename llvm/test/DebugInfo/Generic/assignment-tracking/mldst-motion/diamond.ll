@@ -1,4 +1,4 @@
-; RUN: opt -passes=mldst-motion -S %s -o - -experimental-assignment-tracking \
+; RUN: opt -passes=mldst-motion -S %s -o - \
 ; RUN: | FileCheck %s
 
 ;; $ cat test.cpp
@@ -19,10 +19,10 @@
 ;; dbg.assign intrinsics which have been left in their original blocks.
 
 ; CHECK: if.then:
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 1,{{.+}}, metadata !DIExpression(DW_OP_LLVM_fragment, 32, 32), metadata ![[ID:[0-9]+]], metadata ptr %1, metadata !DIExpression())
+; CHECK-NEXT: #dbg_assign(i32 1,{{.+}}, !DIExpression(DW_OP_LLVM_fragment, 32, 32), ![[ID:[0-9]+]], ptr %1, !DIExpression(),
 
 ; CHECK: if.else:
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 2,{{.+}}, metadata !DIExpression(DW_OP_LLVM_fragment, 32, 32), metadata ![[ID]], metadata ptr %1, metadata !DIExpression())
+; CHECK-NEXT: #dbg_assign(i32 2,{{.+}}, !DIExpression(DW_OP_LLVM_fragment, 32, 32), ![[ID]], ptr %1, !DIExpression(),
 
 ; CHECK: if.end:
 ; CHECK: store i32 %.sink, ptr %1, align 4{{.+}}, !DIAssignID ![[ID]]
@@ -33,8 +33,8 @@ define dso_local void @_Z3funv() !dbg !11 {
 entry:
   %a = alloca [4 x i32], align 16, !DIAssignID !19
   call void @llvm.dbg.assign(metadata i1 undef, metadata !15, metadata !DIExpression(), metadata !19, metadata ptr %a, metadata !DIExpression()), !dbg !20
-  call void @llvm.lifetime.start.p0i8(i64 16, ptr nonnull %a) #4, !dbg !21
-  %0 = load i32, i32* @cond, align 4, !dbg !22
+  call void @llvm.lifetime.start.p0(i64 16, ptr nonnull %a) #4, !dbg !21
+  %0 = load i32, ptr @cond, align 4, !dbg !22
   %tobool.not = icmp eq i32 %0, 0, !dbg !22
   br i1 %tobool.not, label %if.else, label %if.then, !dbg !28
 
@@ -53,17 +53,17 @@ if.else:                                          ; preds = %entry
 if.end:                                           ; preds = %if.else, %if.then
   %arraydecay = getelementptr inbounds [4 x i32], ptr %a, i64 0, i64 0, !dbg !35
   call void @_Z3escPi(ptr noundef nonnull %arraydecay), !dbg !36
-  call void @llvm.lifetime.end.p0i8(i64 16, ptr nonnull %a) #4, !dbg !37
+  call void @llvm.lifetime.end.p0(i64 16, ptr nonnull %a) #4, !dbg !37
   ret void, !dbg !37
 }
 
-declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture)
-declare !dbg !38 dso_local void @_Z3escPi(i32* noundef)
-declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
+declare !dbg !38 dso_local void @_Z3escPi(ptr noundef)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
 declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, metadata)
 
 !llvm.dbg.cu = !{!2}
-!llvm.module.flags = !{!6, !7, !8, !9}
+!llvm.module.flags = !{!6, !7, !8, !9, !1000}
 !llvm.ident = !{!10}
 
 !0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
@@ -105,3 +105,4 @@ declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, 
 !40 = !{null, !41}
 !41 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !5, size: 64)
 !42 = !{}
+!1000 = !{i32 7, !"debug-info-assignment-tracking", i1 true}

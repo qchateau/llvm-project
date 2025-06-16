@@ -21,7 +21,6 @@
 #include "clang/Sema/DeclSpec.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -29,6 +28,7 @@
 #include "llvm/Support/type_traits.h"
 #include <cassert>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -333,7 +333,15 @@ public:
 
     /// An unknown context, in which we are recovering from a parsing
     /// error and don't know which completions we should give.
-    CCC_Recovery
+    CCC_Recovery,
+
+    /// Code completion in a @class forward declaration.
+    CCC_ObjCClassForwardDecl,
+
+    /// Code completion at a top level, i.e. in a namespace or global scope,
+    /// but also in expression statements. This is because REPL inputs can be
+    /// declarations or expression statements.
+    CCC_TopLevelOrExpression,
   };
 
   using VisitedContextSet = llvm::SmallPtrSet<DeclContext *, 8>;
@@ -354,11 +362,11 @@ private:
   QualType BaseType;
 
   /// The identifiers for Objective-C selector parts.
-  ArrayRef<IdentifierInfo *> SelIdents;
+  ArrayRef<const IdentifierInfo *> SelIdents;
 
   /// The scope specifier that comes before the completion token e.g.
   /// "a::b::"
-  llvm::Optional<CXXScopeSpec> ScopeSpecifier;
+  std::optional<CXXScopeSpec> ScopeSpecifier;
 
   /// A set of declaration contexts visited by Sema when doing lookup for
   /// code completion.
@@ -367,11 +375,11 @@ private:
 public:
   /// Construct a new code-completion context of the given kind.
   CodeCompletionContext(Kind CCKind)
-      : CCKind(CCKind), IsUsingDeclaration(false), SelIdents(std::nullopt) {}
+      : CCKind(CCKind), IsUsingDeclaration(false), SelIdents() {}
 
   /// Construct a new code-completion context of the given kind.
   CodeCompletionContext(Kind CCKind, QualType T,
-                        ArrayRef<IdentifierInfo *> SelIdents = std::nullopt)
+                        ArrayRef<const IdentifierInfo *> SelIdents = {})
       : CCKind(CCKind), IsUsingDeclaration(false), SelIdents(SelIdents) {
     if (CCKind == CCC_DotMemberAccess || CCKind == CCC_ArrowMemberAccess ||
         CCKind == CCC_ObjCPropertyAccess || CCKind == CCC_ObjCClassMessage ||
@@ -398,7 +406,7 @@ public:
   QualType getBaseType() const { return BaseType; }
 
   /// Retrieve the Objective-C selector identifiers.
-  ArrayRef<IdentifierInfo *> getSelIdents() const { return SelIdents; }
+  ArrayRef<const IdentifierInfo *> getSelIdents() const { return SelIdents; }
 
   /// Determines whether we want C++ constructors as results within this
   /// context.
@@ -421,7 +429,7 @@ public:
     return VisitedContexts;
   }
 
-  llvm::Optional<const CXXScopeSpec *> getCXXScopeSpecifier() {
+  std::optional<const CXXScopeSpec *> getCXXScopeSpecifier() {
     if (ScopeSpecifier)
       return &*ScopeSpecifier;
     return std::nullopt;
@@ -573,6 +581,7 @@ private:
   unsigned Priority : 16;
 
   /// The availability of this code-completion result.
+  LLVM_PREFERRED_TYPE(CXAvailabilityKind)
   unsigned Availability : 2;
 
   /// The name of the parent context.

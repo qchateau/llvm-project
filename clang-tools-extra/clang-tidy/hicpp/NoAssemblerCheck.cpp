@@ -7,20 +7,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "NoAssemblerCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace hicpp {
+namespace clang::tidy::hicpp {
 
 namespace {
 AST_MATCHER(VarDecl, isAsm) { return Node.hasAttr<clang::AsmLabelAttr>(); }
 const ast_matchers::internal::VariadicDynCastAllOfMatcher<Decl,
                                                           FileScopeAsmDecl>
-    fileScopeAsmDecl;
+    fileScopeAsmDecl; // NOLINT(readability-identifier-*) preserve clang style
 } // namespace
 
 void NoAssemblerCheck::registerMatchers(MatchFinder *Finder) {
@@ -44,6 +41,4 @@ void NoAssemblerCheck::check(const MatchFinder::MatchResult &Result) {
   diag(ASMLocation, "do not use inline assembler in safety-critical code");
 }
 
-} // namespace hicpp
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::hicpp

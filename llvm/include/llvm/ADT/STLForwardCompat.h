@@ -17,7 +17,6 @@
 #ifndef LLVM_ADT_STLFORWARDCOMPAT_H
 #define LLVM_ADT_STLFORWARDCOMPAT_H
 
-#include "llvm/ADT/Optional.h"
 #include <optional>
 #include <type_traits>
 
@@ -61,26 +60,18 @@ auto transformOptional(std::optional<T> &&O, const Function &F)
   return std::nullopt;
 }
 
-// TODO: Remove this once the migration from llvm::Optional to std::optional is
-// complete.
-template <typename T, typename Function>
-auto transformOptional(const Optional<T> &O, const Function &F)
-    -> Optional<decltype(F(*O))> {
-  if (O)
-    return F(*O);
-  return std::nullopt;
+/// Returns underlying integer value of an enum. Backport of C++23
+/// std::to_underlying.
+template <typename Enum>
+[[nodiscard]] constexpr std::underlying_type_t<Enum> to_underlying(Enum E) {
+  return static_cast<std::underlying_type_t<Enum>>(E);
 }
 
-// TODO: Remove this once the migration from llvm::Optional to std::optional is
-// complete.
-template <typename T, typename Function>
-auto transformOptional(Optional<T> &&O, const Function &F)
-    -> Optional<decltype(F(*std::move(O)))> {
-  if (O)
-    return F(*std::move(O));
-  return std::nullopt;
-}
-
+// A tag for constructors accepting ranges.
+struct from_range_t {
+  explicit from_range_t() = default;
+};
+inline constexpr from_range_t from_range{};
 } // namespace llvm
 
 #endif // LLVM_ADT_STLFORWARDCOMPAT_H

@@ -74,18 +74,18 @@ TEST(MachineInstructionDoubleWidthResult, IsCorrect) {
   LLVMInitializeARMTarget();
   LLVMInitializeARMTargetMC();
 
-  auto TT(Triple::normalize("thumbv8.1m.main-none-none-eabi"));
+  Triple TT("thumbv8.1m.main-none-none-eabi");
   std::string Error;
   const Target *T = TargetRegistry::lookupTarget(TT, Error);
   if (!T) {
     dbgs() << Error;
-    return;
+    GTEST_SKIP();
   }
 
   TargetOptions Options;
-  auto TM = std::unique_ptr<LLVMTargetMachine>(static_cast<LLVMTargetMachine *>(
+  auto TM = std::unique_ptr<TargetMachine>(
       T->createTargetMachine(TT, "generic", "", Options, std::nullopt,
-                             std::nullopt, CodeGenOpt::Default)));
+                             std::nullopt, CodeGenOptLevel::Default));
   ARMSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()),
                   *static_cast<const ARMBaseTargetMachine *>(TM.get()), false);
@@ -230,18 +230,18 @@ TEST(MachineInstructionHorizontalReduction, IsCorrect) {
   LLVMInitializeARMTarget();
   LLVMInitializeARMTargetMC();
 
-  auto TT(Triple::normalize("thumbv8.1m.main-none-none-eabi"));
+  Triple TT("thumbv8.1m.main-none-none-eabi");
   std::string Error;
   const Target *T = TargetRegistry::lookupTarget(TT, Error);
   if (!T) {
     dbgs() << Error;
-    return;
+    GTEST_SKIP();
   }
 
   TargetOptions Options;
-  auto TM = std::unique_ptr<LLVMTargetMachine>(static_cast<LLVMTargetMachine *>(
+  auto TM = std::unique_ptr<TargetMachine>(
       T->createTargetMachine(TT, "generic", "", Options, std::nullopt,
-                             std::nullopt, CodeGenOpt::Default)));
+                             std::nullopt, CodeGenOptLevel::Default));
   ARMSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()),
                   *static_cast<const ARMBaseTargetMachine *>(TM.get()), false);
@@ -329,18 +329,18 @@ TEST(MachineInstructionRetainsPreviousHalfElement, IsCorrect) {
   LLVMInitializeARMTarget();
   LLVMInitializeARMTargetMC();
 
-  auto TT(Triple::normalize("thumbv8.1m.main-none-none-eabi"));
+  Triple TT("thumbv8.1m.main-none-none-eabi");
   std::string Error;
   const Target *T = TargetRegistry::lookupTarget(TT, Error);
   if (!T) {
     dbgs() << Error;
-    return;
+    GTEST_SKIP();
   }
 
   TargetOptions Options;
-  auto TM = std::unique_ptr<LLVMTargetMachine>(static_cast<LLVMTargetMachine *>(
+  auto TM = std::unique_ptr<TargetMachine>(
       T->createTargetMachine(TT, "generic", "", Options, std::nullopt,
-                             std::nullopt, CodeGenOpt::Default)));
+                             std::nullopt, CodeGenOptLevel::Default));
   ARMSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()),
                   *static_cast<const ARMBaseTargetMachine *>(TM.get()), false);
@@ -1035,18 +1035,18 @@ TEST(MachineInstrValidTailPredication, IsCorrect) {
   LLVMInitializeARMTarget();
   LLVMInitializeARMTargetMC();
 
-  auto TT(Triple::normalize("thumbv8.1m.main-none-none-eabi"));
+  Triple TT("thumbv8.1m.main-none-none-eabi");
   std::string Error;
   const Target *T = TargetRegistry::lookupTarget(TT, Error);
   if (!T) {
     dbgs() << Error;
-    return;
+    GTEST_SKIP();
   }
 
   TargetOptions Options;
-  auto TM = std::unique_ptr<LLVMTargetMachine>(static_cast<LLVMTargetMachine *>(
+  auto TM = std::unique_ptr<TargetMachine>(
       T->createTargetMachine(TT, "generic", "", Options, std::nullopt,
-                             std::nullopt, CodeGenOpt::Default)));
+                             std::nullopt, CodeGenOptLevel::Default));
   ARMSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()),
                   *static_cast<const ARMBaseTargetMachine *>(TM.get()), false);
@@ -1126,7 +1126,9 @@ TEST(MachineInstr, HasSideEffects) {
       VLDR_VPR_post,
       VLDR_VPR_pre,
       VLLDM,
+      VLLDM_T2,
       VLSTM,
+      VLSTM_T2,
       VMRS,
       VMRS_FPCXTNS,
       VMRS_FPCXTS,
@@ -1176,18 +1178,18 @@ TEST(MachineInstr, HasSideEffects) {
   LLVMInitializeARMTarget();
   LLVMInitializeARMTargetMC();
 
-  auto TT(Triple::normalize("thumbv8.1m.main-none-none-eabi"));
+  Triple TT("thumbv8.1m.main-none-none-eabi");
   std::string Error;
   const Target *T = TargetRegistry::lookupTarget(TT, Error);
   if (!T) {
     dbgs() << Error;
-    return;
+    GTEST_SKIP();
   }
 
   TargetOptions Options;
-  auto TM = std::unique_ptr<LLVMTargetMachine>(static_cast<LLVMTargetMachine *>(
+  auto TM = std::unique_ptr<TargetMachine>(
       T->createTargetMachine(TT, "generic", "", Options, std::nullopt,
-                             std::nullopt, CodeGenOpt::Default)));
+                             std::nullopt, CodeGenOptLevel::Default));
   ARMSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()),
                   *static_cast<const ARMBaseTargetMachine *>(TM.get()), false);
@@ -2056,18 +2058,18 @@ TEST(MachineInstr, MVEVecSize) {
   LLVMInitializeARMTarget();
   LLVMInitializeARMTargetMC();
 
-  auto TT(Triple::normalize("thumbv8.1m.main-none-none-eabi"));
+  Triple TT("thumbv8.1m.main-none-none-eabi");
   std::string Error;
   const Target *T = TargetRegistry::lookupTarget(TT, Error);
   if (!T) {
     dbgs() << Error;
-    return;
+    GTEST_SKIP();
   }
 
   TargetOptions Options;
-  auto TM = std::unique_ptr<LLVMTargetMachine>(static_cast<LLVMTargetMachine *>(
+  auto TM = std::unique_ptr<TargetMachine>(
       T->createTargetMachine(TT, "generic", "", Options, std::nullopt,
-                             std::nullopt, CodeGenOpt::Default)));
+                             std::nullopt, CodeGenOptLevel::Default));
   ARMSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()),
                   *static_cast<const ARMBaseTargetMachine *>(TM.get()), false);

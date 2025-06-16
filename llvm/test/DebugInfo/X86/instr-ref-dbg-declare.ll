@@ -2,7 +2,7 @@
 ; RUN:     -experimental-debug-variable-locations=true \
 ; RUN:  | FileCheck %s
 
-;; Copy of DebugInfo/COFF/types-array-advanced.ll. This features a dbg.declare 
+;; Copy of DebugInfo/COFF/types-array-advanced.ll. This features a dbg.declare
 ;; of something (dynamic alloca) that isn't an argument, causing a SDDbgValue
 ;; with the indirect flag set to be emitted. Test that it's preserved in
 ;; instruction referencing mode -- we don't have an IsIndirect flag on
@@ -11,7 +11,7 @@
 ;; NB: the original test has an additional spurious DW_OP_deref in the
 ;; dbg.declare's arguments, which is preserved here, translating to two derefs.
 
-; CHECK: DBG_INSTR_REF 1, 2, !{{[0-9]+}}, !DIExpression(DW_OP_deref, DW_OP_deref)
+; CHECK: DBG_INSTR_REF !{{[0-9]+}}, !DIExpression(DW_OP_LLVM_arg, 0, DW_OP_deref, DW_OP_deref), dbg-instr-ref(1, 2)
 
 source_filename = "test/DebugInfo/COFF/types-array-advanced.ll"
 target datalayout = "e-m:x-p:32:32-i64:64-f80:32-n8:16:32-a:0:32-S32"

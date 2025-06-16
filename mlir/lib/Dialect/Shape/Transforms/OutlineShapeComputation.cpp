@@ -11,7 +11,7 @@
 #include "mlir/Dialect/Shape/IR/Shape.h"
 #include "mlir/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -23,7 +23,7 @@
 #include <vector>
 
 namespace mlir {
-#define GEN_PASS_DEF_OUTLINESHAPECOMPUTATION
+#define GEN_PASS_DEF_OUTLINESHAPECOMPUTATIONPASS
 #include "mlir/Dialect/Shape/Transforms/Passes.h.inc"
 } // namespace mlir
 
@@ -49,7 +49,7 @@ getInputsOfCluster(const llvm::SmallVector<Operation *, 8> &cluster) {
   for (Operation *op : cluster) {
     for (Value operand : op->getOperands()) {
       Operation *operandOp = operand.getDefiningOp();
-      if (opSet.find(operandOp) != opSet.end()) {
+      if (opSet.contains(operandOp)) {
         // Skip if defining op is in the cluster.
         continue;
       }
@@ -71,8 +71,8 @@ createFuncFromCluster(OpBuilder &b, const SmallVector<Operation *, 8> &cluster,
           : b.getFunctionType(ValueRange(inputs).getTypes(), shape.getType());
   shape::FuncOp fnOp = b.create<shape::FuncOp>(loc, fnName, fnType);
   Block *block = fnOp.addEntryBlock();
-  b.setInsertionPoint(block, block->end());
-  BlockAndValueMapping bvm;
+  b.setInsertionPointToEnd(block);
+  IRMapping bvm;
   if (cluster.empty()) {
     bvm.map(shape, fnOp.getArgument(0));
   } else {
@@ -133,7 +133,7 @@ void constructShapeFunc(
   for (shape::WithOp withOp : allWithOps) {
     Value value = withOp.getOperand();
     Value shape = withOp.getShape();
-    RankedTensorType rankedType = value.getType().dyn_cast<RankedTensorType>();
+    RankedTensorType rankedType = dyn_cast<RankedTensorType>(value.getType());
     if (rankedType == nullptr)
       continue;
 
@@ -163,7 +163,8 @@ void constructShapeFunc(
 }
 
 struct OutlineShapeComputationPass
-    : public impl::OutlineShapeComputationBase<OutlineShapeComputationPass> {
+    : public impl::OutlineShapeComputationPassBase<
+          OutlineShapeComputationPass> {
 
   void runOnOperation() override;
 
@@ -207,7 +208,7 @@ void OutlineShapeComputationPass::runOnOperation() {
     MLIRContext *context = funcOp.getContext();
     RewritePatternSet prevPatterns(context);
     prevPatterns.insert<TensorDimOpRewriter>(context);
-    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(prevPatterns))))
+    if (failed(applyPatternsGreedily(funcOp, std::move(prevPatterns))))
       return signalPassFailure();
 
     // initialize class member `onlyUsedByWithShapes`
@@ -232,14 +233,29 @@ void OutlineShapeComputationPass::runOnOperation() {
 
     for (shape::WithOp withOp : allWithOps) {
       Value value = withOp.getOperand();
-      for (Operation *user : withOp.getResult().getUsers()) {
-        if (Value valueOf = llvm::dyn_cast<shape::ValueOfOp>(user))
-          valueOf.replaceAllUsesExcept(value, withOp);
+      for (Operation *user :
+           llvm::make_early_inc_range(withOp.getResult().getUsers())) {
+        if (auto valueOf = llvm::dyn_cast<shape::ValueOfOp>(user)) {
+          // For pattern like
+          //   %1 = shape.with_shape %arg1, %0
+          //   %2 = shape.value_of %1
+          // because shape.value doesn't care the shape, the shape.with_shape is
+          // redundant.
+          // If type of %arg1 and %2 has same type, just
+          //   replaced %2 with %arg1.
+          // If type of %arg1 has different type like !shape.value_shape,
+          // transform into
+          //   %2 = shape.value_of %arg1
+          if (valueOf.getType() == value.getType())
+            valueOf.replaceAllUsesWith(value);
+          else
+            valueOf.setOperand(value);
+        }
       }
     }
 
     // Apply patterns, note this also performs DCE.
-    if (failed(applyPatternsAndFoldGreedily(funcOp, {})))
+    if (failed(applyPatternsGreedily(funcOp, {})))
       return signalPassFailure();
   });
 }
@@ -277,10 +293,8 @@ void OutlineShapeComputationPass::getClusterFromValue(
       cluster.insert(op);
       for (Value inp : op->getOperands()) {
         Operation *inpDefOp = inp.getDefiningOp();
-        if (nullptr != inpDefOp && !visited.contains(inpDefOp)) {
-          visited.insert(inpDefOp);
+        if (nullptr != inpDefOp && visited.insert(inpDefOp).second)
           queue.push(inpDefOp);
-        }
       }
     }
   }
@@ -311,8 +325,3 @@ bool OutlineShapeComputationPass::calOnlyUsedByWithShapesRecursively(
 }
 
 } // namespace
-
-std::unique_ptr<OperationPass<ModuleOp>>
-mlir::createOutlineShapeComputationPass() {
-  return std::make_unique<OutlineShapeComputationPass>();
-}

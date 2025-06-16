@@ -1,4 +1,4 @@
-! RUN: bbc -emit-fir %s -o - | FileCheck %s
+! RUN: bbc -emit-fir -hlfir=false %s -o - | FileCheck %s
 module tests
 interface
   subroutine takes_contiguous(a)
@@ -29,9 +29,7 @@ end subroutine
 ! CHECK:    fir.result %[[VAL_4]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:  } else {
 ! CHECK:    %[[VAL_7:.*]] = fir.allocmem !fir.array<?xf32>
-! CHECK:    fir.do_loop {{.*}} {
-              ! ... copy
-! CHECK:    }
+! CHECK:    fir.call @_FortranAAssign
 ! CHECK:    fir.result %[[VAL_7]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:  }
 ! CHECK:  %[[VAL_20:.*]] = arith.constant 0 : index
@@ -42,10 +40,7 @@ end subroutine
 ! CHECK:  %[[VAL_25:.*]] = fir.embox %[[VAL_3]](%[[VAL_24]]) : (!fir.heap<!fir.array<?xf32>>, !fir.shape<1>) -> !fir.box<!fir.array<?xf32>>
 ! CHECK:  fir.call @_QPtakes_contiguous(%[[VAL_25]]) {{.*}}: (!fir.box<!fir.array<?xf32>>) -> ()
 ! CHECK:  fir.if %[[VAL_23]] {
-! CHECK:    fir.do_loop {{.*}} {
-              ! ... copy
-! CHECK:    }
-! CHECK:    fir.freemem %[[VAL_3]] : !fir.heap<!fir.array<?xf32>>
+! CHECK:    fir.call @_FortranACopyOutAssign
 ! CHECK:  }
 ! CHECK:  return
 ! CHECK:}
@@ -78,9 +73,7 @@ end subroutine
 ! CHECK:    fir.result %[[VAL_4]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:  } else {
 ! CHECK:    %[[VAL_7:.*]] = fir.allocmem !fir.array<?xf32>
-! CHECK:    fir.do_loop {{.*}} {
-              ! ... copy
-! CHECK:    }
+! CHECK:    fir.call @_FortranAAssign
 ! CHECK:    fir.result %[[VAL_7]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:  }
 ! CHECK:  %[[VAL_20:.*]] = arith.constant 0 : index
@@ -91,10 +84,7 @@ end subroutine
 ! CHECK:  %[[VAL_25:.*]] = fir.embox %[[VAL_3]](%[[VAL_24]]) : (!fir.heap<!fir.array<?xf32>>, !fir.shape<1>) -> !fir.box<!fir.array<?xf32>>
 ! CHECK:  fir.call @_QPtakes_contiguous(%[[VAL_25]]) {{.*}}: (!fir.box<!fir.array<?xf32>>) -> ()
 ! CHECK:  fir.if %[[VAL_23]] {
-! CHECK:    fir.do_loop {{.*}} {
-              ! ... copy
-! CHECK:    }
-! CHECK:    fir.freemem %[[VAL_3]] : !fir.heap<!fir.array<?xf32>>
+! CHECK:    fir.call @_FortranACopyOutAssign
 ! CHECK:  }
 ! CHECK:  return
 ! CHECK:}
@@ -128,9 +118,7 @@ end subroutine
 ! CHECK:    fir.result %[[VAL_4]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:  } else {
 ! CHECK:    %[[VAL_7:.*]] = fir.allocmem !fir.array<?xf32>
-! CHECK:    fir.do_loop {{.*}} {
-              ! ... copy
-! CHECK:    }
+! CHECK:    fir.call @_FortranAAssign
 ! CHECK:    fir.result %[[VAL_7]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:  }
 ! CHECK:  %[[VAL_20:.*]] = arith.constant 0 : index
@@ -141,10 +129,7 @@ end subroutine
 ! CHECK:  %[[VAL_25:.*]] = fir.embox %[[VAL_3]](%[[VAL_24]]) : (!fir.heap<!fir.array<?xf32>>, !fir.shape<1>) -> !fir.box<!fir.array<?xf32>>
 ! CHECK:  fir.call @_QPtakes_contiguous_optional(%[[VAL_25]]) {{.*}}: (!fir.box<!fir.array<?xf32>>) -> ()
 ! CHECK:  fir.if %[[VAL_23]] {
-! CHECK:    fir.do_loop {{.*}} {
-              ! ... copy
-! CHECK:    }
-! CHECK:    fir.freemem %[[VAL_3]] : !fir.heap<!fir.array<?xf32>>
+! CHECK:    fir.call @_FortranACopyOutAssign
 ! CHECK:  }
 ! CHECK:  return
 ! CHECK:}
@@ -184,9 +169,7 @@ end subroutine
 ! CHECK:      fir.result %[[VAL_11]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:    } else {
 ! CHECK:      %[[VAL_14:.*]] = fir.allocmem !fir.array<?xf32>
-! CHECK:      fir.do_loop {{.*}} {
-                ! copy ...
-! CHECK:      }
+! CHECK:      fir.call @_FortranAAssign
 ! CHECK:      fir.result %[[VAL_14]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:    }
 ! CHECK:    fir.result %[[VAL_10]] : !fir.heap<!fir.array<?xf32>>
@@ -205,10 +188,7 @@ end subroutine
 ! CHECK:  %[[VAL_38:.*]] = arith.select %[[VAL_1]], %[[VAL_35]], %[[VAL_37]] : !fir.box<!fir.array<?xf32>>
 ! CHECK:  fir.call @_QPtakes_contiguous_optional(%[[VAL_38]]) {{.*}}: (!fir.box<!fir.array<?xf32>>) -> ()
 ! CHECK:  fir.if %[[VAL_33]] {
-! CHECK:    %[[VAL_47:.*]] = fir.do_loop {{.*}} {
-              ! copy ...
-! CHECK:    }
-! CHECK:    fir.freemem %[[VAL_9]] : !fir.heap<!fir.array<?xf32>>
+! CHECK:    fir.call @_FortranACopyOutAssign
 ! CHECK:  }
 ! CHECK:  return
 ! CHECK:}
@@ -251,9 +231,7 @@ end subroutine
 ! CHECK:      fir.result %[[VAL_13]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:    } else {
 ! CHECK:      %[[VAL_16:.*]] = fir.allocmem !fir.array<?xf32>
-! CHECK:      fir.do_loop {{.*}} {
-                ! copy
-! CHECK:      }
+! CHECK:      fir.call @_FortranAAssign
 ! CHECK:      fir.result %[[VAL_16]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:    }
 ! CHECK:    fir.result %[[VAL_12]] : !fir.heap<!fir.array<?xf32>>
@@ -272,10 +250,7 @@ end subroutine
 ! CHECK:  %[[VAL_41:.*]] = arith.select %[[VAL_5]], %[[VAL_38]], %[[VAL_40]] : !fir.box<!fir.array<?xf32>>
 ! CHECK:  fir.call @_QPtakes_contiguous_optional(%[[VAL_41]]) {{.*}}: (!fir.box<!fir.array<?xf32>>) -> ()
 ! CHECK:  fir.if %[[VAL_36]] {
-! CHECK:    fir.do_loop {{.*}} {
-              ! copy
-! CHECK:    }
-! CHECK:    fir.freemem %[[VAL_11]] : !fir.heap<!fir.array<?xf32>>
+! CHECK:    fir.call @_FortranACopyOutAssign
 ! CHECK:  }
 ! CHECK:  return
 ! CHECK:}
@@ -324,9 +299,7 @@ end subroutine
 ! CHECK:      fir.result %[[VAL_13]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:    } else {
 ! CHECK:      %[[VAL_16:.*]] = fir.allocmem !fir.array<?xf32>
-! CHECK:      fir.do_loop {{.*}} {
-                ! copy
-! CHECK:      }
+! CHECK:      fir.call @_FortranAAssign
 ! CHECK:      fir.result %[[VAL_16]] : !fir.heap<!fir.array<?xf32>>
 ! CHECK:    }
 ! CHECK:    fir.result %[[VAL_12]] : !fir.heap<!fir.array<?xf32>>
@@ -345,10 +318,7 @@ end subroutine
 ! CHECK:  %[[VAL_41:.*]] = arith.select %[[VAL_5]], %[[VAL_38]], %[[VAL_40]] : !fir.box<!fir.array<?xf32>>
 ! CHECK:  fir.call @_QPtakes_contiguous_optional(%[[VAL_41]]) {{.*}}: (!fir.box<!fir.array<?xf32>>) -> ()
 ! CHECK:  fir.if %[[VAL_36]] {
-! CHECK:    fir.do_loop {{.*}} {
-              ! copy
-! CHECK:    }
-! CHECK:    fir.freemem %[[VAL_11]] : !fir.heap<!fir.array<?xf32>>
+! CHECK:    fir.call @_FortranACopyOutAssign
 ! CHECK:  }
 ! CHECK:  return
 ! CHECK:}

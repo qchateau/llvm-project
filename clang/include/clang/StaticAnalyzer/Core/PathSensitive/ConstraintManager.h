@@ -17,9 +17,9 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState_Fwd.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SVals.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymExpr.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace llvm {
@@ -36,7 +36,7 @@ class ExprEngine;
 class SymbolReaper;
 
 class ConditionTruthVal {
-  Optional<bool> Val;
+  std::optional<bool> Val;
 
 public:
   /// Construct a ConditionTruthVal indicating the constraint is constrained
@@ -107,6 +107,22 @@ public:
   /// It might return null.
   virtual const llvm::APSInt* getSymVal(ProgramStateRef state,
                                         SymbolRef sym) const {
+    return nullptr;
+  }
+
+  /// Attempt to return the minimal possible value for a given symbol. Note
+  /// that a ConstraintManager is not obligated to return a lower bound, it may
+  /// also return nullptr.
+  virtual const llvm::APSInt *getSymMinVal(ProgramStateRef state,
+                                           SymbolRef sym) const {
+    return nullptr;
+  }
+
+  /// Attempt to return the minimal possible value for a given symbol. Note
+  /// that a ConstraintManager is not obligated to return a lower bound, it may
+  /// also return nullptr.
+  virtual const llvm::APSInt *getSymMaxVal(ProgramStateRef state,
+                                           SymbolRef sym) const {
     return nullptr;
   }
 

@@ -6,17 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "hdr/types/clock_t.h"
 #include "src/time/clock.h"
-#include "utils/UnitTest/Test.h"
-
-#include <errno.h>
-#include <limits.h>
-#include <time.h>
+#include "test/UnitTest/Test.h"
 
 TEST(LlvmLibcClockTest, SmokeTest) {
-  clock_t c1 = __llvm_libc::clock();
+  clock_t c1 = LIBC_NAMESPACE::clock();
   ASSERT_GT(c1, clock_t(0));
 
-  clock_t c2 = __llvm_libc::clock();
+  clock_t c2 = LIBC_NAMESPACE::clock();
   ASSERT_GE(c2, c1);
 }

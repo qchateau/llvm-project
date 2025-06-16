@@ -6,11 +6,12 @@
 // RUN: OMP_TOOL_VERBOSE_INIT=stdout %libomp-run | FileCheck %s -DPARENTPATH=%T
 
 // REQUIRES: ompt
+// XFAIL: darwin
 
 /*
- *  This file contains code for three OMPT shared library tool to be 
- *  loaded and the code for the OpenMP executable. 
- *  No option enables code for the first shared library 
+ *  This file contains code for three OMPT shared library tool to be
+ *  loaded and the code for the OpenMP executable.
+ *  No option enables code for the first shared library
  *  (without an implementation of ompt_start_tool) during compilation
  *  -DTOOL -DSECOND_TOOL enables the code for the second tool during compilation
  *  -DTOOL -DTHIRD_TOOL enables the code for the third tool during compilation
@@ -25,12 +26,12 @@
 // CHECK-SAME: [[PARENTPATH]]/second_tool.so
 // CHECK-SAME: [[PARENTPATH]]/third_tool.so
 // CHECK-NEXT: Opening [[PARENTPATH]]/non_existing_file.so... Failed:
-// CHECK-SAME: [[PARENTPATH]]/non_existing_file.so: cannot open shared object
-// CHECK-SAME: file: No such file or directory
+// CHECK-SAME: [[PARENTPATH]]/non_existing_file.so: {{cannot open shared object file|open failed}}:
+// CHECK-SAME: No such file or directory
 // CHECK-NEXT: Opening [[PARENTPATH]]/first_tool.so... Success.
 // CHECK-NEXT: Searching for ompt_start_tool in
 // CHECK-SAME: [[PARENTPATH]]/first_tool.so... Failed:
-// CHECK-SAME: [[PARENTPATH]]/first_tool.so: undefined symbol: ompt_start_tool
+// CHECK-SAME: {{.*/first_tool.so: undefined symbol: ompt_start_tool|ld.so.1: .*: ompt_start_tool: can't find symbol}}
 // CHECK-NEXT: Opening [[PARENTPATH]]/second_tool.so... Success.
 // CHECK-NEXT: Searching for ompt_start_tool in
 // CHECK-SAME: [[PARENTPATH]]/second_tool.so... 0: Do not initialize tool
@@ -45,7 +46,7 @@
 
 // Check if libomp supports the callbacks for this test.
 
-// CHECK-NOT: {{^}}0: Could not register callback 
+// CHECK-NOT: {{^}}0: Could not register callback
 // CHECK: {{^}}0: Tool initialized
 // CHECK: {{^}}0: ompt_event_thread_begin
 // CHECK-DAG: {{^}}0: ompt_event_thread_begin
@@ -90,7 +91,7 @@ ompt_start_tool_result_t* ompt_start_tool(
   return NULL;
 }
 #elif defined(THIRD_TOOL)
-// The third tool has an implementation of ompt_start_tool that returns a 
+// The third tool has an implementation of ompt_start_tool that returns a
 // pointer to a valid instance of ompt_start_tool_result_t
 
 static void

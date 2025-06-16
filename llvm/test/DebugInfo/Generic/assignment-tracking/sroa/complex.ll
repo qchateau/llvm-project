@@ -1,4 +1,5 @@
-; RUN: opt -passes=sroa -S -o - %s -experimental-assignment-tracking | FileCheck %s
+; RUN: opt -passes=sroa -S -o - %s \
+; RUN: | FileCheck %s --implicit-check-not="call void @llvm.dbg"
 ;
 ;; Based on llvm/test/DebugInfo/ARM/sroa-complex.ll
 ;; generated from:
@@ -16,8 +17,8 @@
 ;; dbg.assigns for the split (then promoted) stores.
 ; CHECK: %c.coerce.fca.0.extract = extractvalue [2 x i64] %c.coerce, 0
 ; CHECK: %c.coerce.fca.1.extract = extractvalue [2 x i64] %c.coerce, 1
-; CHECK: call void @llvm.dbg.assign(metadata i64 %c.coerce.fca.0.extract,{{.+}}, metadata !DIExpression(DW_OP_LLVM_fragment, 0, 64),{{.+}}, metadata ptr undef, metadata !DIExpression())
-; CHECK: call void @llvm.dbg.assign(metadata i64 %c.coerce.fca.1.extract,{{.+}}, metadata !DIExpression(DW_OP_LLVM_fragment, 64, 64),{{.+}}, metadata ptr undef, {{.+}})
+; CHECK: #dbg_value(i64 %c.coerce.fca.0.extract,{{.+}}, !DIExpression(DW_OP_LLVM_fragment, 0, 64),
+; CHECK: #dbg_value(i64 %c.coerce.fca.1.extract,{{.+}}, !DIExpression(DW_OP_LLVM_fragment, 64, 64),
 
 target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
 target triple = "armv7-apple-unknown"
@@ -26,9 +27,9 @@ define dso_local arm_aapcscc void @f([2 x i64] %c.coerce) #0 !dbg !8 {
 entry:
   %c = alloca { double, double }, align 8, !DIAssignID !14
   call void @llvm.dbg.assign(metadata i1 undef, metadata !13, metadata !DIExpression(), metadata !14, metadata ptr %c, metadata !DIExpression()), !dbg !15
-  %0 = bitcast ptr %c to [2 x i64]*
-  store [2 x i64] %c.coerce, [2 x i64]* %0, align 8, !DIAssignID !16
-  call void @llvm.dbg.assign(metadata [2 x i64] %c.coerce, metadata !13, metadata !DIExpression(), metadata !16, metadata [2 x i64]* %0, metadata !DIExpression()), !dbg !15
+  %0 = bitcast ptr %c to ptr
+  store [2 x i64] %c.coerce, ptr %0, align 8, !DIAssignID !16
+  call void @llvm.dbg.assign(metadata [2 x i64] %c.coerce, metadata !13, metadata !DIExpression(), metadata !16, metadata ptr %0, metadata !DIExpression()), !dbg !15
   ; --- The rest of this function isn't useful for the test ---
   ;%c.realp = getelementptr inbounds { double, double }, ptr %c, i32 0, i32 0, !dbg !17
   ;%c.imagp = getelementptr inbounds { double, double }, ptr %c, i32 0, i32 1, !dbg !17
@@ -43,7 +44,7 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata)
 declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, metadata)
 
 !llvm.dbg.cu = !{!0}
-!llvm.module.flags = !{!3, !4, !5, !6}
+!llvm.module.flags = !{!3, !4, !5, !6, !1000}
 !llvm.ident = !{!7}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "clang version 12.0.0", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, splitDebugInlining: false, nameTableKind: None)
@@ -67,3 +68,4 @@ declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, 
 !18 = distinct !DIAssignID()
 !19 = distinct !DIAssignID()
 !20 = !DILocation(line: 2, column: 36, scope: !8)
+!1000 = !{i32 7, !"debug-info-assignment-tracking", i1 true}

@@ -18,6 +18,7 @@
 #include "llvm/DebugInfo/LogicalView/Core/LVLocation.h"
 #include "llvm/DebugInfo/LogicalView/Core/LVSort.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Compiler.h"
 #include <list>
 #include <map>
 #include <set>
@@ -48,6 +49,7 @@ enum class LVScopeKind {
   IsLabel,
   IsLexicalBlock,
   IsMember,
+  IsModule,
   IsNamespace,
   IsRoot,
   IsStructure,
@@ -63,15 +65,14 @@ using LVScopeKindSet = std::set<LVScopeKind>;
 using LVScopeDispatch = std::map<LVScopeKind, LVScopeGetFunction>;
 using LVScopeRequest = std::vector<LVScopeGetFunction>;
 
-using LVOffsetList = std::list<LVOffset>;
 using LVOffsetElementMap = std::map<LVOffset, LVElement *>;
-using LVOffsetLinesMap = std::map<LVOffset, LVLines *>;
-using LVOffsetLocationsMap = std::map<LVOffset, LVLocations *>;
+using LVOffsetLinesMap = std::map<LVOffset, LVLines>;
+using LVOffsetLocationsMap = std::map<LVOffset, LVLocations>;
 using LVOffsetSymbolMap = std::map<LVOffset, LVSymbol *>;
-using LVTagOffsetsMap = std::map<dwarf::Tag, LVOffsetList *>;
+using LVTagOffsetsMap = std::map<dwarf::Tag, LVOffsets>;
 
 // Class to represent a DWARF Scope.
-class LVScope : public LVElement {
+class LLVM_ABI LVScope : public LVElement {
   enum class Property {
     HasDiscriminator,
     CanHaveRanges,
@@ -94,13 +95,17 @@ class LVScope : public LVElement {
   LVProperties<Property> Properties;
   static LVScopeDispatch Dispatch;
 
+  // Size in bits if this scope represents also a compound type.
+  uint32_t BitSize = 0;
+
   // Coverage factor in units (bytes).
   unsigned CoverageFactor = 0;
 
   // Calculate coverage factor.
   void calculateCoverage() {
     float CoveragePercentage = 0;
-    LVLocation::calculateCoverage(Ranges, CoverageFactor, CoveragePercentage);
+    LVLocation::calculateCoverage(Ranges.get(), CoverageFactor,
+                                  CoveragePercentage);
   }
 
   // Decide if the scope will be printed, using some conditions given by:
@@ -117,11 +122,11 @@ class LVScope : public LVElement {
 
 protected:
   // Types, Symbols, Scopes, Lines, Locations in this scope.
-  LVAutoTypes *Types = nullptr;
-  LVAutoSymbols *Symbols = nullptr;
-  LVAutoScopes *Scopes = nullptr;
-  LVAutoLines *Lines = nullptr;
-  LVAutoLocations *Ranges = nullptr;
+  std::unique_ptr<LVTypes> Types;
+  std::unique_ptr<LVSymbols> Symbols;
+  std::unique_ptr<LVScopes> Scopes;
+  std::unique_ptr<LVLines> Lines;
+  std::unique_ptr<LVLocations> Ranges;
 
   // Vector of elements (types, scopes and symbols).
   // It is the union of (*Types, *Symbols and *Scopes) to be used for
@@ -129,7 +134,7 @@ protected:
   // - Preserve the order the logical elements are read in.
   // - To have a single container with all the logical elements, when
   //   the traversal does not require any specific element kind.
-  LVElements *Children = nullptr;
+  std::unique_ptr<LVElements> Children;
 
   // Resolve the template parameters/arguments relationship.
   void resolveTemplate();
@@ -150,7 +155,7 @@ public:
   }
   LVScope(const LVScope &) = delete;
   LVScope &operator=(const LVScope &) = delete;
-  virtual ~LVScope();
+  virtual ~LVScope() = default;
 
   static bool classof(const LVElement *Element) {
     return Element->getSubclassID() == LVSubclassID::LV_SCOPE;
@@ -181,6 +186,7 @@ public:
   KIND(LVScopeKind, IsTemplatePack);
   KIND_1(LVScopeKind, IsTryBlock, IsBlock);
   KIND_1(LVScopeKind, IsUnion, IsAggregate);
+  KIND_2(LVScopeKind, IsModule, CanHaveRanges, CanHaveLines);
 
   PROPERTY(Property, HasDiscriminator);
   PROPERTY(Property, CanHaveRanges);
@@ -202,12 +208,12 @@ public:
   const char *kind() const override;
 
   // Get the specific children.
-  const LVLines *getLines() const { return Lines; }
-  const LVLocations *getRanges() const { return Ranges; }
-  const LVScopes *getScopes() const { return Scopes; }
-  const LVSymbols *getSymbols() const { return Symbols; }
-  const LVTypes *getTypes() const { return Types; }
-  const LVElements *getChildren() const { return Children; }
+  const LVLines *getLines() const { return Lines.get(); }
+  const LVLocations *getRanges() const { return Ranges.get(); }
+  const LVScopes *getScopes() const { return Scopes.get(); }
+  const LVSymbols *getSymbols() const { return Symbols.get(); }
+  const LVTypes *getTypes() const { return Types.get(); }
+  const LVElements *getChildren() const { return Children.get(); }
 
   void addElement(LVElement *Element);
   void addElement(LVLine *Line);
@@ -269,6 +275,9 @@ public:
   bool removeElement(LVElement *Element) override;
   void updateLevel(LVScope *Parent, bool Moved) override;
 
+  uint32_t getBitSize() const override { return BitSize; }
+  void setBitSize(uint32_t Size) override { BitSize = Size; }
+
   void resolve() override;
   void resolveName() override;
   void resolveReferences() override;
@@ -316,14 +325,10 @@ public:
   void printExtra(raw_ostream &OS, bool Full = true) const override;
   virtual void printWarnings(raw_ostream &OS, bool Full = true) const {}
   virtual void printMatchedElements(raw_ostream &OS, bool UseMatchedElements) {}
-
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-  void dump() const override { print(dbgs()); }
-#endif
 };
 
 // Class to represent a DWARF Union/Structure/Class.
-class LVScopeAggregate final : public LVScope {
+class LLVM_ABI LVScopeAggregate final : public LVScope {
   LVScope *Reference = nullptr; // DW_AT_specification, DW_AT_abstract_origin.
   size_t EncodedArgsIndex = 0;  // Template encoded arguments.
 
@@ -361,7 +366,7 @@ public:
 };
 
 // Class to represent a DWARF Template alias.
-class LVScopeAlias final : public LVScope {
+class LLVM_ABI LVScopeAlias final : public LVScope {
 public:
   LVScopeAlias() : LVScope() {
     setIsTemplateAlias();
@@ -378,7 +383,7 @@ public:
 };
 
 // Class to represent a DWARF array (DW_TAG_array_type).
-class LVScopeArray final : public LVScope {
+class LLVM_ABI LVScopeArray final : public LVScope {
 public:
   LVScopeArray() : LVScope() { setIsArray(); }
   LVScopeArray(const LVScopeArray &) = delete;
@@ -394,7 +399,7 @@ public:
 };
 
 // Class to represent a DWARF Compilation Unit (CU).
-class LVScopeCompileUnit final : public LVScope {
+class LLVM_ABI LVScopeCompileUnit final : public LVScope {
   // Names (files and directories) used by the Compile Unit.
   std::vector<size_t> Filenames;
 
@@ -409,6 +414,12 @@ class LVScopeCompileUnit final : public LVScope {
 
   // Compilation directory name.
   size_t CompilationDirectoryIndex = 0;
+
+  // Source language.
+  LVSourceLanguage SourceLanguage{};
+
+  // Used by the CodeView Reader.
+  codeview::CPUType CompilationCPUType = codeview::CPUType::X64;
 
   // Keep record of elements. They are needed at the compilation unit level
   // to print the summary at the end of the printing.
@@ -456,8 +467,8 @@ class LVScopeCompileUnit final : public LVScope {
                                  LVOffsetLocationsMap *Map) {
     LVOffset Offset = Element->getOffset();
     addInvalidOffset(Offset, Element);
-    addItem<LVOffsetLocationsMap, LVLocations, LVOffset, LVLocation *>(
-        Map, Offset, Location);
+    addItem<LVOffsetLocationsMap, LVOffset, LVLocation *>(Map, Offset,
+                                                          Location);
   }
 
   // Record scope sizes indexed by lexical level.
@@ -489,12 +500,7 @@ public:
   }
   LVScopeCompileUnit(const LVScopeCompileUnit &) = delete;
   LVScopeCompileUnit &operator=(const LVScopeCompileUnit &) = delete;
-  ~LVScopeCompileUnit() {
-    deleteList<LVTagOffsetsMap>(DebugTags);
-    deleteList<LVOffsetLocationsMap>(InvalidLocations);
-    deleteList<LVOffsetLocationsMap>(InvalidRanges);
-    deleteList<LVOffsetLinesMap>(LinesZero);
-  }
+  ~LVScopeCompileUnit() = default;
 
   LVScope *getCompileUnitParent() const override {
     return static_cast<LVScope *>(const_cast<LVScopeCompileUnit *>(this));
@@ -541,6 +547,12 @@ public:
   void setProducer(StringRef ProducerName) override {
     ProducerIndex = getStringPool().getIndex(ProducerName);
   }
+
+  LVSourceLanguage getSourceLanguage() const override { return SourceLanguage; }
+  void setSourceLanguage(LVSourceLanguage SL) override { SourceLanguage = SL; }
+
+  void setCPUType(codeview::CPUType Type) { CompilationCPUType = Type; }
+  codeview::CPUType getCPUType() { return CompilationCPUType; }
 
   // Record DWARF tags.
   void addDebugTag(dwarf::Tag Target, LVOffset Offset);
@@ -613,7 +625,7 @@ public:
 };
 
 // Class to represent a DWARF enumerator (DW_TAG_enumeration_type).
-class LVScopeEnumeration final : public LVScope {
+class LLVM_ABI LVScopeEnumeration final : public LVScope {
 public:
   LVScopeEnumeration() : LVScope() { setIsEnumeration(); }
   LVScopeEnumeration(const LVScopeEnumeration &) = delete;
@@ -628,7 +640,7 @@ public:
 
 // Class to represent a DWARF formal parameter pack
 // (DW_TAG_GNU_formal_parameter_pack).
-class LVScopeFormalPack final : public LVScope {
+class LLVM_ABI LVScopeFormalPack final : public LVScope {
 public:
   LVScopeFormalPack() : LVScope() { setIsTemplatePack(); }
   LVScopeFormalPack(const LVScopeFormalPack &) = delete;
@@ -642,7 +654,7 @@ public:
 };
 
 // Class to represent a DWARF Function.
-class LVScopeFunction : public LVScope {
+class LLVM_ABI LVScopeFunction : public LVScope {
   LVScope *Reference = nullptr; // DW_AT_specification, DW_AT_abstract_origin.
   size_t LinkageNameIndex = 0;  // Function DW_AT_linkage_name attribute.
   size_t EncodedArgsIndex = 0;  // Template encoded arguments.
@@ -694,7 +706,7 @@ public:
 };
 
 // Class to represent a DWARF inlined function.
-class LVScopeFunctionInlined final : public LVScopeFunction {
+class LLVM_ABI LVScopeFunctionInlined final : public LVScopeFunction {
   size_t CallFilenameIndex = 0;
   uint32_t CallLineNumber = 0;
   uint32_t Discriminator = 0;
@@ -737,7 +749,7 @@ public:
 };
 
 // Class to represent a DWARF subroutine type.
-class LVScopeFunctionType final : public LVScopeFunction {
+class LLVM_ABI LVScopeFunctionType final : public LVScopeFunction {
 public:
   LVScopeFunctionType() : LVScopeFunction() { setIsFunctionType(); }
   LVScopeFunctionType(const LVScopeFunctionType &) = delete;
@@ -747,8 +759,25 @@ public:
   void resolveExtra() override;
 };
 
+// Class to represent a DWARF Module.
+class LLVM_ABI LVScopeModule final : public LVScope {
+public:
+  LVScopeModule() : LVScope() {
+    setIsModule();
+    setIsLexicalBlock();
+  }
+  LVScopeModule(const LVScopeModule &) = delete;
+  LVScopeModule &operator=(const LVScopeModule &) = delete;
+  ~LVScopeModule() = default;
+
+  // Returns true if current scope is logically equal to the given 'Scope'.
+  bool equals(const LVScope *Scope) const override;
+
+  void printExtra(raw_ostream &OS, bool Full = true) const override;
+};
+
 // Class to represent a DWARF Namespace.
-class LVScopeNamespace final : public LVScope {
+class LLVM_ABI LVScopeNamespace final : public LVScope {
   LVScope *Reference = nullptr; // Reference to DW_AT_extension attribute.
 
 public:
@@ -778,7 +807,7 @@ public:
 };
 
 // Class to represent the binary file being analyzed.
-class LVScopeRoot final : public LVScope {
+class LLVM_ABI LVScopeRoot final : public LVScope {
   size_t FileFormatNameIndex = 0;
 
 public:
@@ -794,6 +823,10 @@ public:
     FileFormatNameIndex = getStringPool().getIndex(FileFormatName);
   }
 
+  // The CodeView Reader uses scoped names. Recursively transform the
+  // element name to use just the most inner component.
+  void transformScopedName();
+
   // Process the collected location, ranges and calculate coverage.
   void processRangeInformation();
 
@@ -808,7 +841,7 @@ public:
 
 // Class to represent a DWARF template parameter pack
 // (DW_TAG_GNU_template_parameter_pack).
-class LVScopeTemplatePack final : public LVScope {
+class LLVM_ABI LVScopeTemplatePack final : public LVScope {
 public:
   LVScopeTemplatePack() : LVScope() { setIsTemplatePack(); }
   LVScopeTemplatePack(const LVScopeTemplatePack &) = delete;

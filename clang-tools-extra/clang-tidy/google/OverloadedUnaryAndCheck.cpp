@@ -7,16 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "OverloadedUnaryAndCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace google {
-namespace runtime {
+namespace clang::tidy::google::runtime {
 
 void OverloadedUnaryAndCheck::registerMatchers(
     ast_matchers::MatchFinder *Finder) {
@@ -39,7 +35,4 @@ void OverloadedUnaryAndCheck::check(const MatchFinder::MatchResult &Result) {
        "do not overload unary operator&, it is dangerous.");
 }
 
-} // namespace runtime
-} // namespace google
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::google::runtime

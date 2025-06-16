@@ -13,9 +13,7 @@
 
 #include "llvm/ADT/SmallString.h"
 
-namespace clang {
-namespace tidy {
-namespace portability {
+namespace clang::tidy::portability {
 
 /// Find SIMD intrinsics calls and suggest std::experimental::simd alternatives.
 ///
@@ -32,13 +30,11 @@ public:
   void registerMatchers(ast_matchers::MatchFinder *Finder) override;
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
 
- private:
+private:
   llvm::SmallString<32> Std;
   const bool Suggest;
 };
 
-} // namespace portability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::portability
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_SIMD_INTRINSICS_CHECK_H

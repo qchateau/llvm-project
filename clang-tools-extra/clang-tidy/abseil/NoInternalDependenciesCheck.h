@@ -1,4 +1,4 @@
-//===--- NoInternalDependenciesCheck.h - clang-tidy----------------------*- C++ -*-===//
+//===--- NoInternalDependenciesCheck.h - clang-tidy--------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,9 +11,7 @@
 
 #include "../ClangTidyCheck.h"
 
-namespace clang {
-namespace tidy {
-namespace abseil {
+namespace clang::tidy::abseil {
 
 /// Finds instances where the user depends on internal details and warns them
 /// against doing so.
@@ -31,8 +29,6 @@ public:
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
 };
 
-} // namespace abseil
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::abseil
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_ABSEIL_NOINTERNALDEPSCHECK_H

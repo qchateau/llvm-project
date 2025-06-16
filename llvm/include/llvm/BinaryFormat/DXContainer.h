@@ -14,11 +14,15 @@
 #define LLVM_BINARYFORMAT_DXCONTAINER_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/SwapByteOrder.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <stdint.h>
 
 namespace llvm {
+template <typename T> struct EnumEntry;
 
 // The DXContainer file format is arranged as a header and "parts". Semantically
 // parts are similar to sections in other object file formats. The File format
@@ -36,6 +40,12 @@ namespace llvm {
 
 namespace dxbc {
 
+inline Triple::EnvironmentType getShaderStage(uint32_t Kind) {
+  assert(Kind <= Triple::Amplification - Triple::Pixel &&
+         "Shader kind out of expected range.");
+  return static_cast<Triple::EnvironmentType>(Triple::Pixel + Kind);
+}
+
 struct Hash {
   uint8_t Digest[16];
 };
@@ -50,7 +60,7 @@ struct ShaderHash {
   uint32_t Flags; // dxbc::HashFlags
   uint8_t Digest[16];
 
-  bool isPopulated();
+  LLVM_ABI bool isPopulated();
 
   void swapBytes() { sys::swapByteOrder(Flags); }
 };
@@ -95,8 +105,8 @@ struct PartHeader {
 
 struct BitcodeHeader {
   uint8_t Magic[4];     // ACSII "DXIL".
-  uint8_t MajorVersion; // DXIL version.
   uint8_t MinorVersion; // DXIL version.
+  uint8_t MajorVersion; // DXIL version.
   uint16_t Unused;
   uint32_t Offset; // Offset to LLVM bitcode (from start of header).
   uint32_t Size;   // Size of LLVM bitcode (in bytes).
@@ -111,8 +121,7 @@ struct BitcodeHeader {
 };
 
 struct ProgramHeader {
-  uint8_t MinorVersion : 4;
-  uint8_t MajorVersion : 4;
+  uint8_t Version;
   uint8_t Unused;
   uint16_t ShaderKind;
   uint32_t Size; // Size in uint32_t words including this header.
@@ -122,6 +131,11 @@ struct ProgramHeader {
     sys::swapByteOrder(ShaderKind);
     sys::swapByteOrder(Size);
     Bitcode.swapBytes();
+  }
+  uint8_t getMajorVersion() { return Version >> 4; }
+  uint8_t getMinorVersion() { return Version & 0xF; }
+  static uint8_t getVersion(uint8_t Major, uint8_t Minor) {
+    return (Major << 4) | Minor;
   }
 };
 
@@ -133,14 +147,603 @@ enum class PartType {
 #include "DXContainerConstants.def"
 };
 
-#define SHADER_FLAG(Num, Val, Str) Val = 1ull << Num,
+#define SHADER_FEATURE_FLAG(Num, DxilModuleNum, Val, Str) Val = 1ull << Num,
 enum class FeatureFlags : uint64_t {
 #include "DXContainerConstants.def"
 };
 static_assert((uint64_t)FeatureFlags::NextUnusedBit <= 1ull << 63,
               "Shader flag bits exceed enum size.");
 
-PartType parsePartType(StringRef S);
+#define ROOT_ELEMENT_FLAG(Num, Val) Val = 1ull << Num,
+enum class RootElementFlag : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+#define ROOT_DESCRIPTOR_FLAG(Num, Val) Val = 1ull << Num,
+enum class RootDescriptorFlag : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+#define DESCRIPTOR_RANGE_FLAG(Num, Val) Val = 1ull << Num,
+enum class DescriptorRangeFlag : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+#define ROOT_PARAMETER(Val, Enum) Enum = Val,
+enum class RootParameterType : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<RootParameterType>> getRootParameterTypes();
+
+#define DESCRIPTOR_RANGE(Val, Enum) Enum = Val,
+enum class DescriptorRangeType : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+ArrayRef<EnumEntry<DescriptorRangeType>> getDescriptorRangeTypes();
+
+#define ROOT_PARAMETER(Val, Enum)                                              \
+  case Val:                                                                    \
+    return true;
+inline bool isValidParameterType(uint32_t V) {
+  switch (V) {
+#include "DXContainerConstants.def"
+  }
+  return false;
+}
+
+#define SHADER_VISIBILITY(Val, Enum) Enum = Val,
+enum class ShaderVisibility : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<ShaderVisibility>> getShaderVisibility();
+
+#define SHADER_VISIBILITY(Val, Enum)                                           \
+  case Val:                                                                    \
+    return true;
+inline bool isValidShaderVisibility(uint32_t V) {
+  switch (V) {
+#include "DXContainerConstants.def"
+  }
+  return false;
+}
+
+#define STATIC_SAMPLER_FILTER(Val, Enum) Enum = Val,
+enum class StaticSamplerFilter : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+#define TEXTURE_ADDRESS_MODE(Val, Enum) Enum = Val,
+enum class TextureAddressMode : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+#define COMPARISON_FUNCTION(Val, Enum) Enum = Val,
+enum class SamplersComparisonFunction : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+#define STATIC_BORDER_COLOR(Val, Enum) Enum = Val,
+enum class SamplersBorderColor : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI PartType parsePartType(StringRef S);
+
+struct VertexPSVInfo {
+  uint8_t OutputPositionPresent;
+  uint8_t Unused[3];
+
+  void swapBytes() {
+    // nothing to swap
+  }
+};
+
+struct HullPSVInfo {
+  uint32_t InputControlPointCount;
+  uint32_t OutputControlPointCount;
+  uint32_t TessellatorDomain;
+  uint32_t TessellatorOutputPrimitive;
+
+  void swapBytes() {
+    sys::swapByteOrder(InputControlPointCount);
+    sys::swapByteOrder(OutputControlPointCount);
+    sys::swapByteOrder(TessellatorDomain);
+    sys::swapByteOrder(TessellatorOutputPrimitive);
+  }
+};
+
+struct DomainPSVInfo {
+  uint32_t InputControlPointCount;
+  uint8_t OutputPositionPresent;
+  uint8_t Unused[3];
+  uint32_t TessellatorDomain;
+
+  void swapBytes() {
+    sys::swapByteOrder(InputControlPointCount);
+    sys::swapByteOrder(TessellatorDomain);
+  }
+};
+
+struct GeometryPSVInfo {
+  uint32_t InputPrimitive;
+  uint32_t OutputTopology;
+  uint32_t OutputStreamMask;
+  uint8_t OutputPositionPresent;
+  uint8_t Unused[3];
+
+  void swapBytes() {
+    sys::swapByteOrder(InputPrimitive);
+    sys::swapByteOrder(OutputTopology);
+    sys::swapByteOrder(OutputStreamMask);
+  }
+};
+
+struct PixelPSVInfo {
+  uint8_t DepthOutput;
+  uint8_t SampleFrequency;
+  uint8_t Unused[2];
+
+  void swapBytes() {
+    // nothing to swap
+  }
+};
+
+struct MeshPSVInfo {
+  uint32_t GroupSharedBytesUsed;
+  uint32_t GroupSharedBytesDependentOnViewID;
+  uint32_t PayloadSizeInBytes;
+  uint16_t MaxOutputVertices;
+  uint16_t MaxOutputPrimitives;
+
+  void swapBytes() {
+    sys::swapByteOrder(GroupSharedBytesUsed);
+    sys::swapByteOrder(GroupSharedBytesDependentOnViewID);
+    sys::swapByteOrder(PayloadSizeInBytes);
+    sys::swapByteOrder(MaxOutputVertices);
+    sys::swapByteOrder(MaxOutputPrimitives);
+  }
+};
+
+struct AmplificationPSVInfo {
+  uint32_t PayloadSizeInBytes;
+
+  void swapBytes() { sys::swapByteOrder(PayloadSizeInBytes); }
+};
+
+union PipelinePSVInfo {
+  VertexPSVInfo VS;
+  HullPSVInfo HS;
+  DomainPSVInfo DS;
+  GeometryPSVInfo GS;
+  PixelPSVInfo PS;
+  MeshPSVInfo MS;
+  AmplificationPSVInfo AS;
+
+  void swapBytes(Triple::EnvironmentType Stage) {
+    switch (Stage) {
+    case Triple::EnvironmentType::Pixel:
+      PS.swapBytes();
+      break;
+    case Triple::EnvironmentType::Vertex:
+      VS.swapBytes();
+      break;
+    case Triple::EnvironmentType::Geometry:
+      GS.swapBytes();
+      break;
+    case Triple::EnvironmentType::Hull:
+      HS.swapBytes();
+      break;
+    case Triple::EnvironmentType::Domain:
+      DS.swapBytes();
+      break;
+    case Triple::EnvironmentType::Mesh:
+      MS.swapBytes();
+      break;
+    case Triple::EnvironmentType::Amplification:
+      AS.swapBytes();
+      break;
+    default:
+      break;
+    }
+  }
+};
+
+static_assert(sizeof(PipelinePSVInfo) == 4 * sizeof(uint32_t),
+              "Pipeline-specific PSV info must fit in 16 bytes.");
+
+namespace PSV {
+
+#define SEMANTIC_KIND(Val, Enum) Enum = Val,
+enum class SemanticKind : uint8_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<SemanticKind>> getSemanticKinds();
+
+#define COMPONENT_TYPE(Val, Enum) Enum = Val,
+enum class ComponentType : uint8_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<ComponentType>> getComponentTypes();
+
+#define INTERPOLATION_MODE(Val, Enum) Enum = Val,
+enum class InterpolationMode : uint8_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<InterpolationMode>> getInterpolationModes();
+
+#define RESOURCE_TYPE(Val, Enum) Enum = Val,
+enum class ResourceType : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<ResourceType>> getResourceTypes();
+
+#define RESOURCE_KIND(Val, Enum) Enum = Val,
+enum class ResourceKind : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<ResourceKind>> getResourceKinds();
+
+#define RESOURCE_FLAG(Index, Enum) bool Enum = false;
+struct ResourceFlags {
+  ResourceFlags() : Flags(0U) {};
+  struct FlagsBits {
+#include "llvm/BinaryFormat/DXContainerConstants.def"
+  };
+  union {
+    uint32_t Flags;
+    FlagsBits Bits;
+  };
+  bool operator==(const uint32_t RFlags) const { return Flags == RFlags; }
+};
+
+namespace v0 {
+struct RuntimeInfo {
+  PipelinePSVInfo StageInfo;
+  uint32_t MinimumWaveLaneCount; // minimum lane count required, 0 if unused
+  uint32_t MaximumWaveLaneCount; // maximum lane count required,
+                                 // 0xffffffff if unused
+  void swapBytes() {
+    // Skip the union because we don't know which field it has
+    sys::swapByteOrder(MinimumWaveLaneCount);
+    sys::swapByteOrder(MaximumWaveLaneCount);
+  }
+
+  void swapBytes(Triple::EnvironmentType Stage) { StageInfo.swapBytes(Stage); }
+};
+
+struct ResourceBindInfo {
+  ResourceType Type;
+  uint32_t Space;
+  uint32_t LowerBound;
+  uint32_t UpperBound;
+
+  void swapBytes() {
+    sys::swapByteOrder(Type);
+    sys::swapByteOrder(Space);
+    sys::swapByteOrder(LowerBound);
+    sys::swapByteOrder(UpperBound);
+  }
+};
+
+struct SignatureElement {
+  uint32_t NameOffset;
+  uint32_t IndicesOffset;
+
+  uint8_t Rows;
+  uint8_t StartRow;
+  uint8_t Cols : 4;
+  uint8_t StartCol : 2;
+  uint8_t Allocated : 1;
+  uint8_t Unused : 1;
+  SemanticKind Kind;
+
+  ComponentType Type;
+  InterpolationMode Mode;
+  uint8_t DynamicMask : 4;
+  uint8_t Stream : 2;
+  uint8_t Unused2 : 2;
+  uint8_t Reserved;
+
+  void swapBytes() {
+    sys::swapByteOrder(NameOffset);
+    sys::swapByteOrder(IndicesOffset);
+  }
+};
+
+static_assert(sizeof(SignatureElement) == 4 * sizeof(uint32_t),
+              "PSV Signature elements must fit in 16 bytes.");
+
+} // namespace v0
+
+namespace v1 {
+
+struct MeshRuntimeInfo {
+  uint8_t SigPrimVectors; // Primitive output for MS
+  uint8_t MeshOutputTopology;
+};
+
+union GeometryExtraInfo {
+  uint16_t MaxVertexCount;            // MaxVertexCount for GS only (max 1024)
+  uint8_t SigPatchConstOrPrimVectors; // Output for HS; Input for DS;
+                                      // Primitive output for MS (overlaps
+                                      // MeshInfo::SigPrimVectors)
+  MeshRuntimeInfo MeshInfo;
+};
+struct RuntimeInfo : public v0::RuntimeInfo {
+  uint8_t ShaderStage; // PSVShaderKind
+  uint8_t UsesViewID;
+  GeometryExtraInfo GeomData;
+
+  // PSVSignatureElement counts
+  uint8_t SigInputElements;
+  uint8_t SigOutputElements;
+  uint8_t SigPatchOrPrimElements;
+
+  // Number of packed vectors per signature
+  uint8_t SigInputVectors;
+  uint8_t SigOutputVectors[4];
+
+  void swapBytes() {
+    // nothing to swap since everything is single-byte or a union field
+  }
+
+  void swapBytes(Triple::EnvironmentType Stage) {
+    v0::RuntimeInfo::swapBytes(Stage);
+    if (Stage == Triple::EnvironmentType::Geometry)
+      sys::swapByteOrder(GeomData.MaxVertexCount);
+  }
+};
+
+} // namespace v1
+
+namespace v2 {
+struct RuntimeInfo : public v1::RuntimeInfo {
+  uint32_t NumThreadsX;
+  uint32_t NumThreadsY;
+  uint32_t NumThreadsZ;
+
+  void swapBytes() {
+    sys::swapByteOrder(NumThreadsX);
+    sys::swapByteOrder(NumThreadsY);
+    sys::swapByteOrder(NumThreadsZ);
+  }
+
+  void swapBytes(Triple::EnvironmentType Stage) {
+    v1::RuntimeInfo::swapBytes(Stage);
+  }
+};
+
+struct ResourceBindInfo : public v0::ResourceBindInfo {
+  ResourceKind Kind;
+  ResourceFlags Flags;
+
+  void swapBytes() {
+    v0::ResourceBindInfo::swapBytes();
+    sys::swapByteOrder(Kind);
+    sys::swapByteOrder(Flags.Flags);
+  }
+};
+
+} // namespace v2
+
+namespace v3 {
+struct RuntimeInfo : public v2::RuntimeInfo {
+  uint32_t EntryNameOffset;
+
+  void swapBytes() {
+    v2::RuntimeInfo::swapBytes();
+    sys::swapByteOrder(EntryNameOffset);
+  }
+
+  void swapBytes(Triple::EnvironmentType Stage) {
+    v2::RuntimeInfo::swapBytes(Stage);
+  }
+};
+
+} // namespace v3
+} // namespace PSV
+
+#define COMPONENT_PRECISION(Val, Enum) Enum = Val,
+enum class SigMinPrecision : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<SigMinPrecision>> getSigMinPrecisions();
+
+#define D3D_SYSTEM_VALUE(Val, Enum) Enum = Val,
+enum class D3DSystemValue : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<D3DSystemValue>> getD3DSystemValues();
+
+#define COMPONENT_TYPE(Val, Enum) Enum = Val,
+enum class SigComponentType : uint32_t {
+#include "DXContainerConstants.def"
+};
+
+LLVM_ABI ArrayRef<EnumEntry<SigComponentType>> getSigComponentTypes();
+
+struct ProgramSignatureHeader {
+  uint32_t ParamCount;
+  uint32_t FirstParamOffset;
+
+  void swapBytes() {
+    sys::swapByteOrder(ParamCount);
+    sys::swapByteOrder(FirstParamOffset);
+  }
+};
+
+struct ProgramSignatureElement {
+  uint32_t Stream;     // Stream index (parameters must appear in non-decreasing
+                       // stream order)
+  uint32_t NameOffset; // Offset from the start of the ProgramSignatureHeader to
+                       // the start of the null terminated string for the name.
+  uint32_t Index;      // Semantic Index
+  D3DSystemValue SystemValue; // Semantic type. Similar to PSV::SemanticKind.
+  SigComponentType CompType;  // Type of bits.
+  uint32_t Register;          // Register Index (row index)
+  uint8_t Mask;               // Mask (column allocation)
+
+  // The ExclusiveMask has a different meaning for input and output signatures.
+  // For an output signature, masked components of the output register are never
+  // written to.
+  // For an input signature, masked components of the input register are always
+  // read.
+  uint8_t ExclusiveMask;
+
+  uint16_t Unused;
+  SigMinPrecision MinPrecision; // Minimum precision of input/output data
+
+  void swapBytes() {
+    sys::swapByteOrder(Stream);
+    sys::swapByteOrder(NameOffset);
+    sys::swapByteOrder(Index);
+    sys::swapByteOrder(SystemValue);
+    sys::swapByteOrder(CompType);
+    sys::swapByteOrder(Register);
+    sys::swapByteOrder(Mask);
+    sys::swapByteOrder(ExclusiveMask);
+    sys::swapByteOrder(MinPrecision);
+  }
+};
+
+static_assert(sizeof(ProgramSignatureElement) == 32,
+              "ProgramSignatureElement is misaligned");
+
+namespace RTS0 {
+namespace v1 {
+struct StaticSampler {
+  uint32_t Filter;
+  uint32_t AddressU;
+  uint32_t AddressV;
+  uint32_t AddressW;
+  float MipLODBias;
+  uint32_t MaxAnisotropy;
+  uint32_t ComparisonFunc;
+  uint32_t BorderColor;
+  float MinLOD;
+  float MaxLOD;
+  uint32_t ShaderRegister;
+  uint32_t RegisterSpace;
+  uint32_t ShaderVisibility;
+  void swapBytes() {
+    sys::swapByteOrder(Filter);
+    sys::swapByteOrder(AddressU);
+    sys::swapByteOrder(AddressV);
+    sys::swapByteOrder(AddressW);
+    sys::swapByteOrder(MipLODBias);
+    sys::swapByteOrder(MaxAnisotropy);
+    sys::swapByteOrder(ComparisonFunc);
+    sys::swapByteOrder(BorderColor);
+    sys::swapByteOrder(MinLOD);
+    sys::swapByteOrder(MaxLOD);
+    sys::swapByteOrder(ShaderRegister);
+    sys::swapByteOrder(RegisterSpace);
+    sys::swapByteOrder(ShaderVisibility);
+  };
+};
+
+struct DescriptorRange {
+  uint32_t RangeType;
+  uint32_t NumDescriptors;
+  uint32_t BaseShaderRegister;
+  uint32_t RegisterSpace;
+  uint32_t OffsetInDescriptorsFromTableStart;
+  void swapBytes() {
+    sys::swapByteOrder(RangeType);
+    sys::swapByteOrder(NumDescriptors);
+    sys::swapByteOrder(BaseShaderRegister);
+    sys::swapByteOrder(RegisterSpace);
+    sys::swapByteOrder(OffsetInDescriptorsFromTableStart);
+  }
+};
+
+struct RootDescriptor {
+  uint32_t ShaderRegister;
+  uint32_t RegisterSpace;
+  void swapBytes() {
+    sys::swapByteOrder(ShaderRegister);
+    sys::swapByteOrder(RegisterSpace);
+  }
+};
+
+// following dx12 naming
+// https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_root_constants
+struct RootConstants {
+  uint32_t ShaderRegister;
+  uint32_t RegisterSpace;
+  uint32_t Num32BitValues;
+
+  void swapBytes() {
+    sys::swapByteOrder(ShaderRegister);
+    sys::swapByteOrder(RegisterSpace);
+    sys::swapByteOrder(Num32BitValues);
+  }
+};
+
+struct RootParameterHeader {
+  uint32_t ParameterType;
+  uint32_t ShaderVisibility;
+  uint32_t ParameterOffset;
+
+  void swapBytes() {
+    sys::swapByteOrder(ParameterType);
+    sys::swapByteOrder(ShaderVisibility);
+    sys::swapByteOrder(ParameterOffset);
+  }
+};
+
+struct RootSignatureHeader {
+  uint32_t Version;
+  uint32_t NumParameters;
+  uint32_t ParametersOffset;
+  uint32_t NumStaticSamplers;
+  uint32_t StaticSamplerOffset;
+  uint32_t Flags;
+
+  void swapBytes() {
+    sys::swapByteOrder(Version);
+    sys::swapByteOrder(NumParameters);
+    sys::swapByteOrder(ParametersOffset);
+    sys::swapByteOrder(NumStaticSamplers);
+    sys::swapByteOrder(StaticSamplerOffset);
+    sys::swapByteOrder(Flags);
+  }
+};
+} // namespace v1
+
+namespace v2 {
+struct RootDescriptor : public v1::RootDescriptor {
+  uint32_t Flags;
+
+  RootDescriptor() = default;
+  explicit RootDescriptor(v1::RootDescriptor &Base)
+      : v1::RootDescriptor(Base), Flags(0u) {}
+
+  void swapBytes() {
+    v1::RootDescriptor::swapBytes();
+    sys::swapByteOrder(Flags);
+  }
+};
+
+struct DescriptorRange : public v1::DescriptorRange {
+  uint32_t Flags;
+  void swapBytes() {
+    v1::DescriptorRange::swapBytes();
+    sys::swapByteOrder(Flags);
+  }
+};
+} // namespace v2
+} // namespace RTS0
 
 } // namespace dxbc
 } // namespace llvm

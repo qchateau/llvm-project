@@ -16,8 +16,8 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/Support/FileSystem.h"
+#include <optional>
 
 using namespace clang::ast_matchers;
 
@@ -69,7 +69,7 @@ std::vector<SymbolInfo::Context> GetContexts(const NamedDecl *ND) {
   return Contexts;
 }
 
-llvm::Optional<SymbolInfo>
+std::optional<SymbolInfo>
 CreateSymbolInfo(const NamedDecl *ND, const SourceManager &SM,
                  const HeaderMapCollector *Collector) {
   SymbolInfo::SymbolKind Type;
@@ -254,7 +254,7 @@ void FindAllSymbols::run(const MatchFinder::MatchResult &Result) {
   const SourceManager *SM = Result.SourceManager;
   if (auto Symbol = CreateSymbolInfo(ND, *SM, Collector)) {
     Filename =
-        std::string(SM->getFileEntryForID(SM->getMainFileID())->getName());
+        std::string(SM->getFileEntryRefForID(SM->getMainFileID())->getName());
     FileSymbols[*Symbol] += Signals;
   }
 }

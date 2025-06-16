@@ -27,6 +27,7 @@
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/MC/StringTableBuilder.h"
 #include "llvm/Object/Wasm.h"
+#include <optional>
 
 namespace lld {
 namespace wasm {
@@ -76,16 +77,18 @@ public:
   uint32_t getInputSectionOffset() const { return inputSectionOffset; }
 
   size_t getNumRelocations() const { return relocations.size(); }
+  size_t getNumLiveRelocations() const;
   void writeRelocations(llvm::raw_ostream &os) const;
-  void generateRelocationCode(raw_ostream &os) const;
+  bool generateRelocationCode(raw_ostream &os) const;
 
   bool isTLS() const { return flags & llvm::wasm::WASM_SEG_FLAG_TLS; }
+  bool isRetained() const { return flags & llvm::wasm::WASM_SEG_FLAG_RETAIN; }
 
   ObjFile *file;
   OutputSection *outputSec = nullptr;
   uint32_t comdat = UINT32_MAX;
   uint32_t inputSectionOffset = 0;
-  llvm::Align alignment;
+  uint32_t alignment;
   uint32_t flags;
 
   // Only applies to data segments.
@@ -109,8 +112,8 @@ public:
 protected:
   InputChunk(ObjFile *f, Kind k, StringRef name, uint32_t alignment = 0,
              uint32_t flags = 0)
-      : name(name), file(f), alignment(1ULL << alignment), flags(flags),
-        sectionKind(k), live(!config->gcSections), discarded(false) {}
+      : name(name), file(f), alignment(alignment), flags(flags), sectionKind(k),
+        live(!ctx.arg.gcSections), discarded(false) {}
   ArrayRef<uint8_t> data() const { return rawData; }
   uint64_t getTombstone() const;
 
@@ -154,7 +157,7 @@ class SyntheticMergedChunk;
 // be found by looking at the next one).
 struct SectionPiece {
   SectionPiece(size_t off, uint32_t hash, bool live)
-      : inputOff(off), live(live || !config->gcSections), hash(hash >> 1) {}
+      : inputOff(off), live(live || !ctx.arg.gcSections), hash(hash >> 1) {}
 
   uint32_t inputOff;
   uint32_t live : 1;
@@ -175,8 +178,9 @@ public:
     inputSectionOffset = seg.SectionOffset;
   }
 
-  MergeInputChunk(const WasmSection &s, ObjFile *f)
-      : InputChunk(f, Merge, s.Name, 0, llvm::wasm::WASM_SEG_FLAG_STRINGS) {
+  MergeInputChunk(const WasmSection &s, ObjFile *f, uint32_t alignment)
+      : InputChunk(f, Merge, s.Name, alignment,
+                   llvm::wasm::WASM_SEG_FLAG_STRINGS) {
     assert(s.Type == llvm::wasm::WASM_SEC_CUSTOM);
     comdat = s.Comdat;
     rawData = s.Content;
@@ -232,6 +236,7 @@ public:
 
   void addMergeChunk(MergeInputChunk *ms) {
     comdat = ms->getComdat();
+    alignment = std::max(alignment, ms->alignment);
     ms->parent = this;
     chunks.push_back(ms);
   }
@@ -252,29 +257,39 @@ public:
       : InputChunk(f, InputChunk::Function, func->SymbolName), signature(s),
         function(func),
         exportName(func && func->ExportName ? (*func->ExportName).str()
-                                            : llvm::Optional<std::string>()) {
+                                            : std::optional<std::string>()) {
     inputSectionOffset = function->CodeSectionOffset;
     rawData =
         file->codeSection->Content.slice(inputSectionOffset, function->Size);
     debugName = function->DebugName;
     comdat = function->Comdat;
+    assert(s.Kind != WasmSignature::Placeholder);
   }
 
   InputFunction(StringRef name, const WasmSignature &s)
-      : InputChunk(nullptr, InputChunk::Function, name), signature(s) {}
+      : InputChunk(nullptr, InputChunk::Function, name), signature(s) {
+    assert(s.Kind == WasmSignature::Function);
+  }
 
   static bool classof(const InputChunk *c) {
     return c->kind() == InputChunk::Function ||
            c->kind() == InputChunk::SyntheticFunction;
   }
 
-  llvm::Optional<StringRef> getExportName() const {
-    return exportName ? llvm::Optional<StringRef>(*exportName)
-                      : llvm::Optional<StringRef>();
+  std::optional<StringRef> getExportName() const {
+    return exportName ? std::optional<StringRef>(*exportName)
+                      : std::optional<StringRef>();
   }
   void setExportName(std::string exportName) { this->exportName = exportName; }
   uint32_t getFunctionInputOffset() const { return getInputSectionOffset(); }
-  uint32_t getFunctionCodeOffset() const { return function->CodeOffset; }
+  uint32_t getFunctionCodeOffset() const {
+    // For generated synthetic functions, such as unreachable stubs generated
+    // for signature mismatches, 'function' reference does not exist. This
+    // function is used to get function offsets for .debug_info section, and for
+    // those generated stubs function offsets are not meaningful anyway. So just
+    // return 0 in those cases.
+    return function ? function->CodeOffset : 0;
+  }
   uint32_t getFunctionIndex() const { return *functionIndex; }
   bool hasFunctionIndex() const { return functionIndex.has_value(); }
   void setFunctionIndex(uint32_t index);
@@ -296,12 +311,12 @@ public:
     return compressedSize;
   }
 
-  const WasmFunction *function;
+  const WasmFunction *function = nullptr;
 
 protected:
-  llvm::Optional<std::string> exportName;
-  llvm::Optional<uint32_t> functionIndex;
-  llvm::Optional<uint32_t> tableIndex;
+  std::optional<std::string> exportName;
+  std::optional<uint32_t> functionIndex;
+  std::optional<uint32_t> tableIndex;
   uint32_t compressedFuncSize = 0;
   uint32_t compressedSize = 0;
 };
@@ -325,8 +340,8 @@ public:
 // Represents a single Wasm Section within an input file.
 class InputSection : public InputChunk {
 public:
-  InputSection(const WasmSection &s, ObjFile *f)
-      : InputChunk(f, InputChunk::Section, s.Name),
+  InputSection(const WasmSection &s, ObjFile *f, uint32_t alignment)
+      : InputChunk(f, InputChunk::Section, s.Name, alignment),
         tombstoneValue(getTombstoneForSection(s.Name)), section(s) {
     assert(section.Type == llvm::wasm::WASM_SEC_CUSTOM);
     comdat = section.Comdat;

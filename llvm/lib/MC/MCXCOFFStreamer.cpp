@@ -19,6 +19,7 @@
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSectionXCOFF.h"
 #include "llvm/MC/MCSymbolXCOFF.h"
+#include "llvm/MC/MCXCOFFObjectWriter.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
 
@@ -30,6 +31,10 @@ MCXCOFFStreamer::MCXCOFFStreamer(MCContext &Context,
                                  std::unique_ptr<MCCodeEmitter> Emitter)
     : MCObjectStreamer(Context, std::move(MAB), std::move(OW),
                        std::move(Emitter)) {}
+
+XCOFFObjectWriter &MCXCOFFStreamer::getWriter() {
+  return static_cast<XCOFFObjectWriter &>(getAssembler().getWriter());
+}
 
 bool MCXCOFFStreamer::emitSymbolAttribute(MCSymbol *Sym,
                                           MCSymbolAttr Attribute) {
@@ -81,13 +86,39 @@ void MCXCOFFStreamer::emitXCOFFSymbolLinkageWithVisibility(
   emitSymbolAttribute(Symbol, Visibility);
 }
 
+void MCXCOFFStreamer::emitXCOFFRefDirective(const MCSymbol *Symbol) {
+  // Add a Fixup here to later record a relocation of type R_REF to prevent the
+  // ref symbol from being garbage collected (by the binder).
+  MCDataFragment *DF = getOrCreateDataFragment();
+  const MCSymbolRefExpr *SRE = MCSymbolRefExpr::create(Symbol, getContext());
+  std::optional<MCFixupKind> MaybeKind =
+      getAssembler().getBackend().getFixupKind("R_REF");
+  if (!MaybeKind)
+    report_fatal_error("failed to get fixup kind for R_REF relocation");
+
+  MCFixupKind Kind = *MaybeKind;
+  MCFixup Fixup = MCFixup::create(DF->getContents().size(), SRE, Kind);
+  DF->getFixups().push_back(Fixup);
+}
+
+void MCXCOFFStreamer::emitXCOFFRenameDirective(const MCSymbol *Name,
+                                               StringRef Rename) {
+  const MCSymbolXCOFF *Symbol = cast<const MCSymbolXCOFF>(Name);
+  if (!Symbol->hasRename())
+    report_fatal_error("Only explicit .rename is supported for XCOFF.");
+}
+
 void MCXCOFFStreamer::emitXCOFFExceptDirective(const MCSymbol *Symbol,
                                                const MCSymbol *Trap,
                                                unsigned Lang, unsigned Reason,
                                                unsigned FunctionSize,
                                                bool hasDebug) {
-  getAssembler().getWriter().addExceptionEntry(Symbol, Trap, Lang, Reason,
-                                               FunctionSize, hasDebug);
+  getWriter().addExceptionEntry(Symbol, Trap, Lang, Reason, FunctionSize,
+                                hasDebug);
+}
+
+void MCXCOFFStreamer::emitXCOFFCInfoSym(StringRef Name, StringRef Metadata) {
+  getWriter().addCInfoSymEntry(Name, Metadata);
 }
 
 void MCXCOFFStreamer::emitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
@@ -107,19 +138,12 @@ void MCXCOFFStreamer::emitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
   emitZeros(Size);
 }
 
-void MCXCOFFStreamer::emitZerofill(MCSection *Section, MCSymbol *Symbol,
-                                   uint64_t Size, Align ByteAlignment,
-                                   SMLoc Loc) {
-  report_fatal_error("Zero fill not implemented for XCOFF.");
-}
-
 void MCXCOFFStreamer::emitInstToData(const MCInst &Inst,
                                      const MCSubtargetInfo &STI) {
   MCAssembler &Assembler = getAssembler();
   SmallVector<MCFixup, 4> Fixups;
   SmallString<256> Code;
-  raw_svector_ostream VecOS(Code);
-  Assembler.getEmitter().encodeInstruction(Inst, VecOS, Fixups, STI);
+  Assembler.getEmitter().encodeInstruction(Inst, Code, Fixups, STI);
 
   // Add the fixups and data.
   MCDataFragment *DF = getOrCreateDataFragment(&STI);
@@ -131,19 +155,7 @@ void MCXCOFFStreamer::emitInstToData(const MCInst &Inst,
   }
 
   DF->setHasInstructions(STI);
-  DF->getContents().append(Code.begin(), Code.end());
-}
-
-MCStreamer *llvm::createXCOFFStreamer(MCContext &Context,
-                                      std::unique_ptr<MCAsmBackend> &&MAB,
-                                      std::unique_ptr<MCObjectWriter> &&OW,
-                                      std::unique_ptr<MCCodeEmitter> &&CE,
-                                      bool RelaxAll) {
-  MCXCOFFStreamer *S = new MCXCOFFStreamer(Context, std::move(MAB),
-                                           std::move(OW), std::move(CE));
-  if (RelaxAll)
-    S->getAssembler().setRelaxAll(true);
-  return S;
+  DF->appendContents(Code);
 }
 
 void MCXCOFFStreamer::emitXCOFFLocalCommonSymbol(MCSymbol *LabelSym,

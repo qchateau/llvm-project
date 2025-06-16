@@ -1,8 +1,6 @@
-add_subdirectory(MPFRWrapper)
-add_subdirectory(testutils)
-add_subdirectory(UnitTest)
+add_subdirectory(hdrgen)
 
-if(LLVM_LIBC_FULL_BUILD AND NOT LIBC_TARGET_ARCHITECTURE_IS_GPU)
-  add_subdirectory(IntegrationTest)
-  add_subdirectory(tools)
+if(LLVM_INCLUDE_TESTS)
+  add_subdirectory(MPFRWrapper)
+  add_subdirectory(MPCWrapper)
 endif()

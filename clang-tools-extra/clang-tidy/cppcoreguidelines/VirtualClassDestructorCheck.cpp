@@ -11,13 +11,14 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Lex/Lexer.h"
+#include <optional>
 #include <string>
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace cppcoreguidelines {
+namespace clang::tidy::cppcoreguidelines {
+
+namespace {
 
 AST_MATCHER(CXXRecordDecl, hasPublicVirtualOrProtectedNonVirtualDestructor) {
   // We need to call Node.getDestructor() instead of matching a
@@ -34,6 +35,8 @@ AST_MATCHER(CXXRecordDecl, hasPublicVirtualOrProtectedNonVirtualDestructor) {
            !Destructor->isVirtual()));
 }
 
+} // namespace
+
 void VirtualClassDestructorCheck::registerMatchers(MatchFinder *Finder) {
   ast_matchers::internal::Matcher<CXXRecordDecl> InheritsVirtualMethod =
       hasAnyBase(hasType(cxxRecordDecl(has(cxxMethodDecl(isVirtual())))));
@@ -47,7 +50,7 @@ void VirtualClassDestructorCheck::registerMatchers(MatchFinder *Finder) {
       this);
 }
 
-static Optional<CharSourceRange>
+static std::optional<CharSourceRange>
 getVirtualKeywordRange(const CXXDestructorDecl &Destructor,
                        const SourceManager &SM, const LangOptions &LangOpts) {
   if (Destructor.getLocation().isMacroID())
@@ -61,7 +64,8 @@ getVirtualKeywordRange(const CXXDestructorDecl &Destructor,
 
   /// Range ends with \c StartOfNextToken so that any whitespace after \c
   /// virtual is included.
-  Optional<Token> NextToken = Lexer::findNextToken(VirtualEndLoc, SM, LangOpts);
+  std::optional<Token> NextToken =
+      Lexer::findNextToken(VirtualEndLoc, SM, LangOpts);
   if (!NextToken)
     return std::nullopt;
   SourceLocation StartOfNextToken = NextToken->getLocation();
@@ -216,6 +220,4 @@ void VirtualClassDestructorCheck::check(
       << ProtectedAndVirtual << Fix;
 }
 
-} // namespace cppcoreguidelines
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::cppcoreguidelines

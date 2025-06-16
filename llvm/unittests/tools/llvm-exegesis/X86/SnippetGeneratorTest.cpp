@@ -27,13 +27,11 @@ namespace {
 
 using testing::AnyOf;
 using testing::ElementsAre;
-using testing::Ge;
 using testing::Gt;
 using testing::HasSubstr;
 using testing::IsEmpty;
 using testing::Not;
 using testing::SizeIs;
-using testing::UnorderedElementsAre;
 
 MATCHER(IsInvalid, "") { return !arg.isValid(); }
 MATCHER(IsReg, "") { return arg.isReg(); }
@@ -73,10 +71,10 @@ TEST_F(X86SerialSnippetGeneratorTest, ImplicitSelfDependencyThroughImplicitReg) 
   // - hasAliasingImplicitRegisters (execution is always serial)
   // - hasAliasingRegisters
   const unsigned Opcode = X86::ADC16i16;
-  EXPECT_THAT(InstrInfo.get(Opcode).getImplicitDefs()[0], X86::AX);
-  EXPECT_THAT(InstrInfo.get(Opcode).getImplicitDefs()[1], X86::EFLAGS);
-  EXPECT_THAT(InstrInfo.get(Opcode).getImplicitUses()[0], X86::AX);
-  EXPECT_THAT(InstrInfo.get(Opcode).getImplicitUses()[1], X86::EFLAGS);
+  EXPECT_THAT(InstrInfo.get(Opcode).implicit_defs()[0], X86::AX);
+  EXPECT_THAT(InstrInfo.get(Opcode).implicit_defs()[1], X86::EFLAGS);
+  EXPECT_THAT(InstrInfo.get(Opcode).implicit_uses()[0], X86::AX);
+  EXPECT_THAT(InstrInfo.get(Opcode).implicit_uses()[1], X86::EFLAGS);
   const auto CodeTemplates = checkAndGetCodeTemplates(Opcode);
   ASSERT_THAT(CodeTemplates, SizeIs(1));
   const auto &CT = CodeTemplates[0];
@@ -99,7 +97,7 @@ TEST_F(X86SerialSnippetGeneratorTest, ImplicitSelfDependencyThroughTiedRegs) {
   // - hasTiedRegisters (execution is always serial)
   // - hasAliasingRegisters
   const unsigned Opcode = X86::ADD16ri;
-  EXPECT_THAT(InstrInfo.get(Opcode).getImplicitDefs()[0], X86::EFLAGS);
+  EXPECT_THAT(InstrInfo.get(Opcode).implicit_defs()[0], X86::EFLAGS);
   const auto CodeTemplates = checkAndGetCodeTemplates(Opcode);
   ASSERT_THAT(CodeTemplates, SizeIs(1));
   const auto &CT = CodeTemplates[0];
@@ -155,6 +153,40 @@ TEST_F(X86SerialSnippetGeneratorTest,
       Generator.generateCodeTemplates(&Instr, AllRegisters).takeError();
   EXPECT_TRUE((bool)Error);
   consumeError(std::move(Error));
+}
+
+TEST_F(X86SerialSnippetGeneratorTest,
+       ImplicitSelfDependencyThroughExplicitRegsForbidAlmostAll) {
+  // - VXORPSrr
+  // - Op0 Explicit Def RegClass(VR128)
+  // - Op1 Explicit Use RegClass(VR128)
+  // - Op2 Explicit Use RegClass(VR128)
+  // - Var0 [Op0]
+  // - Var1 [Op1]
+  // - Var2 [Op2]
+  // - hasAliasingRegisters
+  const unsigned Opcode = X86::VXORPSrr;
+  randomGenerator().seed(0); // Initialize seed.
+  const Instruction &Instr = State.getIC().getInstr(Opcode);
+  auto ForbiddenRegisters = State.getRATC().emptyRegisters();
+  ForbiddenRegisters.flip();
+  ForbiddenRegisters.reset(X86::XMM0);
+  auto Error = Generator.generateCodeTemplates(&Instr, ForbiddenRegisters);
+  EXPECT_FALSE((bool)Error.takeError());
+  auto CodeTemplates = std::move(Error.get());
+  ASSERT_THAT(CodeTemplates, SizeIs(Gt(0U))) << "Templates are available";
+  for (const auto &CT : CodeTemplates) {
+    EXPECT_THAT(CT.Execution, ExecutionMode::SERIAL_VIA_EXPLICIT_REGS);
+    ASSERT_THAT(CT.Instructions, SizeIs(1));
+    const InstructionTemplate &IT = CT.Instructions[0];
+    EXPECT_THAT(IT.getOpcode(), Opcode);
+    ASSERT_THAT(IT.getVariableValues(), SizeIs(3));
+    for (const auto &Var : IT.getVariableValues()) {
+      if (Var.isReg()) {
+        EXPECT_FALSE(ForbiddenRegisters[Var.getReg().id()]);
+      }
+    }
+  }
 }
 
 TEST_F(X86SerialSnippetGeneratorTest, DependencyThroughOtherOpcode) {
@@ -256,8 +288,8 @@ TEST_F(X86ParallelSnippetGeneratorTest, ReadAfterWrite_CMOV32rr) {
     EXPECT_THAT(CT.Info, HasSubstr("avoiding Read-After-Write issue"));
     EXPECT_THAT(CT.Execution, ExecutionMode::UNKNOWN);
     ASSERT_GT(CT.Instructions.size(), 1U);
-    std::unordered_set<unsigned> AllDefRegisters;
-    std::unordered_set<unsigned> AllUseRegisters;
+    std::set<MCRegister> AllDefRegisters;
+    std::set<MCRegister> AllUseRegisters;
     for (const auto &IT : CT.Instructions) {
       ASSERT_THAT(IT.getVariableValues(), SizeIs(3));
       AllDefRegisters.insert(IT.getVariableValues()[0].getReg());
@@ -296,8 +328,8 @@ TEST_F(X86ParallelSnippetGeneratorTest, ReadAfterWrite_VFMADD132PDr) {
     EXPECT_THAT(CT.Info, HasSubstr("avoiding Read-After-Write issue"));
     EXPECT_THAT(CT.Execution, ExecutionMode::UNKNOWN);
     ASSERT_GT(CT.Instructions.size(), 1U);
-    std::unordered_set<unsigned> AllDefRegisters;
-    std::unordered_set<unsigned> AllUseRegisters;
+    std::set<MCRegister> AllDefRegisters;
+    std::set<MCRegister> AllUseRegisters;
     for (const auto &IT : CT.Instructions) {
       ASSERT_THAT(IT.getVariableValues(), SizeIs(3));
       AllDefRegisters.insert(IT.getVariableValues()[0].getReg());
@@ -380,9 +412,9 @@ TEST_F(X86ParallelSnippetGeneratorTest, MemoryUse) {
     EXPECT_THAT(IT.getOpcode(), Opcode);
     ASSERT_THAT(IT.getVariableValues(), SizeIs(6));
     EXPECT_EQ(IT.getVariableValues()[2].getImm(), 1);
-    EXPECT_EQ(IT.getVariableValues()[3].getReg(), 0u);
+    EXPECT_FALSE(IT.getVariableValues()[3].getReg().isValid());
     EXPECT_EQ(IT.getVariableValues()[4].getImm(), 0);
-    EXPECT_EQ(IT.getVariableValues()[5].getReg(), 0u);
+    EXPECT_FALSE(IT.getVariableValues()[5].getReg().isValid());
   }
 }
 

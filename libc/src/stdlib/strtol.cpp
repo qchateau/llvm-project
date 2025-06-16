@@ -8,16 +8,18 @@
 
 #include "src/stdlib/strtol.h"
 #include "src/__support/common.h"
+#include "src/__support/libc_errno.h"
+#include "src/__support/macros/config.h"
 #include "src/__support/str_to_integer.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
 LLVM_LIBC_FUNCTION(long, strtol,
                    (const char *__restrict str, char **__restrict str_end,
                     int base)) {
   auto result = internal::strtointeger<long>(str, base);
   if (result.has_error())
-    errno = result.error;
+    libc_errno = result.error;
 
   if (str_end != nullptr)
     *str_end = const_cast<char *>(str + result.parsed_len);
@@ -25,4 +27,4 @@ LLVM_LIBC_FUNCTION(long, strtol,
   return result;
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

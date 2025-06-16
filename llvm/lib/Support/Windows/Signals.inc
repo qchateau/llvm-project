@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/ExitCodes.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
@@ -167,25 +168,30 @@ static bool isDebugHelpInitialized() {
 }
 
 static bool load64BitDebugHelp(void) {
-  HMODULE hLib = ::LoadLibraryW(L"Dbghelp.dll");
+  HMODULE hLib =
+      ::LoadLibraryExA("Dbghelp.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (hLib) {
-    fMiniDumpWriteDump =
-        (fpMiniDumpWriteDump)::GetProcAddress(hLib, "MiniDumpWriteDump");
-    fStackWalk64 = (fpStackWalk64)::GetProcAddress(hLib, "StackWalk64");
-    fSymGetModuleBase64 =
-        (fpSymGetModuleBase64)::GetProcAddress(hLib, "SymGetModuleBase64");
-    fSymGetSymFromAddr64 =
-        (fpSymGetSymFromAddr64)::GetProcAddress(hLib, "SymGetSymFromAddr64");
-    fSymGetLineFromAddr64 =
-        (fpSymGetLineFromAddr64)::GetProcAddress(hLib, "SymGetLineFromAddr64");
-    fSymGetModuleInfo64 =
-        (fpSymGetModuleInfo64)::GetProcAddress(hLib, "SymGetModuleInfo64");
-    fSymFunctionTableAccess64 = (fpSymFunctionTableAccess64)::GetProcAddress(
-        hLib, "SymFunctionTableAccess64");
-    fSymSetOptions = (fpSymSetOptions)::GetProcAddress(hLib, "SymSetOptions");
-    fSymInitialize = (fpSymInitialize)::GetProcAddress(hLib, "SymInitialize");
-    fEnumerateLoadedModules = (fpEnumerateLoadedModules)::GetProcAddress(
-        hLib, "EnumerateLoadedModules64");
+    fMiniDumpWriteDump = (fpMiniDumpWriteDump)(void *)::GetProcAddress(
+        hLib, "MiniDumpWriteDump");
+    fStackWalk64 = (fpStackWalk64)(void *)::GetProcAddress(hLib, "StackWalk64");
+    fSymGetModuleBase64 = (fpSymGetModuleBase64)(void *)::GetProcAddress(
+        hLib, "SymGetModuleBase64");
+    fSymGetSymFromAddr64 = (fpSymGetSymFromAddr64)(void *)::GetProcAddress(
+        hLib, "SymGetSymFromAddr64");
+    fSymGetLineFromAddr64 = (fpSymGetLineFromAddr64)(void *)::GetProcAddress(
+        hLib, "SymGetLineFromAddr64");
+    fSymGetModuleInfo64 = (fpSymGetModuleInfo64)(void *)::GetProcAddress(
+        hLib, "SymGetModuleInfo64");
+    fSymFunctionTableAccess64 =
+        (fpSymFunctionTableAccess64)(void *)::GetProcAddress(
+            hLib, "SymFunctionTableAccess64");
+    fSymSetOptions =
+        (fpSymSetOptions)(void *)::GetProcAddress(hLib, "SymSetOptions");
+    fSymInitialize =
+        (fpSymInitialize)(void *)::GetProcAddress(hLib, "SymInitialize");
+    fEnumerateLoadedModules =
+        (fpEnumerateLoadedModules)(void *)::GetProcAddress(
+            hLib, "EnumerateLoadedModules64");
   }
   return isDebugHelpInitialized();
 }
@@ -203,6 +209,9 @@ static std::vector<std::string> *FilesToRemove = NULL;
 static bool RegisteredUnhandledExceptionFilter = false;
 static bool CleanupExecuted = false;
 static PTOP_LEVEL_EXCEPTION_FILTER OldFilter = NULL;
+
+/// The function to call on "SIGPIPE" (one-time use only).
+static std::atomic<void (*)()> OneShotPipeSignalFunction(nullptr);
 
 // Windows creates a new thread to execute the console handler when an event
 // (such as CTRL/C) occurs.  This causes concurrency issues with the above
@@ -296,6 +305,11 @@ static bool findModulesAndOffsets(void **StackTrace, int Depth,
   Data.StrPool = &StrPool;
   fEnumerateLoadedModules(GetCurrentProcess(), findModuleCallback, &Data);
   return true;
+}
+
+static bool printMarkupContext(llvm::raw_ostream &OS,
+                               const char *MainExecutableName) {
+  return false;
 }
 
 static void PrintStackTraceForThread(llvm::raw_ostream &OS, HANDLE hProcess,
@@ -575,11 +589,16 @@ void llvm::sys::SetInfoSignalFunction(void (*Handler)()) {
 }
 
 void llvm::sys::SetOneShotPipeSignalFunction(void (*Handler)()) {
-  // Unimplemented.
+  OneShotPipeSignalFunction.exchange(Handler);
 }
 
 void llvm::sys::DefaultOneShotPipeSignalHandler() {
-  // Unimplemented.
+  llvm::sys::Process::Exit(EX_IOERR, /*NoCleanup=*/true);
+}
+
+void llvm::sys::CallOneShotPipeSignalHandler() {
+  if (auto OldOneShotPipeFunction = OneShotPipeSignalFunction.exchange(nullptr))
+    OldOneShotPipeFunction();
 }
 
 /// Add a function to be called when a signal is delivered to the process. The
@@ -816,7 +835,15 @@ WriteWindowsDumpFile(PMINIDUMP_EXCEPTION_INFORMATION ExceptionInfo) {
 }
 
 void sys::CleanupOnSignal(uintptr_t Context) {
-  LLVMUnhandledExceptionFilter((LPEXCEPTION_POINTERS)Context);
+  LPEXCEPTION_POINTERS EP = (LPEXCEPTION_POINTERS)Context;
+  // Broken pipe is not a crash.
+  //
+  // 0xE0000000 is combined with the return code in the exception raised in
+  // CrashRecoveryContext::HandleExit().
+  unsigned RetCode = EP->ExceptionRecord->ExceptionCode;
+  if (RetCode == (0xE0000000 | EX_IOERR))
+    return;
+  LLVMUnhandledExceptionFilter(EP);
 }
 
 static LONG WINAPI LLVMUnhandledExceptionFilter(LPEXCEPTION_POINTERS ep) {

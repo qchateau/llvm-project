@@ -29,7 +29,10 @@ namespace ARM {
 }
 
 class LLVM_LIBRARY_VISIBILITY ARMAsmPrinter : public AsmPrinter {
+public:
+  static char ID;
 
+private:
   /// Subtarget - Keep a pointer to the ARMSubtarget around so that we can
   /// make the right decision when printing asm code for different targets.
   const ARMSubtarget *Subtarget;
@@ -89,6 +92,10 @@ public:
   void emitJumpTableTBInst(const MachineInstr *MI, unsigned OffsetWidth);
   void emitInstruction(const MachineInstr *MI) override;
   bool runOnMachineFunction(MachineFunction &F) override;
+  std::tuple<const MCSymbol *, uint64_t, const MCSymbol *,
+             codeview::JumpTableEntrySize>
+  getCodeViewJumpTableInfo(int JTI, const MachineInstr *BranchInstr,
+                           const MCSymbol *BranchLabel) const override;
 
   void emitConstantPool() override {
     // we emit constant pools customly!
@@ -120,14 +127,10 @@ private:
   // Helpers for emitStartOfAsmFile() and emitEndOfAsmFile()
   void emitAttributes();
 
-  // Generic helper used to emit e.g. ARMv5 mul pseudos
-  void EmitPatchedInstruction(const MachineInstr *MI, unsigned TargetOpc);
-
   void EmitUnwindingInstruction(const MachineInstr *MI);
 
-  // emitPseudoExpansionLowering - tblgen'erated.
-  bool emitPseudoExpansionLowering(MCStreamer &OutStreamer,
-                                   const MachineInstr *MI);
+  // tblgen'erated.
+  bool lowerPseudoInstExpansion(const MachineInstr *MI, MCInst &Inst);
 
 public:
   unsigned getISAEncoding() override {
@@ -152,6 +155,7 @@ public:
   /// the .s file.
   void emitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) override;
 };
+
 } // end namespace llvm
 
 #endif

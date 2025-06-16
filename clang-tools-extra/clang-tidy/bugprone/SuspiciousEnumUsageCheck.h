@@ -1,4 +1,4 @@
-//===--- SuspiciousEnumUsageCheck.h - clang-tidy--------------------------*- C++ -*-===//
+//===--- SuspiciousEnumUsageCheck.h - clang-tidy------------------*- C++-*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,9 +11,7 @@
 
 #include "../ClangTidyCheck.h"
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 /// The checker detects various cases when an enum is probably misused (as a
 /// bitmask).
@@ -30,12 +28,10 @@ public:
   }
 
 private:
-  void checkSuspiciousBitmaskUsage(const Expr*, const EnumDecl*);
+  void checkSuspiciousBitmaskUsage(const Expr *, const EnumDecl *);
   const bool StrictMode;
 };
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_BUGPRONE_SUSPICIOUSENUMUSAGECHECK_H

@@ -45,7 +45,6 @@ define i32 @s_add_co_select_user() {
 ; GFX10-LABEL: s_add_co_select_user:
 ; GFX10:       ; %bb.0: ; %bb
 ; GFX10-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX10-NEXT:    s_waitcnt_vscnt null, 0x0
 ; GFX10-NEXT:    s_mov_b64 s[4:5], 0
 ; GFX10-NEXT:    s_load_dword s4, s[4:5], 0x0
 ; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
@@ -63,15 +62,14 @@ define i32 @s_add_co_select_user() {
 ; GFX11-LABEL: s_add_co_select_user:
 ; GFX11:       ; %bb.0: ; %bb
 ; GFX11-NEXT:    s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
-; GFX11-NEXT:    s_waitcnt_vscnt null, 0x0
 ; GFX11-NEXT:    s_mov_b64 s[0:1], 0
 ; GFX11-NEXT:    s_load_b32 s0, s[0:1], 0x0
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    v_add_co_u32 v0, s1, s0, s0
-; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_2) | instid1(SALU_CYCLE_1)
 ; GFX11-NEXT:    s_cmp_lg_u32 s1, 0
 ; GFX11-NEXT:    s_addc_u32 s1, s0, 0
 ; GFX11-NEXT:    s_cselect_b32 s2, -1, 0
+; GFX11-NEXT:    s_delay_alu instid0(SALU_CYCLE_1)
 ; GFX11-NEXT:    s_and_b32 s2, s2, exec_lo
 ; GFX11-NEXT:    s_cselect_b32 s1, s1, 0
 ; GFX11-NEXT:    s_cmp_gt_u32 s0, 31
@@ -79,7 +77,7 @@ define i32 @s_add_co_select_user() {
 ; GFX11-NEXT:    v_cndmask_b32_e32 v0, s1, v0, vcc_lo
 ; GFX11-NEXT:    s_setpc_b64 s[30:31]
 bb:
-  %i = load volatile i32, i32 addrspace(4)* null, align 8
+  %i = load volatile i32, ptr addrspace(4) null, align 8
   %i1 = add i32 %i, %i
   %i2 = icmp ult i32 %i1, %i
   %i3 = zext i1 %i2 to i32
@@ -95,7 +93,10 @@ bb:
 define amdgpu_kernel void @s_add_co_br_user(i32 %i) {
 ; GFX7-LABEL: s_add_co_br_user:
 ; GFX7:       ; %bb.0: ; %bb
-; GFX7-NEXT:    s_load_dword s2, s[4:5], 0x0
+; GFX7-NEXT:    s_load_dword s2, s[8:9], 0x0
+; GFX7-NEXT:    s_add_i32 s12, s12, s17
+; GFX7-NEXT:    s_lshr_b32 flat_scratch_hi, s12, 8
+; GFX7-NEXT:    s_mov_b32 flat_scratch_lo, s13
 ; GFX7-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX7-NEXT:    s_add_i32 s0, s2, s2
 ; GFX7-NEXT:    s_cmp_lt_u32 s0, s2
@@ -122,7 +123,7 @@ define amdgpu_kernel void @s_add_co_br_user(i32 %i) {
 ;
 ; GFX9-LABEL: s_add_co_br_user:
 ; GFX9:       ; %bb.0: ; %bb
-; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x0
+; GFX9-NEXT:    s_load_dword s2, s[8:9], 0x0
 ; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX9-NEXT:    s_add_i32 s0, s2, s2
 ; GFX9-NEXT:    s_cmp_lt_u32 s0, s2
@@ -148,7 +149,7 @@ define amdgpu_kernel void @s_add_co_br_user(i32 %i) {
 ;
 ; GFX10-LABEL: s_add_co_br_user:
 ; GFX10:       ; %bb.0: ; %bb
-; GFX10-NEXT:    s_load_dword s0, s[4:5], 0x0
+; GFX10-NEXT:    s_load_dword s0, s[8:9], 0x0
 ; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX10-NEXT:    s_add_i32 s1, s0, s0
 ; GFX10-NEXT:    s_cmp_lt_u32 s1, s0
@@ -174,7 +175,7 @@ define amdgpu_kernel void @s_add_co_br_user(i32 %i) {
 ;
 ; GFX11-LABEL: s_add_co_br_user:
 ; GFX11:       ; %bb.0: ; %bb
-; GFX11-NEXT:    s_load_b32 s0, s[0:1], 0x0
+; GFX11-NEXT:    s_load_b32 s0, s[4:5], 0x0
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    s_add_i32 s1, s0, s0
 ; GFX11-NEXT:    s_delay_alu instid0(SALU_CYCLE_1) | instskip(SKIP_1) | instid1(SALU_CYCLE_1)
@@ -196,7 +197,6 @@ define amdgpu_kernel void @s_add_co_br_user(i32 %i) {
 ; GFX11-NEXT:    v_dual_mov_b32 v1, 0 :: v_dual_mov_b32 v2, 10
 ; GFX11-NEXT:    global_store_b32 v[0:1], v2, off dlc
 ; GFX11-NEXT:    s_waitcnt_vscnt null, 0x0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 bb:
   %i1 = add i32 %i, %i
@@ -209,10 +209,10 @@ bb:
   br i1 %i6, label %bb0, label %bb1
 
 bb0:
-  store volatile i32 9, i32 addrspace(1)* null
+  store volatile i32 9, ptr addrspace(1) null
   br label %bb1
 
 bb1:
-  store volatile i32 10, i32 addrspace(1)* null
+  store volatile i32 10, ptr addrspace(1) null
   ret void
 }

@@ -8,14 +8,11 @@
 
 #include "NoInternalDependenciesCheck.h"
 #include "AbseilMatcher.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace abseil {
+namespace clang::tidy::abseil {
 
 void NoInternalDependenciesCheck::registerMatchers(MatchFinder *Finder) {
   // TODO: refactor matcher to be configurable or just match on any internal
@@ -30,7 +27,8 @@ void NoInternalDependenciesCheck::registerMatchers(MatchFinder *Finder) {
       this);
 }
 
-void NoInternalDependenciesCheck::check(const MatchFinder::MatchResult &Result) {
+void NoInternalDependenciesCheck::check(
+    const MatchFinder::MatchResult &Result) {
   const auto *InternalDependency =
       Result.Nodes.getNodeAs<NestedNameSpecifierLoc>("InternalDep");
 
@@ -45,6 +43,4 @@ void NoInternalDependenciesCheck::check(const MatchFinder::MatchResult &Result) 
        "details are reserved to Abseil");
 }
 
-} // namespace abseil
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::abseil

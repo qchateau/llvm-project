@@ -11,11 +11,9 @@
 
 #include "../ClangTidyCheck.h"
 
-namespace clang {
-namespace tidy {
-namespace misc {
+namespace clang::tidy::misc {
 
-///checks for locations that do not throw by value
+/// Checks for locations that do not throw by value
 // or catch by reference.
 // The check is C++ only. It checks that all throw locations
 // throw by value and not by pointer. Additionally it
@@ -49,8 +47,6 @@ private:
   uint64_t MaxSize; // No `const` because we have to set it in two steps.
 };
 
-} // namespace misc
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::misc
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_MISC_THROW_BY_VALUE_CATCH_BY_REFERENCE_H

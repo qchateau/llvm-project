@@ -117,9 +117,10 @@ exit:
 define void @test5(i32 %n) {
 ; CHECK-LABEL: @test5(
 ; CHECK-NEXT:    [[TRUNC:%.*]] = and i32 [[N:%.*]], 63
-; CHECK-NEXT:    [[DIV_LHS_TRUNC:%.*]] = trunc i32 [[TRUNC]] to i8
-; CHECK-NEXT:    [[DIV1:%.*]] = urem i8 [[DIV_LHS_TRUNC]], 42
-; CHECK-NEXT:    [[DIV_ZEXT:%.*]] = zext i8 [[DIV1]] to i32
+; CHECK-NEXT:    [[TRUNC_FROZEN:%.*]] = freeze i32 [[TRUNC]]
+; CHECK-NEXT:    [[DIV_UREM:%.*]] = sub nuw i32 [[TRUNC_FROZEN]], 42
+; CHECK-NEXT:    [[DIV_CMP:%.*]] = icmp ult i32 [[TRUNC_FROZEN]], 42
+; CHECK-NEXT:    [[DIV:%.*]] = select i1 [[DIV_CMP]], i32 [[TRUNC_FROZEN]], i32 [[DIV_UREM]]
 ; CHECK-NEXT:    ret void
 ;
   %trunc = and i32 %n, 63
@@ -391,6 +392,83 @@ else:
   %c5.2 = icmp ugt i8 %x, 1
   call void @use(i1 %c5.2)
   ret void
+}
+
+define i8 @urem_undef_range_op1(i8 %x) {
+; CHECK-LABEL: @urem_undef_range_op1(
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    switch i8 [[X:%.*]], label [[JOIN:%.*]] [
+; CHECK-NEXT:      i8 1, label [[CASE1:%.*]]
+; CHECK-NEXT:      i8 2, label [[CASE2:%.*]]
+; CHECK-NEXT:    ]
+; CHECK:       case1:
+; CHECK-NEXT:    br label [[JOIN]]
+; CHECK:       case2:
+; CHECK-NEXT:    br label [[JOIN]]
+; CHECK:       join:
+; CHECK-NEXT:    [[PHI:%.*]] = phi i8 [ 1, [[CASE1]] ], [ 2, [[CASE2]] ], [ undef, [[ENTRY:%.*]] ]
+; CHECK-NEXT:    [[RES:%.*]] = urem i8 [[PHI]], 3
+; CHECK-NEXT:    ret i8 [[RES]]
+;
+entry:
+  switch i8 %x, label %join [
+  i8 1, label %case1
+  i8 2, label %case2
+  ]
+
+case1:
+  br label %join
+
+case2:
+  br label %join
+
+join:
+  %phi = phi i8 [ 1, %case1 ], [ 2, %case2 ], [ undef, %entry ]
+  %res = urem i8 %phi, 3
+  ret i8 %res
+}
+
+define i8 @urem_undef_range_op2(i8 %x) {
+; CHECK-LABEL: @urem_undef_range_op2(
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    switch i8 [[X:%.*]], label [[JOIN:%.*]] [
+; CHECK-NEXT:      i8 1, label [[CASE1:%.*]]
+; CHECK-NEXT:      i8 2, label [[CASE2:%.*]]
+; CHECK-NEXT:    ]
+; CHECK:       case1:
+; CHECK-NEXT:    br label [[JOIN]]
+; CHECK:       case2:
+; CHECK-NEXT:    br label [[JOIN]]
+; CHECK:       join:
+; CHECK-NEXT:    [[PHI:%.*]] = phi i8 [ 5, [[CASE1]] ], [ 6, [[CASE2]] ], [ undef, [[ENTRY:%.*]] ]
+; CHECK-NEXT:    [[RES:%.*]] = sub nuw i8 7, [[PHI]]
+; CHECK-NEXT:    ret i8 [[RES]]
+;
+entry:
+  switch i8 %x, label %join [
+  i8 1, label %case1
+  i8 2, label %case2
+  ]
+
+case1:
+  br label %join
+
+case2:
+  br label %join
+
+join:
+  %phi = phi i8 [ 5, %case1 ], [ 6, %case2 ], [ undef, %entry ]
+  %res = urem i8 7, %phi
+  ret i8 %res
+}
+
+define i1 @urem_i1() {
+; CHECK-LABEL: @urem_i1(
+; CHECK-NEXT:    [[REM:%.*]] = urem i1 false, false
+; CHECK-NEXT:    ret i1 [[REM]]
+;
+  %rem = urem i1 false, false
+  ret i1 %rem
 }
 
 declare void @use(i1)

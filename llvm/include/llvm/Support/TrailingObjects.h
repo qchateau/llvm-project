@@ -37,7 +37,7 @@
 /// determine the size needed for allocation via
 /// 'additionalSizeToAlloc' and 'totalSizeToAlloc'.
 ///
-/// All the methods implemented by this class are are intended for use
+/// All the methods implemented by this class are intended for use
 /// by the implementation of the class, not as part of its interface
 /// (thus, private inheritance is suggested).
 ///
@@ -46,7 +46,7 @@
 #ifndef LLVM_SUPPORT_TRAILINGOBJECTS_H
 #define LLVM_SUPPORT_TRAILINGOBJECTS_H
 
-#include "llvm/Support/AlignOf.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
@@ -302,6 +302,41 @@ public:
         static_cast<BaseTy *>(this), TrailingObjectsBase::OverloadToken<T>());
   }
 
+  // getTrailingObjects() specialization for a single trailing type.
+  using FirstTrailingType =
+      typename std::tuple_element_t<0, std::tuple<TrailingTys...>>;
+
+  const FirstTrailingType *getTrailingObjects() const {
+    static_assert(sizeof...(TrailingTys) == 1,
+                  "Can use non-templated getTrailingObjects() only when there "
+                  "is a single trailing type");
+    return getTrailingObjects<FirstTrailingType>();
+  }
+
+  FirstTrailingType *getTrailingObjects() {
+    static_assert(sizeof...(TrailingTys) == 1,
+                  "Can use non-templated getTrailingObjects() only when there "
+                  "is a single trailing type");
+    return getTrailingObjects<FirstTrailingType>();
+  }
+
+  // Functions that return the trailing objects as ArrayRefs.
+  template <typename T> MutableArrayRef<T> getTrailingObjects(size_t N) {
+    return MutableArrayRef(getTrailingObjects<T>(), N);
+  }
+
+  template <typename T> ArrayRef<T> getTrailingObjects(size_t N) const {
+    return ArrayRef(getTrailingObjects<T>(), N);
+  }
+
+  MutableArrayRef<FirstTrailingType> getTrailingObjects(size_t N) {
+    return MutableArrayRef(getTrailingObjects(), N);
+  }
+
+  ArrayRef<FirstTrailingType> getTrailingObjects(size_t N) const {
+    return ArrayRef(getTrailingObjects(), N);
+  }
+
   /// Returns the size of the trailing data, if an object were
   /// allocated with the given counts (The counts are in the same order
   /// as the template arguments). This does not include the size of the
@@ -310,7 +345,7 @@ public:
   /// that it's clear what the counts are counting in callers.
   template <typename... Tys>
   static constexpr std::enable_if_t<
-      std::is_same<Foo<TrailingTys...>, Foo<Tys...>>::value, size_t>
+      std::is_same_v<Foo<TrailingTys...>, Foo<Tys...>>, size_t>
   additionalSizeToAlloc(typename trailing_objects_internal::ExtractSecondType<
                         TrailingTys, size_t>::type... Counts) {
     return ParentType::additionalSizeToAllocImpl(0, Counts...);
@@ -322,7 +357,7 @@ public:
   /// object.
   template <typename... Tys>
   static constexpr std::enable_if_t<
-      std::is_same<Foo<TrailingTys...>, Foo<Tys...>>::value, size_t>
+      std::is_same_v<Foo<TrailingTys...>, Foo<Tys...>>, size_t>
   totalSizeToAlloc(typename trailing_objects_internal::ExtractSecondType<
                    TrailingTys, size_t>::type... Counts) {
     return sizeof(BaseTy) + ParentType::additionalSizeToAllocImpl(0, Counts...);

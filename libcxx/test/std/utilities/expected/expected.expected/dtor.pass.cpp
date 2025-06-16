@@ -1,4 +1,5 @@
 //===----------------------------------------------------------------------===//
+//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -6,9 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17, c++20
-
-// Older Clangs do not support the C++20 feature to constrain destructors
-// XFAIL: clang-14, apple-clang-14
 
 // constexpr ~expected();
 //
@@ -21,6 +19,7 @@
 #include <expected>
 #include <type_traits>
 #include <utility>
+#include <memory>
 
 #include "test_macros.h"
 
@@ -30,9 +29,7 @@ struct NonTrivial {
   ~NonTrivial() {}
 };
 
-#if __cpp_concepts >= 202002
 static_assert(std::is_trivially_destructible_v<std::expected<int, int>>);
-#endif
 static_assert(!std::is_trivially_destructible_v<std::expected<NonTrivial, int>>);
 static_assert(!std::is_trivially_destructible_v<std::expected<int, NonTrivial>>);
 static_assert(!std::is_trivially_destructible_v<std::expected<NonTrivial, NonTrivial>>);
@@ -62,6 +59,8 @@ constexpr bool test() {
 }
 
 int main(int, char**) {
+  std::expected<std::unique_ptr<int>, int> a = std::make_unique<int>(42);
+
   test();
   static_assert(test());
   return 0;

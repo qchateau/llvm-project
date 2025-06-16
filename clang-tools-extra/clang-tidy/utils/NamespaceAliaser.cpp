@@ -12,21 +12,21 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Lex/Lexer.h"
-namespace clang {
-namespace tidy {
-namespace utils {
+#include <optional>
+namespace clang::tidy::utils {
 
 using namespace ast_matchers;
+namespace {
+AST_MATCHER_P(NamespaceAliasDecl, hasTargetNamespace,
+              ast_matchers::internal::Matcher<NamespaceDecl>, InnerMatcher) {
+  return InnerMatcher.matches(*Node.getNamespace(), Finder, Builder);
+}
+} // namespace
 
 NamespaceAliaser::NamespaceAliaser(const SourceManager &SourceMgr)
     : SourceMgr(SourceMgr) {}
 
-AST_MATCHER_P(NamespaceAliasDecl, hasTargetNamespace,
-              ast_matchers::internal::Matcher<NamespaceDecl>, innerMatcher) {
-  return innerMatcher.matches(*Node.getNamespace(), Finder, Builder);
-}
-
-Optional<FixItHint>
+std::optional<FixItHint>
 NamespaceAliaser::createAlias(ASTContext &Context, const Stmt &Statement,
                               StringRef Namespace,
                               const std::vector<std::string> &Abbreviations) {
@@ -91,6 +91,4 @@ std::string NamespaceAliaser::getNamespaceName(ASTContext &Context,
   return Namespace.str();
 }
 
-} // namespace utils
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::utils

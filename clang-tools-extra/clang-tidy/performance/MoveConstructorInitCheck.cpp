@@ -7,15 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "MoveConstructorInitCheck.h"
-#include "../utils/Matchers.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace performance {
+namespace clang::tidy::performance {
 
 MoveConstructorInitCheck::MoveConstructorInitCheck(StringRef Name,
                                                    ClangTidyContext *Context)
@@ -84,6 +81,4 @@ void MoveConstructorInitCheck::check(const MatchFinder::MatchResult &Result) {
   }
 }
 
-} // namespace performance
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::performance

@@ -9,6 +9,7 @@
 #include "EmulateInstructionMIPS64.h"
 
 #include <cstdlib>
+#include <optional>
 
 #include "lldb/Core/Address.h"
 #include "lldb/Core/Opcode.h"
@@ -66,7 +67,7 @@ EmulateInstructionMIPS64::EmulateInstructionMIPS64(
   std::string Status;
   llvm::Triple triple = arch.GetTriple();
   const llvm::Target *target =
-      llvm::TargetRegistry::lookupTarget(triple.getTriple(), Status);
+      llvm::TargetRegistry::lookupTarget(triple, Status);
 
 /*
  * If we fail to get the target then we haven't registered it. The
@@ -83,7 +84,7 @@ EmulateInstructionMIPS64::EmulateInstructionMIPS64(
     LLVMInitializeMipsAsmPrinter();
     LLVMInitializeMipsTargetMC();
     LLVMInitializeMipsDisassembler();
-    target = llvm::TargetRegistry::lookupTarget(triple.getTriple(), Status);
+    target = llvm::TargetRegistry::lookupTarget(triple, Status);
   }
 #endif
 
@@ -572,7 +573,7 @@ const char *EmulateInstructionMIPS64::GetRegisterName(unsigned reg_num,
   return nullptr;
 }
 
-llvm::Optional<RegisterInfo>
+std::optional<RegisterInfo>
 EmulateInstructionMIPS64::GetRegisterInfo(RegisterKind reg_kind,
                                           uint32_t reg_num) {
   if (reg_kind == eRegisterKindGeneric) {
@@ -1016,17 +1017,17 @@ bool EmulateInstructionMIPS64::CreateFunctionEntryUnwind(
   unwind_plan.Clear();
   unwind_plan.SetRegisterKind(eRegisterKindDWARF);
 
-  UnwindPlan::RowSP row(new UnwindPlan::Row);
+  UnwindPlan::Row row;
   const bool can_replace = false;
 
   // Our previous Call Frame Address is the stack pointer
-  row->GetCFAValue().SetIsRegisterPlusOffset(dwarf_sp_mips64, 0);
+  row.GetCFAValue().SetIsRegisterPlusOffset(dwarf_sp_mips64, 0);
 
   // Our previous PC is in the RA
-  row->SetRegisterLocationToRegister(dwarf_pc_mips64, dwarf_ra_mips64,
-                                     can_replace);
+  row.SetRegisterLocationToRegister(dwarf_pc_mips64, dwarf_ra_mips64,
+                                    can_replace);
 
-  unwind_plan.AppendRow(row);
+  unwind_plan.AppendRow(std::move(row));
 
   // All other registers are the same.
   unwind_plan.SetSourceName("EmulateInstructionMIPS64");
@@ -1098,7 +1099,7 @@ bool EmulateInstructionMIPS64::Emulate_DADDiu(llvm::MCInst &insn) {
        * Assume 2's complement and rely on unsigned overflow here.
        */
       uint64_t result = src_opd_val + imm;
-      llvm::Optional<RegisterInfo> reg_info_sp =
+      std::optional<RegisterInfo> reg_info_sp =
           GetRegisterInfo(eRegisterKindDWARF, dwarf_sp_mips64);
       if (reg_info_sp)
         context.SetRegisterPlusOffset(*reg_info_sp, imm);
@@ -1134,9 +1135,9 @@ bool EmulateInstructionMIPS64::Emulate_SD(llvm::MCInst &insn) {
   src = m_reg_info->getEncodingValue(insn.getOperand(0).getReg());
   base = m_reg_info->getEncodingValue(insn.getOperand(1).getReg());
 
-  llvm::Optional<RegisterInfo> reg_info_base =
+  std::optional<RegisterInfo> reg_info_base =
       GetRegisterInfo(eRegisterKindDWARF, dwarf_zero_mips64 + base);
-  llvm::Optional<RegisterInfo> reg_info_src =
+  std::optional<RegisterInfo> reg_info_src =
       GetRegisterInfo(eRegisterKindDWARF, dwarf_zero_mips64 + src);
   if (!reg_info_base || !reg_info_src)
     return false;
@@ -1156,19 +1157,18 @@ bool EmulateInstructionMIPS64::Emulate_SD(llvm::MCInst &insn) {
     context.type = eContextPushRegisterOnStack;
     context.SetRegisterToRegisterPlusOffset(*reg_info_src, *reg_info_base, 0);
 
-    uint8_t buffer[RegisterValue::kMaxRegisterByteSize];
-    Status error;
-
-    llvm::Optional<RegisterValue> data_src = ReadRegister(*reg_info_base);
+    std::optional<RegisterValue> data_src = ReadRegister(*reg_info_base);
     if (!data_src)
       return false;
 
-    if (data_src->GetAsMemoryData(*reg_info_src, buffer,
+    Status error;
+    RegisterValue::BytesContainer buffer(reg_info_src->byte_size);
+    if (data_src->GetAsMemoryData(*reg_info_src, buffer.data(),
                                   reg_info_src->byte_size, eByteOrderLittle,
                                   error) == 0)
       return false;
 
-    if (!WriteMemory(context, address, buffer, reg_info_src->byte_size))
+    if (!WriteMemory(context, address, buffer.data(), reg_info_src->byte_size))
       return false;
   }
 
@@ -1209,7 +1209,7 @@ bool EmulateInstructionMIPS64::Emulate_LD(llvm::MCInst &insn) {
 
   if (nonvolatile_reg_p(src)) {
     RegisterValue data_src;
-    llvm::Optional<RegisterInfo> reg_info_src =
+    std::optional<RegisterInfo> reg_info_src =
         GetRegisterInfo(eRegisterKindDWARF, dwarf_zero_mips64 + src);
     if (!reg_info_src)
       return false;
@@ -1276,7 +1276,7 @@ bool EmulateInstructionMIPS64::Emulate_DSUBU_DADDU(llvm::MCInst &insn) {
       result = src_opd_val + rt_opd_val;
 
     Context context;
-    llvm::Optional<RegisterInfo> reg_info_sp =
+    std::optional<RegisterInfo> reg_info_sp =
         GetRegisterInfo(eRegisterKindDWARF, dwarf_sp_mips64);
     if (reg_info_sp)
       context.SetRegisterPlusOffset(*reg_info_sp, rt_opd_val);

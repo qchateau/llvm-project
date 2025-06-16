@@ -17,7 +17,6 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
 
-#include <map>
 #include <utility>
 
 namespace llvm {
@@ -135,6 +134,7 @@ bool MetadataVerifier::verifyKernelArgs(msgpack::DocNode &Node) {
                                .Case("hidden_default_queue", true)
                                .Case("hidden_completion_action", true)
                                .Case("hidden_multigrid_sync_arg", true)
+                               .Case("hidden_dynamic_lds_size", true)
                                .Case("hidden_private_base", true)
                                .Case("hidden_shared_base", true)
                                .Case("hidden_queue_ptr", true)
@@ -278,6 +278,9 @@ bool MetadataVerifier::verifyKernel(msgpack::DocNode &Node) {
     return false;
   if (!verifyIntegerEntry(KernelMap, ".vgpr_spill_count", false))
     return false;
+  if (!verifyIntegerEntry(KernelMap, ".uniform_work_group_size", false))
+    return false;
+
 
   return true;
 }

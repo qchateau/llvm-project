@@ -14,9 +14,7 @@
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/SmallVector.h>
 
-namespace clang {
-namespace tidy {
-namespace readability {
+namespace clang::tidy::readability {
 
 /// Detects magic numbers, integer and floating point literals embedded in code.
 ///
@@ -45,11 +43,16 @@ private:
 
   bool isBitFieldWidth(const clang::ast_matchers::MatchFinder::MatchResult &,
                        const FloatingLiteral &) const {
-     return false;
+    return false;
   }
 
-  bool isBitFieldWidth(const clang::ast_matchers::MatchFinder::MatchResult &Result,
-                       const IntegerLiteral &Literal) const;
+  bool
+  isBitFieldWidth(const clang::ast_matchers::MatchFinder::MatchResult &Result,
+                  const IntegerLiteral &Literal) const;
+
+  bool isUserDefinedLiteral(
+      const clang::ast_matchers::MatchFinder::MatchResult &Result,
+      const clang::Expr &Literal) const;
 
   template <typename L>
   void checkBoundMatch(const ast_matchers::MatchFinder::MatchResult &Result,
@@ -74,6 +77,10 @@ private:
     if (isBitFieldWidth(Result, *MatchedLiteral))
       return;
 
+    if (IgnoreUserDefinedLiterals &&
+        isUserDefinedLiteral(Result, *MatchedLiteral))
+      return;
+
     const StringRef LiteralSourceText = Lexer::getSourceText(
         CharSourceRange::getTokenRange(MatchedLiteral->getSourceRange()),
         *Result.SourceManager, getLangOpts());
@@ -86,6 +93,8 @@ private:
   const bool IgnoreAllFloatingPointValues;
   const bool IgnoreBitFieldsWidths;
   const bool IgnorePowersOf2IntegerValues;
+  const bool IgnoreTypeAliases;
+  const bool IgnoreUserDefinedLiterals;
   const StringRef RawIgnoredIntegerValues;
   const StringRef RawIgnoredFloatingPointValues;
 
@@ -102,8 +111,6 @@ private:
       IgnoredDoublePointValues;
 };
 
-} // namespace readability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::readability
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_READABILITY_MAGICNUMBERSCHECK_H

@@ -266,7 +266,7 @@ public:
       ElementTy::assertValid(element);
 #endif
     buffer.reserve(buffer.size() + std::distance(array.begin(), array.end()));
-    std::copy(array.begin(), array.end(), std::back_inserter(buffer));
+    llvm::append_range(buffer, array);
     Stream.EmitRecordWithAbbrev(code, buffer);
   }
 
@@ -429,7 +429,7 @@ public:
   /// in the buffer and should be handled separately by the caller.
   template <typename BufferTy, typename... Data>
   static void readRecord(BufferTy &buffer, Data &&...data) {
-    return readRecord(llvm::makeArrayRef(buffer), std::forward<Data>(data)...);
+    return readRecord(llvm::ArrayRef(buffer), std::forward<Data>(data)...);
   }
 };
 

@@ -28,7 +28,7 @@ using namespace mlir;
 
 static constexpr unsigned maxFreeID = 1 << 20;
 
-/// Returns an unsed symbol in `module` for `oldSymbolName` by trying numeric
+/// Returns an unused symbol in `module` for `oldSymbolName` by trying numeric
 /// suffix in `lastUsedID`.
 static StringAttr renameSymbol(StringRef oldSymName, unsigned &lastUsedID,
                                spirv::ModuleOp module) {
@@ -79,9 +79,8 @@ static llvm::hash_code computeHash(SymbolOpInterface symbolOp) {
         return attr.getName() != SymbolTable::getSymbolAttrName();
       });
 
-  return llvm::hash_combine(
-      symbolOp->getName(),
-      llvm::hash_combine_range(range.begin(), range.end()));
+  return llvm::hash_combine(symbolOp->getName(),
+                            llvm::hash_combine_range(range));
 }
 
 namespace mlir {

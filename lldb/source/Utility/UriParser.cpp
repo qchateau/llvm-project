@@ -12,6 +12,7 @@
 #include <string>
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 
 using namespace lldb_private;
@@ -24,7 +25,7 @@ llvm::raw_ostream &lldb_private::operator<<(llvm::raw_ostream &OS,
   return OS << U.path;
 }
 
-llvm::Optional<URI> URI::Parse(llvm::StringRef uri) {
+std::optional<URI> URI::Parse(llvm::StringRef uri) {
   URI ret;
 
   const llvm::StringRef kSchemeSep("://");
@@ -46,7 +47,7 @@ llvm::Optional<URI> URI::Parse(llvm::StringRef uri) {
       ((path_pos != std::string::npos) ? path_pos : uri.size()) - host_pos);
 
   // Extract hostname
-  if (!host_port.empty() && host_port[0] == '[') {
+  if (host_port.starts_with('[')) {
     // hostname is enclosed with square brackets.
     pos = host_port.rfind(']');
     if (pos == std::string::npos)

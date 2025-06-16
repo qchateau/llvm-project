@@ -34,6 +34,7 @@ const char *const KindEnumeration = "Enumeration";
 const char *const KindFile = "File";
 const char *const KindFunction = "Function";
 const char *const KindInlinedFunction = "InlinedFunction";
+const char *const KindModule = "Module";
 const char *const KindNamespace = "Namespace";
 const char *const KindStruct = "Struct";
 const char *const KindTemplateAlias = "TemplateAlias";
@@ -45,20 +46,13 @@ const char *const KindUnion = "Union";
 //===----------------------------------------------------------------------===//
 // DWARF lexical block, such as: namespace, function, compile unit, module, etc.
 //===----------------------------------------------------------------------===//
-LVScope::~LVScope() {
-  delete Types;
-  delete Symbols;
-  delete Scopes;
-  delete Lines;
-  delete Ranges;
-  delete Children;
-}
-
 // Return a string representation for the scope kind.
 const char *LVScope::kind() const {
   const char *Kind = KindUndefined;
   if (getIsArray())
     Kind = KindArray;
+  else if (getIsModule())
+    Kind = KindModule;
   else if (getIsBlock())
     Kind = KindBlock;
   else if (getIsCallSite())
@@ -103,6 +97,7 @@ LVScopeDispatch LVScope::Dispatch = {
     {LVScopeKind::IsInlinedFunction, &LVScope::getIsInlinedFunction},
     {LVScopeKind::IsLabel, &LVScope::getIsLabel},
     {LVScopeKind::IsLexicalBlock, &LVScope::getIsLexicalBlock},
+    {LVScopeKind::IsModule, &LVScope::getIsModule},
     {LVScopeKind::IsNamespace, &LVScope::getIsNamespace},
     {LVScopeKind::IsRoot, &LVScope::getIsRoot},
     {LVScopeKind::IsStructure, &LVScope::getIsStructure},
@@ -114,7 +109,7 @@ LVScopeDispatch LVScope::Dispatch = {
 
 void LVScope::addToChildren(LVElement *Element) {
   if (!Children)
-    Children = new LVElements();
+    Children = std::make_unique<LVElements>();
   Children->push_back(Element);
 }
 
@@ -137,7 +132,7 @@ void LVScope::addElement(LVLine *Line) {
   assert(Line && "Invalid line.");
   assert(!Line->getParent() && "Line already inserted");
   if (!Lines)
-    Lines = new LVAutoLines();
+    Lines = std::make_unique<LVLines>();
 
   // Add it to parent.
   Lines->push_back(Line);
@@ -161,7 +156,7 @@ void LVScope::addObject(LVLocation *Location) {
   assert(Location && "Invalid location.");
   assert(!Location->getParent() && "Location already inserted");
   if (!Ranges)
-    Ranges = new LVAutoLocations();
+    Ranges = std::make_unique<LVLocations>();
 
   // Add it to parent.
   Location->setParent(this);
@@ -176,7 +171,7 @@ void LVScope::addElement(LVScope *Scope) {
   assert(Scope && "Invalid scope.");
   assert(!Scope->getParent() && "Scope already inserted");
   if (!Scopes)
-    Scopes = new LVAutoScopes();
+    Scopes = std::make_unique<LVScopes>();
 
   // Add it to parent.
   Scopes->push_back(Scope);
@@ -203,7 +198,7 @@ void LVScope::addElement(LVSymbol *Symbol) {
   assert(Symbol && "Invalid symbol.");
   assert(!Symbol->getParent() && "Symbol already inserted");
   if (!Symbols)
-    Symbols = new LVAutoSymbols();
+    Symbols = std::make_unique<LVSymbols>();
 
   // Add it to parent.
   Symbols->push_back(Symbol);
@@ -230,7 +225,7 @@ void LVScope::addElement(LVType *Type) {
   assert(Type && "Invalid type.");
   assert(!Type->getParent() && "Type already inserted");
   if (!Types)
-    Types = new LVAutoTypes();
+    Types = std::make_unique<LVTypes>();
 
   // Add it to parent.
   Types->push_back(Type);
@@ -255,7 +250,7 @@ void LVScope::addElement(LVType *Type) {
 // Add a pair of ranges.
 void LVScope::addObject(LVAddress LowerAddress, LVAddress UpperAddress) {
   // Pack the ranges into a Location object.
-  LVLocation *Location = new LVLocation();
+  LVLocation *Location = getReader().createLocation();
   Location->setLowerAddress(LowerAddress);
   Location->setUpperAddress(UpperAddress);
   Location->setIsAddressRange();
@@ -308,20 +303,12 @@ void LVScope::addMissingElements(LVScope *Reference) {
   LVSymbols References;
   References.append(ReferenceSymbols->begin(), ReferenceSymbols->end());
 
-  auto RemoveSymbol = [&](LVSymbols &Symbols, LVSymbol *Symbol) {
-    LVSymbols::iterator Iter = std::remove_if(
-        Symbols.begin(), Symbols.end(),
-        [Symbol](LVSymbol *Item) -> bool { return Item == Symbol; });
-    if (Iter != Symbols.end())
-      Symbols.erase(Iter, Symbols.end());
-  };
-
   // Erase abstract symbols already in this scope from the collection of
   // symbols in the referenced scope.
   if (getSymbols())
     for (const LVSymbol *Symbol : *getSymbols())
       if (Symbol->getHasReferenceAbstract())
-        RemoveSymbol(References, Symbol->getReference());
+        llvm::erase(References, Symbol->getReference());
 
   // If we have elements left in 'References', those are the elements that
   // need to be inserted in the current scope.
@@ -341,19 +328,22 @@ void LVScope::addMissingElements(LVScope *Reference) {
       // information that is incorrect for the element to be inserted.
       // As the symbol being added does not exist in the debug section,
       // use its parent scope offset, to indicate its DIE location.
-      LVSymbol *Symbol = new LVSymbol();
+      LVSymbol *Symbol = getReader().createSymbol();
       addElement(Symbol);
       Symbol->setOffset(getOffset());
       Symbol->setIsOptimized();
       Symbol->setReference(Reference);
 
-      // The symbol can be a constant, parameter or variable.
+      // The symbol can be a constant, parameter, variable or unspecified
+      // parameters (i.e. `...`).
       if (Reference->getIsConstant())
         Symbol->setIsConstant();
       else if (Reference->getIsParameter())
         Symbol->setIsParameter();
       else if (Reference->getIsVariable())
         Symbol->setIsVariable();
+      else if (Reference->getIsUnspecified())
+        Symbol->setIsUnspecified();
       else
         llvm_unreachable("Invalid symbol kind.");
     }
@@ -503,7 +493,7 @@ void LVScope::resolveTemplate() {
       // Encode the arguments as part of the template name and update the
       // template name, to reflect the encoded parameters.
       encodeTemplateArguments(EncodedArgs, &Params);
-      setEncodedArgs(EncodedArgs.c_str());
+      setEncodedArgs(EncodedArgs);
     }
   }
 }
@@ -598,6 +588,10 @@ Error LVScope::doPrint(bool Split, bool Match, bool Print, raw_ostream &OS,
   // split context, then switch to the reader output stream.
   raw_ostream *StreamSplit = &OS;
 
+  // Ignore the CU generated by the VS toolchain, when compiling to PDB.
+  if (getIsSystem() && !options().getAttributeSystem())
+    return Error::success();
+
   // If 'Split', we use the scope name (CU name) as the ouput file; the
   // delimiters in the pathname, must be replaced by a normal character.
   if (getIsCompileUnit()) {
@@ -690,9 +684,9 @@ void LVScope::sort() {
   if (SortFunction) {
     std::function<void(LVScope * Parent, LVSortFunction SortFunction)> Sort =
         [&](LVScope *Parent, LVSortFunction SortFunction) {
-          auto Traverse = [&](auto *Set, LVSortFunction SortFunction) {
+          auto Traverse = [&](auto &Set, LVSortFunction SortFunction) {
             if (Set)
-              std::stable_sort(Set->begin(), Set->end(), SortFunction);
+              llvm::stable_sort(*Set, SortFunction);
           };
           Traverse(Parent->Types, SortFunction);
           Traverse(Parent->Symbols, SortFunction);
@@ -877,7 +871,7 @@ bool LVScope::equalNumberOfChildren(const LVScope *Scope) const {
 }
 
 void LVScope::markMissingParents(const LVScope *Target, bool TraverseChildren) {
-  auto SetCompareState = [&](auto *Container) {
+  auto SetCompareState = [&](auto &Container) {
     if (Container)
       for (auto *Entry : *Container)
         Entry->setIsInCompare();
@@ -1024,9 +1018,13 @@ void LVScope::printExtra(raw_ostream &OS, bool Full) const {
   // Do not print any type or name for a lexical block.
   if (!getIsBlock()) {
     OS << " " << formattedName(getName());
-    if (!getIsAggregate())
+    if (!getIsAggregate()) {
       OS << " -> " << typeOffsetAsString()
          << formattedNames(getTypeQualifiedName(), typeAsString());
+    }
+    if (options().getAttributeSize())
+      if (uint32_t Size = getStorageSizeInBytes())
+        OS << " [Size = " << Size << "]";
   }
   OS << "\n";
 
@@ -1356,8 +1354,7 @@ void LVScopeCompileUnit::addedElement(LVType *Type) {
 
 // Record unsuported DWARF tags.
 void LVScopeCompileUnit::addDebugTag(dwarf::Tag Target, LVOffset Offset) {
-  addItem<LVTagOffsetsMap, LVOffsetList, dwarf::Tag, LVOffset>(&DebugTags,
-                                                               Target, Offset);
+  addItem<LVTagOffsetsMap, dwarf::Tag, LVOffset>(&DebugTags, Target, Offset);
 }
 
 // Record elements with invalid offsets.
@@ -1390,8 +1387,7 @@ void LVScopeCompileUnit::addLineZero(LVLine *Line) {
   LVScope *Scope = Line->getParentScope();
   LVOffset Offset = Scope->getOffset();
   addInvalidOffset(Offset, Scope);
-  addItem<LVOffsetLinesMap, LVLines, LVOffset, LVLine *>(&LinesZero, Offset,
-                                                         Line);
+  addItem<LVOffsetLinesMap, LVOffset, LVLine *>(&LinesZero, Offset, Line);
 }
 
 void LVScopeCompileUnit::printLocalNames(raw_ostream &OS, bool Full) const {
@@ -1481,7 +1477,7 @@ void LVScopeCompileUnit::printWarnings(raw_ostream &OS, bool Full) const {
     PrintHeader(Header);
     for (LVOffsetLocationsMap::const_reference Entry : Map) {
       PrintElement(WarningOffsets, Entry.first);
-      for (const LVLocation *Location : *Entry.second)
+      for (const LVLocation *Location : Entry.second)
         OS << hexSquareString(Location->getOffset()) << " "
            << Location->getIntervalInfo() << "\n";
     }
@@ -1494,7 +1490,7 @@ void LVScopeCompileUnit::printWarnings(raw_ostream &OS, bool Full) const {
       OS << format("\n0x%02x", (unsigned)Entry.first) << ", "
          << dwarf::TagString(Entry.first) << "\n";
       unsigned Count = 0;
-      for (const LVOffset &Offset : *Entry.second)
+      for (const LVOffset &Offset : Entry.second)
         PrintOffset(Count, Offset);
       OS << "\n";
     }
@@ -1519,7 +1515,7 @@ void LVScopeCompileUnit::printWarnings(raw_ostream &OS, bool Full) const {
     for (LVOffsetLinesMap::const_reference Entry : LinesZero) {
       PrintElement(WarningOffsets, Entry.first);
       unsigned Count = 0;
-      for (const LVLine *Line : *Entry.second)
+      for (const LVLine *Line : Entry.second)
         PrintOffset(Count, Line->getOffset());
       OS << "\n";
     }
@@ -1642,8 +1638,7 @@ void LVScopeCompileUnit::printMatchedElements(raw_ostream &OS,
                                               bool UseMatchedElements) {
   LVSortFunction SortFunction = getSortFunction();
   if (SortFunction)
-    std::stable_sort(MatchedElements.begin(), MatchedElements.end(),
-                     SortFunction);
+    llvm::stable_sort(MatchedElements, SortFunction);
 
   // Check the type of elements required to be printed. 'MatchedElements'
   // contains generic elements (lines, scopes, symbols, types). If we have a
@@ -1722,11 +1717,19 @@ void LVScopeCompileUnit::print(raw_ostream &OS, bool Full) const {
 
 void LVScopeCompileUnit::printExtra(raw_ostream &OS, bool Full) const {
   OS << formattedKind(kind()) << " '" << getName() << "'\n";
-  if (options().getPrintFormatting() && options().getAttributeProducer())
-    printAttributes(OS, Full, "{Producer} ",
-                    const_cast<LVScopeCompileUnit *>(this), getProducer(),
-                    /*UseQuotes=*/true,
-                    /*PrintRef=*/false);
+  if (options().getPrintFormatting()) {
+    if (options().getAttributeProducer())
+      printAttributes(OS, Full, "{Producer} ",
+                      const_cast<LVScopeCompileUnit *>(this), getProducer(),
+                      /*UseQuotes=*/true,
+                      /*PrintRef=*/false);
+    if (options().getAttributeLanguage())
+      if (auto SL = getSourceLanguage(); SL.isValid())
+        printAttributes(OS, Full, "{Language} ",
+                        const_cast<LVScopeCompileUnit *>(this), SL.getName(),
+                        /*UseQuotes=*/true,
+                        /*PrintRef=*/false);
+  }
 
   // Reset file index, to allow its children to print the correct filename.
   options().resetFilenameIndex();
@@ -1795,6 +1798,8 @@ void LVScopeFunction::resolveReferences() {
   //	            DW_AT_external DW_FORM_flag_present
   // 00000070 DW_TAG_subprogram "bar"
   //   DW_AT_specification DW_FORM_ref4 0x00000048
+  // CodeView does not include any information at the class level to
+  // mark the member function as external.
   // If there is a reference linking the declaration and definition, mark
   // the definition as extern, to facilitate the logical view comparison.
   if (getHasReferenceSpecification()) {
@@ -1970,7 +1975,19 @@ void LVScopeFunctionType::resolveExtra() {
   Name.append(")");
 
   // Update the scope name, to reflect the encoded parameters.
-  setName(Name.c_str());
+  setName(Name);
+}
+
+//===----------------------------------------------------------------------===//
+// DWARF module (DW_TAG_module).
+//===----------------------------------------------------------------------===//
+bool LVScopeModule::equals(const LVScope *Scope) const {
+  // For lexical blocks, LVScope::equals() compares the parent scope.
+  return LVScope::equals(Scope) && (Scope->getName() == getName());
+}
+
+void LVScopeModule::printExtra(raw_ostream &OS, bool Full) const {
+  OS << formattedKind(kind()) << " " << formattedName(getName()) << "\n";
 }
 
 //===----------------------------------------------------------------------===//
@@ -2028,6 +2045,28 @@ void LVScopeRoot::processRangeInformation() {
       getReader().setCompileUnit(CompileUnit);
       CompileUnit->processRangeLocationCoverage();
     }
+}
+
+void LVScopeRoot::transformScopedName() {
+  // Recursively transform all names.
+  std::function<void(LVScope * Parent)> TraverseScope = [&](LVScope *Parent) {
+    auto Traverse = [&](const auto *Set) {
+      if (Set)
+        for (const auto &Entry : *Set)
+          Entry->setInnerComponent();
+    };
+    if (const LVScopes *Scopes = Parent->getScopes())
+      for (LVScope *Scope : *Scopes) {
+        Scope->setInnerComponent();
+        TraverseScope(Scope);
+      }
+    Traverse(Parent->getSymbols());
+    Traverse(Parent->getTypes());
+    Traverse(Parent->getLines());
+  };
+
+  // Start traversing the scopes root and transform the element name.
+  TraverseScope(this);
 }
 
 bool LVScopeRoot::equals(const LVScope *Scope) const {

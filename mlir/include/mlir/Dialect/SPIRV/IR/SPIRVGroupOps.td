@@ -40,18 +40,9 @@ def SPIRV_GroupFMulKHROp : SPIRV_KhrVendorOp<"GroupFMul", [Pure,
     The type of 'X' must be the same as 'Result Type'.
 
 
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.KHR.GroupFMul` scope operation ssa-use
-                            `:` float-type
-    ```mlir
-
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.KHR.GroupFMul <Workgroup> <Reduce> %value : f32
     ```
   }];
@@ -100,28 +91,15 @@ def SPIRV_GroupBroadcastOp : SPIRV_Op<"GroupBroadcast",
 
     Execution must be Workgroup or Subgroup Scope.
 
-     The type of Value must be the same as Result Type.
+    The type of Value must be the same as Result Type.
 
     LocalId must be an integer datatype. It can be a scalar, or a vector
     with 2 components or a vector with 3 components. LocalId must be the
     same for all invocations in the group.
 
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    integer-float-scalar-vector-type ::= integer-type | float-type |
-                               `vector<` integer-literal `x` integer-type `>` |
-                               `vector<` integer-literal `x` float-type `>`
-    localid-type ::= integer-type |
-                   `vector<` integer-literal `x` integer-type `>`
-    group-broadcast-op ::= ssa-id `=` `spirv.GroupBroadcast` scope ssa_use,
-                   ssa_use `:` integer-float-scalar-vector-type `,` localid-type
-    ```mlir
-
     #### Example:
 
-    ```
+    ```mlir
     %scalar_value = ... : f32
     %vector_value = ... : vector<4xf32>
     %scalar_localid = ... : i32
@@ -176,20 +154,11 @@ def SPIRV_GroupFAddOp : SPIRV_Op<"GroupFAdd", [Pure,
 
     The identity I for Operation is 0.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupFAdd` scope operation ssa-use
-                            `:` float-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupFAdd <Workgroup> <Reduce> %value : f32
     ```
   }];
@@ -238,20 +207,11 @@ def SPIRV_GroupFMaxOp : SPIRV_Op<"GroupFMax", [Pure,
 
     The identity I for Operation is -INF.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupFMax` scope operation ssa-use
-                            `:` float-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupFMax <Workgroup> <Reduce> %value : f32
     ```
   }];
@@ -300,20 +260,11 @@ def SPIRV_GroupFMinOp : SPIRV_Op<"GroupFMin", [Pure,
 
     The identity I for Operation is +INF.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupFMin` scope operation ssa-use
-                            `:` float-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupFMin <Workgroup> <Reduce> %value : f32
     ```
   }];
@@ -362,20 +313,11 @@ def SPIRV_GroupIAddOp : SPIRV_Op<"GroupIAdd", [Pure,
 
     The identity I for Operation is 0.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupIAdd` scope operation ssa-use
-                            `:` integer-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupIAdd <Workgroup> <Reduce> %value : i32
     ```
   }];
@@ -426,19 +368,9 @@ def SPIRV_GroupIMulKHROp : SPIRV_KhrVendorOp<"GroupIMul", [Pure,
 
     The type of 'X' must be the same as 'Result Type'.
 
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.KHR.GroupIMul` scope operation ssa-use
-                            `:` integer-type
-    ```mlir
-
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.KHR.GroupIMul <Workgroup> <Reduce> %value : i32
     ```
   }];
@@ -488,20 +420,11 @@ def SPIRV_GroupSMaxOp : SPIRV_Op<"GroupSMax", [Pure,
     The identity I for Operation is INT_MIN when X is 32 bits wide and
     LONG_MIN when X is 64 bits wide.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupSMax` scope operation ssa-use
-                            `:` integer-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupSMax <Workgroup> <Reduce> %value : i32
     ```
   }];
@@ -551,20 +474,11 @@ def SPIRV_GroupSMinOp : SPIRV_Op<"GroupSMin", [Pure,
     The identity I for Operation is INT_MAX when X is 32 bits wide and
     LONG_MAX when X is 64 bits wide.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupSMin` scope operation ssa-use
-                            `:` integer-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupSMin <Workgroup> <Reduce> %value : i32
     ```
   }];
@@ -613,20 +527,11 @@ def SPIRV_GroupUMaxOp : SPIRV_Op<"GroupUMax", [Pure,
 
     The identity I for Operation is 0.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupUMax` scope operation ssa-use
-                            `:` integer-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupUMax <Workgroup> <Reduce> %value : i32
     ```
   }];
@@ -676,20 +581,11 @@ def SPIRV_GroupUMinOp : SPIRV_Op<"GroupUMin", [Pure,
     The identity I for Operation is UINT_MAX when X is 32 bits wide and
     ULONG_MAX when X is 64 bits wide.
 
-     The type of X must be the same as Result Type.
-
-    <!-- End of AutoGen section -->
-
-    ```
-    scope ::= `"Workgroup"` | `"Subgroup"`
-    operation ::= `"Reduce"` | `"InclusiveScan"` | `"ExclusiveScan"`
-    op ::= ssa-id `=` `spirv.GroupUMin` scope operation ssa-use
-                            `:` integer-type
-    ```mlir
+    The type of X must be the same as Result Type.
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.GroupUMin <Workgroup> <Reduce> %value : i32
     ```
   }];
@@ -742,11 +638,11 @@ def SPIRV_INTELSubgroupBlockReadOp : SPIRV_IntelVendorOp<"SubgroupBlockRead", []
     ```
     subgroup-block-read-INTEL-op ::= ssa-id `=` `spirv.INTEL.SubgroupBlockRead`
                                 storage-class ssa_use `:` spirv-element-type
-    ```mlir
+    ```
 
     #### Example:
 
-    ```
+    ```mlir
     %0 = spirv.INTEL.SubgroupBlockRead "StorageBuffer" %ptr : i32
     ```
   }];
@@ -765,6 +661,12 @@ def SPIRV_INTELSubgroupBlockReadOp : SPIRV_IntelVendorOp<"SubgroupBlockRead", []
   let results = (outs
     SPIRV_Type:$value
   );
+
+  let hasCustomAssemblyFormat = 0;
+
+  let assemblyFormat = [{
+    $ptr attr-dict `:` type($ptr) `->` type($value)
+  }];
 }
 
 // -----
@@ -792,11 +694,11 @@ def SPIRV_INTELSubgroupBlockWriteOp : SPIRV_IntelVendorOp<"SubgroupBlockWrite", 
     ```
     subgroup-block-write-INTEL-op ::= ssa-id `=` `spirv.INTEL.SubgroupBlockWrite`
                       storage-class ssa_use `,` ssa-use `:` spirv-element-type
-    ```mlir
+    ```
 
     #### Example:
 
-    ```
+    ```mlir
     spirv.INTEL.SubgroupBlockWrite "StorageBuffer" %ptr, %value : i32
     ```
   }];

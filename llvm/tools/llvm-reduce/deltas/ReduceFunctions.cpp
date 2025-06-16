@@ -13,19 +13,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "ReduceFunctions.h"
-#include "Delta.h"
 #include "Utils.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetVector.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
-#include <iterator>
-#include <vector>
 
 using namespace llvm;
 
 /// Removes all the Defined Functions
 /// that aren't inside any of the desired Chunks.
-static void extractFunctionsFromModule(Oracle &O, Module &Program) {
+void llvm::reduceFunctionsDeltaPass(Oracle &O, ReducerWorkItem &WorkItem) {
+  Module &Program = WorkItem.getModule();
+
   // Record all out-of-chunk functions.
   SmallPtrSet<Constant *, 8> FuncsToRemove;
   for (Function &F : Program.functions()) {
@@ -42,7 +40,7 @@ static void extractFunctionsFromModule(Oracle &O, Module &Program) {
   });
 
   // Then, drop body of each of them. We want to batch this and do nothing else
-  // here so that minimal number of remaining exteranal uses will remain.
+  // here so that minimal number of remaining external uses will remain.
   for (Constant *F : FuncsToRemove)
     F->dropAllReferences();
 
@@ -53,8 +51,4 @@ static void extractFunctionsFromModule(Oracle &O, Module &Program) {
     // And finally, fully drop it.
     cast<Function>(F)->eraseFromParent();
   }
-}
-
-void llvm::reduceFunctionsDeltaPass(TestRunner &Test) {
-  runDeltaPass(Test, extractFunctionsFromModule, "Reducing Functions");
 }

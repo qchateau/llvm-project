@@ -34,7 +34,6 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -73,10 +72,18 @@ static cl::opt<bool> UserHoistCommonInsts(
     "hoist-common-insts", cl::Hidden, cl::init(false),
     cl::desc("hoist common instructions (default = false)"));
 
+static cl::opt<bool> UserHoistLoadsStoresWithCondFaulting(
+    "hoist-loads-stores-with-cond-faulting", cl::Hidden, cl::init(false),
+    cl::desc("Hoist loads/stores if the target supports conditional faulting "
+             "(default = false)"));
+
 static cl::opt<bool> UserSinkCommonInsts(
     "sink-common-insts", cl::Hidden, cl::init(false),
     cl::desc("Sink common instructions (default = false)"));
 
+static cl::opt<bool> UserSpeculateUnpredictables(
+    "speculate-unpredictables", cl::Hidden, cl::init(false),
+    cl::desc("Speculate unpredictable branches (default = false)"));
 
 STATISTIC(NumSimpl, "Number of blocks simplified");
 
@@ -121,7 +128,7 @@ performBlockTailMerging(Function &F, ArrayRef<BasicBlock *> BBs,
 
   // Now, go through each block (with the current terminator type)
   // we've recorded, and rewrite it to branch to the new common block.
-  const DILocation *CommonDebugLoc = nullptr;
+  DebugLoc CommonDebugLoc;
   for (BasicBlock *BB : BBs) {
     auto *Term = BB->getTerminator();
     assert(Term->getOpcode() == CanonicalTerm->getOpcode() &&
@@ -138,12 +145,14 @@ performBlockTailMerging(Function &F, ArrayRef<BasicBlock *> BBs,
       CommonDebugLoc = Term->getDebugLoc();
     else
       CommonDebugLoc =
-          DILocation::getMergedLocation(CommonDebugLoc, Term->getDebugLoc());
+          DebugLoc::getMergedLocation(CommonDebugLoc, Term->getDebugLoc());
 
     // And turn BB into a block that just unconditionally branches
     // to the canonical block.
+    Instruction *BI = BranchInst::Create(CanonicalBB, BB);
+    BI->setDebugLoc(Term->getDebugLoc());
     Term->eraseFromParent();
-    BranchInst::Create(CanonicalBB, BB);
+
     if (Updates)
       Updates->push_back({DominatorTree::Insert, BB, CanonicalBB});
   }
@@ -228,8 +237,8 @@ static bool iterativelySimplifyCFG(Function &F, const TargetTransformInfo &TTI,
   SmallVector<std::pair<const BasicBlock *, const BasicBlock *>, 32> Edges;
   FindFunctionBackedges(F, Edges);
   SmallPtrSet<BasicBlock *, 16> UniqueLoopHeaders;
-  for (unsigned i = 0, e = Edges.size(); i != e; ++i)
-    UniqueLoopHeaders.insert(const_cast<BasicBlock *>(Edges[i].second));
+  for (const auto &Edge : Edges)
+    UniqueLoopHeaders.insert(const_cast<BasicBlock *>(Edge.second));
 
   SmallVector<WeakVH, 16> LoopHeaders(UniqueLoopHeaders.begin(),
                                       UniqueLoopHeaders.end());
@@ -321,8 +330,13 @@ static void applyCommandLineOverridesToOptions(SimplifyCFGOptions &Options) {
     Options.NeedCanonicalLoop = UserKeepLoops;
   if (UserHoistCommonInsts.getNumOccurrences())
     Options.HoistCommonInsts = UserHoistCommonInsts;
+  if (UserHoistLoadsStoresWithCondFaulting.getNumOccurrences())
+    Options.HoistLoadsStoresWithCondFaulting =
+        UserHoistLoadsStoresWithCondFaulting;
   if (UserSinkCommonInsts.getNumOccurrences())
     Options.SinkCommonInsts = UserSinkCommonInsts;
+  if (UserSpeculateUnpredictables.getNumOccurrences())
+    Options.SpeculateUnpredictables = UserSpeculateUnpredictables;
 }
 
 SimplifyCFGPass::SimplifyCFGPass() {
@@ -338,8 +352,8 @@ void SimplifyCFGPass::printPipeline(
     raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
   static_cast<PassInfoMixin<SimplifyCFGPass> *>(this)->printPipeline(
       OS, MapClassName2PassName);
-  OS << "<";
-  OS << "bonus-inst-threshold=" << Options.BonusInstThreshold << ";";
+  OS << '<';
+  OS << "bonus-inst-threshold=" << Options.BonusInstThreshold << ';';
   OS << (Options.ForwardSwitchCondToPhi ? "" : "no-") << "forward-switch-cond;";
   OS << (Options.ConvertSwitchRangeToICmp ? "" : "no-")
      << "switch-range-to-icmp;";
@@ -347,8 +361,14 @@ void SimplifyCFGPass::printPipeline(
      << "switch-to-lookup;";
   OS << (Options.NeedCanonicalLoop ? "" : "no-") << "keep-loops;";
   OS << (Options.HoistCommonInsts ? "" : "no-") << "hoist-common-insts;";
-  OS << (Options.SinkCommonInsts ? "" : "no-") << "sink-common-insts";
-  OS << ">";
+  OS << (Options.HoistLoadsStoresWithCondFaulting ? "" : "no-")
+     << "hoist-loads-stores-with-cond-faulting;";
+  OS << (Options.SinkCommonInsts ? "" : "no-") << "sink-common-insts;";
+  OS << (Options.SpeculateBlocks ? "" : "no-") << "speculate-blocks;";
+  OS << (Options.SimplifyCondBranch ? "" : "no-") << "simplify-cond-branch;";
+  OS << (Options.SpeculateUnpredictables ? "" : "no-")
+     << "speculate-unpredictables";
+  OS << '>';
 }
 
 PreservedAnalyses SimplifyCFGPass::run(Function &F,
@@ -358,11 +378,6 @@ PreservedAnalyses SimplifyCFGPass::run(Function &F,
   DominatorTree *DT = nullptr;
   if (RequireAndPreserveDomTree)
     DT = &AM.getResult<DominatorTreeAnalysis>(F);
-  if (F.hasFnAttribute(Attribute::OptForFuzzing)) {
-    Options.setSimplifyCondBranch(false).setFoldTwoEntryPHINode(false);
-  } else {
-    Options.setSimplifyCondBranch(true).setFoldTwoEntryPHINode(true);
-  }
   if (!simplifyFunctionCFG(F, TTI, DT, Options))
     return PreservedAnalyses::all();
   PreservedAnalyses PA;
@@ -395,13 +410,6 @@ struct CFGSimplifyPass : public FunctionPass {
     DominatorTree *DT = nullptr;
     if (RequireAndPreserveDomTree)
       DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    if (F.hasFnAttribute(Attribute::OptForFuzzing)) {
-      Options.setSimplifyCondBranch(false)
-             .setFoldTwoEntryPHINode(false);
-    } else {
-      Options.setSimplifyCondBranch(true)
-             .setFoldTwoEntryPHINode(true);
-    }
 
     auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
     return simplifyFunctionCFG(F, TTI, DT, Options);

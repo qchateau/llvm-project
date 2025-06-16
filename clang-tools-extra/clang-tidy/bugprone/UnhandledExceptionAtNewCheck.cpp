@@ -7,14 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "UnhandledExceptionAtNewCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
+namespace {
 
 AST_MATCHER_P(CXXTryStmt, hasHandlerFor,
               ast_matchers::internal::Matcher<QualType>, InnerMatcher) {
@@ -38,6 +36,8 @@ AST_MATCHER(CXXNewExpr, mayThrow) {
     return false;
   return !OperatorNew->getType()->castAs<FunctionProtoType>()->isNothrow();
 }
+
+} // namespace
 
 UnhandledExceptionAtNewCheck::UnhandledExceptionAtNewCheck(
     StringRef Name, ClangTidyContext *Context)
@@ -73,6 +73,4 @@ void UnhandledExceptionAtNewCheck::check(
          "missing exception handler for allocation failure at 'new'");
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

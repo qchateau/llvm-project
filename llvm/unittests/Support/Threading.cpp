@@ -7,9 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/Threading.h"
-#include "llvm/ADT/Triple.h"
-#include "llvm/Support/Host.h"
+#include "llvm/Config/llvm-config.h" // for LLVM_ENABLE_THREADS
 #include "llvm/Support/thread.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include "gtest/gtest.h"
 
 #include <atomic>
@@ -29,7 +30,7 @@ static bool isThreadingSupportedArchAndOS() {
   return (Host.isOSWindows() && llvm_is_multithreaded()) || Host.isOSDarwin() ||
          (Host.isX86() && Host.isOSLinux()) ||
          (Host.isOSLinux() && !Host.isAndroid()) ||
-         (Host.isSystemZ() && Host.isOSzOS());
+         (Host.isSystemZ() && Host.isOSzOS()) || Host.isOSAIX();
 #else
   return false;
 #endif

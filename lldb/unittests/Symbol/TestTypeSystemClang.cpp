@@ -13,6 +13,7 @@
 #include "lldb/Core/Declaration.h"
 #include "lldb/Host/FileSystem.h"
 #include "lldb/Host/HostInfo.h"
+#include "lldb/lldb-enumerations.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/ExprCXX.h"
@@ -231,6 +232,37 @@ TEST_F(TestTypeSystemClang, TestBuiltinTypeForEncodingAndBitSize) {
   VerifyEncodingAndBitSize(*m_ast, eEncodingIEEE754, 64);
 }
 
+TEST_F(TestTypeSystemClang, TestBuiltinTypeForEmptyTriple) {
+  // Test that we can access type-info of builtin Clang AST
+  // types without crashing even when the target triple is
+  // empty.
+
+  TypeSystemClang ast("empty triple AST", llvm::Triple{});
+
+  // This test only makes sense if the builtin ASTContext types were
+  // not initialized.
+  ASSERT_TRUE(ast.getASTContext().VoidPtrTy.isNull());
+
+  EXPECT_FALSE(ast.GetBuiltinTypeByName(ConstString("int")).IsValid());
+  EXPECT_FALSE(ast.GetBuiltinTypeForDWARFEncodingAndBitSize(
+                      "char", dwarf::DW_ATE_signed_char, 8)
+                   .IsValid());
+  EXPECT_FALSE(ast.GetBuiltinTypeForEncodingAndBitSize(lldb::eEncodingUint, 8)
+                   .IsValid());
+  EXPECT_FALSE(ast.GetPointerSizedIntType(/*is_signed=*/false));
+  EXPECT_FALSE(ast.GetIntTypeFromBitSize(8, /*is_signed=*/false));
+
+  CompilerType record_type = ast.CreateRecordType(
+      nullptr, OptionalClangModuleID(), lldb::eAccessPublic, "Record",
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
+  TypeSystemClang::StartTagDeclarationDefinition(record_type);
+  EXPECT_EQ(ast.AddFieldToRecordType(record_type, "field", record_type,
+                                     eAccessPublic, /*bitfield_bit_size=*/8),
+            nullptr);
+  TypeSystemClang::CompleteTagDeclarationDefinition(record_type);
+}
+
 TEST_F(TestTypeSystemClang, TestDisplayName) {
   TypeSystemClang ast("some name", llvm::Triple());
   EXPECT_EQ("some name", ast.getDisplayName());
@@ -281,6 +313,16 @@ TEST_F(TestTypeSystemClang, TestGetEnumIntegerTypeBasicTypes) {
   }
 }
 
+TEST_F(TestTypeSystemClang, TestEnumerationValueSign) {
+  CompilerType enum_type = m_ast->CreateEnumerationType(
+      "my_enum_signed", m_ast->GetTranslationUnitDecl(),
+      OptionalClangModuleID(), Declaration(),
+      m_ast->GetBasicType(lldb::eBasicTypeSignedChar), false);
+  auto *enum_decl = m_ast->AddEnumerationValueToEnumerationType(
+      enum_type, Declaration(), "minus_one", -1, 8);
+  EXPECT_TRUE(enum_decl->getInitVal().isSigned());
+}
+
 TEST_F(TestTypeSystemClang, TestOwningModule) {
   auto holder =
       std::make_unique<clang_utils::TypeSystemClangHolder>("module_ast");
@@ -295,14 +337,15 @@ TEST_F(TestTypeSystemClang, TestOwningModule) {
 
   CompilerType record_type = ast.CreateRecordType(
       nullptr, OptionalClangModuleID(200), lldb::eAccessPublic, "FooRecord",
-      clang::TTK_Struct, lldb::eLanguageTypeC_plus_plus, nullptr);
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
   auto *rd = TypeSystemClang::GetAsRecordDecl(record_type);
   EXPECT_FALSE(!rd);
   EXPECT_EQ(rd->getOwningModuleID(), 200u);
 
   CompilerType class_type =
       ast.CreateObjCClass("objc_class", ast.GetTranslationUnitDecl(),
-                          OptionalClangModuleID(300), false, false);
+                          OptionalClangModuleID(300), false);
   auto *cd = TypeSystemClang::GetAsObjCInterfaceDecl(class_type);
   EXPECT_FALSE(!cd);
   EXPECT_EQ(cd->getOwningModuleID(), 300u);
@@ -315,7 +358,8 @@ TEST_F(TestTypeSystemClang, TestIsClangType) {
   CompilerType bool_type(m_ast->weak_from_this(), bool_ctype);
   CompilerType record_type = m_ast->CreateRecordType(
       nullptr, OptionalClangModuleID(100), lldb::eAccessPublic, "FooRecord",
-      clang::TTK_Struct, lldb::eLanguageTypeC_plus_plus, nullptr);
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
   // Clang builtin type and record type should pass
   EXPECT_TRUE(ClangUtil::IsClangType(bool_type));
   EXPECT_TRUE(ClangUtil::IsClangType(record_type));
@@ -327,7 +371,8 @@ TEST_F(TestTypeSystemClang, TestIsClangType) {
 TEST_F(TestTypeSystemClang, TestRemoveFastQualifiers) {
   CompilerType record_type = m_ast->CreateRecordType(
       nullptr, OptionalClangModuleID(), lldb::eAccessPublic, "FooRecord",
-      clang::TTK_Struct, lldb::eLanguageTypeC_plus_plus, nullptr);
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
   QualType qt;
 
   qt = ClangUtil::GetQualType(record_type);
@@ -399,7 +444,8 @@ TEST_F(TestTypeSystemClang, TestRecordHasFields) {
   // Test that a record with no fields returns false
   CompilerType empty_base = m_ast->CreateRecordType(
       nullptr, OptionalClangModuleID(), lldb::eAccessPublic, "EmptyBase",
-      clang::TTK_Struct, lldb::eLanguageTypeC_plus_plus, nullptr);
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
   TypeSystemClang::StartTagDeclarationDefinition(empty_base);
   TypeSystemClang::CompleteTagDeclarationDefinition(empty_base);
 
@@ -410,7 +456,8 @@ TEST_F(TestTypeSystemClang, TestRecordHasFields) {
   // Test that a record with direct fields returns true
   CompilerType non_empty_base = m_ast->CreateRecordType(
       nullptr, OptionalClangModuleID(), lldb::eAccessPublic, "NonEmptyBase",
-      clang::TTK_Struct, lldb::eLanguageTypeC_plus_plus, nullptr);
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
   TypeSystemClang::StartTagDeclarationDefinition(non_empty_base);
   FieldDecl *non_empty_base_field_decl = m_ast->AddFieldToRecordType(
       non_empty_base, "MyField", int_type, eAccessPublic, 0);
@@ -426,7 +473,8 @@ TEST_F(TestTypeSystemClang, TestRecordHasFields) {
   // Test that a record with no direct fields, but fields in a base returns true
   CompilerType empty_derived = m_ast->CreateRecordType(
       nullptr, OptionalClangModuleID(), lldb::eAccessPublic, "EmptyDerived",
-      clang::TTK_Struct, lldb::eLanguageTypeC_plus_plus, nullptr);
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
   TypeSystemClang::StartTagDeclarationDefinition(empty_derived);
   std::unique_ptr<clang::CXXBaseSpecifier> non_empty_base_spec =
       m_ast->CreateBaseClassSpecifier(non_empty_base.GetOpaqueQualType(),
@@ -448,7 +496,8 @@ TEST_F(TestTypeSystemClang, TestRecordHasFields) {
   // returns true
   CompilerType empty_derived2 = m_ast->CreateRecordType(
       nullptr, OptionalClangModuleID(), lldb::eAccessPublic, "EmptyDerived2",
-      clang::TTK_Struct, lldb::eLanguageTypeC_plus_plus, nullptr);
+      llvm::to_underlying(clang::TagTypeKind::Struct),
+      lldb::eLanguageTypeC_plus_plus, std::nullopt);
   TypeSystemClang::StartTagDeclarationDefinition(empty_derived2);
   std::unique_ptr<CXXBaseSpecifier> non_empty_vbase_spec =
       m_ast->CreateBaseClassSpecifier(non_empty_base.GetOpaqueQualType(),
@@ -470,24 +519,33 @@ TEST_F(TestTypeSystemClang, TestRecordHasFields) {
 
 TEST_F(TestTypeSystemClang, TemplateArguments) {
   TypeSystemClang::TemplateParameterInfos infos;
-  infos.names.push_back("T");
-  infos.args.push_back(TemplateArgument(m_ast->getASTContext().IntTy));
-  infos.names.push_back("I");
+  infos.InsertArg("T", TemplateArgument(m_ast->getASTContext().IntTy));
+
   llvm::APSInt arg(llvm::APInt(8, 47));
-  infos.args.push_back(TemplateArgument(m_ast->getASTContext(), arg,
+  infos.InsertArg("I", TemplateArgument(m_ast->getASTContext(), arg,
                                         m_ast->getASTContext().IntTy));
 
-  // template<typename T, int I> struct foo;
+  llvm::APFloat float_arg(5.5f);
+  infos.InsertArg("F", TemplateArgument(m_ast->getASTContext(),
+                                        m_ast->getASTContext().FloatTy,
+                                        clang::APValue(float_arg)));
+
+  llvm::APFloat double_arg(-15.2);
+  infos.InsertArg("D", TemplateArgument(m_ast->getASTContext(),
+                                        m_ast->getASTContext().DoubleTy,
+                                        clang::APValue(double_arg)));
+
+  // template<typename T, int I, float F, double D> struct foo;
   ClassTemplateDecl *decl = m_ast->CreateClassTemplateDecl(
       m_ast->GetTranslationUnitDecl(), OptionalClangModuleID(), eAccessPublic,
-      "foo", TTK_Struct, infos);
+      "foo", llvm::to_underlying(clang::TagTypeKind::Struct), infos);
   ASSERT_NE(decl, nullptr);
 
   // foo<int, 47>
   ClassTemplateSpecializationDecl *spec_decl =
       m_ast->CreateClassTemplateSpecializationDecl(
           m_ast->GetTranslationUnitDecl(), OptionalClangModuleID(), decl,
-          TTK_Struct, infos);
+          llvm::to_underlying(clang::TagTypeKind::Struct), infos);
   ASSERT_NE(spec_decl, nullptr);
   CompilerType type = m_ast->CreateClassTemplateSpecializationType(spec_decl);
   ASSERT_TRUE(type);
@@ -507,6 +565,10 @@ TEST_F(TestTypeSystemClang, TemplateArguments) {
 
   CompilerType int_type(m_ast->weak_from_this(),
                         m_ast->getASTContext().IntTy.getAsOpaquePtr());
+  CompilerType float_type(m_ast->weak_from_this(),
+                          m_ast->getASTContext().FloatTy.getAsOpaquePtr());
+  CompilerType double_type(m_ast->weak_from_this(),
+                           m_ast->getASTContext().DoubleTy.getAsOpaquePtr());
   for (CompilerType t : {type, typedef_type, auto_type}) {
     SCOPED_TRACE(t.GetTypeName().AsCString());
 
@@ -529,8 +591,32 @@ TEST_F(TestTypeSystemClang, TemplateArguments) {
     auto result = m_ast->GetIntegralTemplateArgument(t.GetOpaqueQualType(), 1,
                                                      expand_pack);
     ASSERT_NE(std::nullopt, result);
-    EXPECT_EQ(arg, result->value);
+    EXPECT_EQ(arg, result->value.GetAPSInt());
     EXPECT_EQ(int_type, result->type);
+
+    EXPECT_EQ(
+        m_ast->GetTemplateArgumentKind(t.GetOpaqueQualType(), 2, expand_pack),
+        eTemplateArgumentKindStructuralValue);
+    EXPECT_EQ(
+        m_ast->GetTypeTemplateArgument(t.GetOpaqueQualType(), 2, expand_pack),
+        CompilerType());
+    auto float_result = m_ast->GetIntegralTemplateArgument(
+        t.GetOpaqueQualType(), 2, expand_pack);
+    ASSERT_NE(std::nullopt, float_result);
+    EXPECT_EQ(float_arg, float_result->value.GetAPFloat());
+    EXPECT_EQ(float_type, float_result->type);
+
+    EXPECT_EQ(
+        m_ast->GetTemplateArgumentKind(t.GetOpaqueQualType(), 3, expand_pack),
+        eTemplateArgumentKindStructuralValue);
+    EXPECT_EQ(
+        m_ast->GetTypeTemplateArgument(t.GetOpaqueQualType(), 3, expand_pack),
+        CompilerType());
+    auto double_result = m_ast->GetIntegralTemplateArgument(
+        t.GetOpaqueQualType(), 3, expand_pack);
+    ASSERT_NE(std::nullopt, double_result);
+    EXPECT_EQ(double_arg, double_result->value.GetAPFloat());
+    EXPECT_EQ(double_type, double_result->type);
   }
 }
 
@@ -544,7 +630,7 @@ protected:
   CreateClassTemplate(const TypeSystemClang::TemplateParameterInfos &infos) {
     ClassTemplateDecl *decl = m_ast->CreateClassTemplateDecl(
         m_ast->GetTranslationUnitDecl(), OptionalClangModuleID(), eAccessPublic,
-        "foo", TTK_Struct, infos);
+        "foo", llvm::to_underlying(clang::TagTypeKind::Struct), infos);
     return decl;
   }
 
@@ -598,126 +684,144 @@ TEST_F(TestCreateClassTemplateDecl, FindExistingTemplates) {
   // The behaviour should follow the C++ rules for redeclaring templates
   // (e.g., parameter names can be changed/omitted.)
 
-  // This describes a class template *instantiation* from which we will infer
-  // the structure of the class template.
-  TypeSystemClang::TemplateParameterInfos infos;
-
   // Test an empty template parameter list: <>
-  ExpectNewTemplate("<>", infos);
+  ExpectNewTemplate("<>", {{}, {}});
+
+  clang::TemplateArgument intArg(m_ast->getASTContext().IntTy);
+  clang::TemplateArgument int47Arg(m_ast->getASTContext(),
+                                   llvm::APSInt(llvm::APInt(32, 47)),
+                                   m_ast->getASTContext().IntTy);
+  clang::TemplateArgument floatArg(m_ast->getASTContext().FloatTy);
+  clang::TemplateArgument char47Arg(m_ast->getASTContext(),
+                                    llvm::APSInt(llvm::APInt(8, 47)),
+                                    m_ast->getASTContext().SignedCharTy);
+
+  clang::TemplateArgument char123Arg(m_ast->getASTContext(),
+                                     llvm::APSInt(llvm::APInt(8, 123)),
+                                     m_ast->getASTContext().SignedCharTy);
 
   // Test that <typename T> with T = int creates a new template.
-  infos.names = {"T"};
-  infos.args = {TemplateArgument(m_ast->getASTContext().IntTy)};
-  ClassTemplateDecl *single_type_arg = ExpectNewTemplate("<typename T>", infos);
+  ClassTemplateDecl *single_type_arg =
+      ExpectNewTemplate("<typename T>", {{"T"}, {intArg}});
 
   // Test that changing the parameter name doesn't create a new class template.
-  infos.names = {"A"};
-  ExpectReusedTemplate("<typename A> (A = int)", infos, single_type_arg);
+  ExpectReusedTemplate("<typename A> (A = int)", {{"A"}, {intArg}},
+                       single_type_arg);
 
   // Test that changing the used type doesn't create a new class template.
-  infos.args = {TemplateArgument(m_ast->getASTContext().FloatTy)};
-  ExpectReusedTemplate("<typename A> (A = float)", infos, single_type_arg);
+  ExpectReusedTemplate("<typename A> (A = float)", {{"A"}, {floatArg}},
+                       single_type_arg);
 
   // Test that <typename A, signed char I> creates a new template with A = int
   // and I = 47;
-  infos.names.push_back("I");
-  infos.args.push_back(TemplateArgument(m_ast->getASTContext(),
-                                        llvm::APSInt(llvm::APInt(8, 47)),
-                                        m_ast->getASTContext().SignedCharTy));
   ClassTemplateDecl *type_and_char_value =
-      ExpectNewTemplate("<typename A, signed char I> (I = 47)", infos);
+      ExpectNewTemplate("<typename A, signed char I> (I = 47)",
+                        {{"A", "I"}, {floatArg, char47Arg}});
 
   // Change the value of the I parameter to 123. The previously created
   // class template should still be reused.
-  infos.args.pop_back();
-  infos.args.push_back(TemplateArgument(m_ast->getASTContext(),
-                                        llvm::APSInt(llvm::APInt(8, 123)),
-                                        m_ast->getASTContext().SignedCharTy));
-  ExpectReusedTemplate("<typename A, signed char I> (I = 123)", infos,
+  ExpectReusedTemplate("<typename A, signed char I> (I = 123)",
+                       {{"A", "I"}, {floatArg, char123Arg}},
                        type_and_char_value);
 
   // Change the type of the I parameter to int so we have <typename A, int I>.
   // The class template from above can't be reused.
-  infos.args.pop_back();
-  infos.args.push_back(TemplateArgument(m_ast->getASTContext(),
-                                        llvm::APSInt(llvm::APInt(32, 47)),
-                                        m_ast->getASTContext().IntTy));
-  ExpectNewTemplate("<typename A, int I> (I = 123)", infos);
+  ExpectNewTemplate("<typename A, int I> (I = 123)",
+                    {{"A", "I"}, {floatArg, int47Arg}});
 
   // Test a second type parameter will also cause a new template to be created.
   // We now have <typename A, int I, typename B>.
-  infos.names.push_back("B");
-  infos.args.push_back(TemplateArgument(m_ast->getASTContext().IntTy));
   ClassTemplateDecl *type_and_char_value_and_type =
-      ExpectNewTemplate("<typename A, int I, typename B>", infos);
+      ExpectNewTemplate("<typename A, int I, typename B>",
+                        {{"A", "I", "B"}, {floatArg, int47Arg, intArg}});
 
   // Remove all the names from the parameters which shouldn't influence the
   // way the templates get merged.
-  infos.names = {"", "", ""};
-  ExpectReusedTemplate("<typename, int, typename>", infos,
+  ExpectReusedTemplate("<typename, int, typename>",
+                       {{"", "", ""}, {floatArg, int47Arg, intArg}},
                        type_and_char_value_and_type);
 }
 
 TEST_F(TestCreateClassTemplateDecl, FindExistingTemplatesWithParameterPack) {
   // The same as FindExistingTemplates but for templates with parameter packs.
-
   TypeSystemClang::TemplateParameterInfos infos;
-  infos.packed_args =
-      std::make_unique<TypeSystemClang::TemplateParameterInfos>();
-  infos.packed_args->names = {"", ""};
-  infos.packed_args->args = {TemplateArgument(m_ast->getASTContext().IntTy),
-                             TemplateArgument(m_ast->getASTContext().IntTy)};
+  clang::TemplateArgument intArg(m_ast->getASTContext().IntTy);
+  clang::TemplateArgument int1Arg(m_ast->getASTContext(),
+                                  llvm::APSInt(llvm::APInt(32, 1)),
+                                  m_ast->getASTContext().IntTy);
+  clang::TemplateArgument int123Arg(m_ast->getASTContext(),
+                                    llvm::APSInt(llvm::APInt(32, 123)),
+                                    m_ast->getASTContext().IntTy);
+  clang::TemplateArgument longArg(m_ast->getASTContext().LongTy);
+  clang::TemplateArgument long1Arg(m_ast->getASTContext(),
+                                   llvm::APSInt(llvm::APInt(64, 1)),
+                                   m_ast->getASTContext().LongTy);
+
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>(
+          llvm::SmallVector<const char *>{"", ""},
+          llvm::SmallVector<TemplateArgument>{intArg, intArg}));
+
   ClassTemplateDecl *type_pack =
       ExpectNewTemplate("<typename ...> (int, int)", infos);
 
   // Special case: An instantiation for a parameter pack with no values fits
   // to whatever class template we find. There isn't enough information to
   // do an actual comparison here.
-  infos.packed_args =
-      std::make_unique<TypeSystemClang::TemplateParameterInfos>();
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>());
   ExpectReusedTemplate("<...> (no values in pack)", infos, type_pack);
 
   // Change the type content of pack type values.
-  infos.packed_args->names = {"", ""};
-  infos.packed_args->args = {TemplateArgument(m_ast->getASTContext().IntTy),
-                             TemplateArgument(m_ast->getASTContext().LongTy)};
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>(
+          llvm::SmallVector<const char *>{"", ""},
+          llvm::SmallVector<TemplateArgument>{intArg, longArg}));
   ExpectReusedTemplate("<typename ...> (int, long)", infos, type_pack);
 
   // Change the number of pack values.
-  infos.packed_args->args = {TemplateArgument(m_ast->getASTContext().IntTy)};
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>(
+          llvm::SmallVector<const char *>{""},
+          llvm::SmallVector<TemplateArgument>{intArg}));
   ExpectReusedTemplate("<typename ...> (int)", infos, type_pack);
 
   // The names of the pack values shouldn't matter.
-  infos.packed_args->names = {"A", "B"};
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>(
+          llvm::SmallVector<const char *>{"A"},
+          llvm::SmallVector<TemplateArgument>{intArg}));
   ExpectReusedTemplate("<typename ...> (int)", infos, type_pack);
 
   // Changing the kind of template argument will create a new template.
-  infos.packed_args->args = {TemplateArgument(m_ast->getASTContext(),
-                                              llvm::APSInt(llvm::APInt(32, 1)),
-                                              m_ast->getASTContext().IntTy)};
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>(
+          llvm::SmallVector<const char *>{"A"},
+          llvm::SmallVector<TemplateArgument>{int1Arg}));
   ClassTemplateDecl *int_pack = ExpectNewTemplate("<int ...> (int = 1)", infos);
 
   // Changing the value of integral parameters will not create a new template.
-  infos.packed_args->args = {TemplateArgument(
-      m_ast->getASTContext(), llvm::APSInt(llvm::APInt(32, 123)),
-      m_ast->getASTContext().IntTy)};
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>(
+          llvm::SmallVector<const char *>{"A"},
+          llvm::SmallVector<TemplateArgument>{int123Arg}));
   ExpectReusedTemplate("<int ...> (int = 123)", infos, int_pack);
 
   // Changing the integral type will create a new template.
-  infos.packed_args->args = {TemplateArgument(m_ast->getASTContext(),
-                                              llvm::APSInt(llvm::APInt(64, 1)),
-                                              m_ast->getASTContext().LongTy)};
+  infos.SetParameterPack(
+      std::make_unique<TypeSystemClang::TemplateParameterInfos>(
+          llvm::SmallVector<const char *>{"A"},
+          llvm::SmallVector<TemplateArgument>{long1Arg}));
   ExpectNewTemplate("<long ...> (long = 1)", infos);
 
   // Prependinding a non-pack parameter will create a new template.
-  infos.names = {"T"};
-  infos.args = {TemplateArgument(m_ast->getASTContext().IntTy)};
+  infos.InsertArg("T", intArg);
   ExpectNewTemplate("<typename T, long...> (T = int, long = 1)", infos);
 }
 
 TEST_F(TestTypeSystemClang, OnlyPackName) {
   TypeSystemClang::TemplateParameterInfos infos;
-  infos.pack_name = "A";
+  infos.SetPackName("A");
   EXPECT_FALSE(infos.IsValid());
 }
 
@@ -762,8 +866,7 @@ TEST_F(TestTypeSystemClang, TestFunctionTemplateConstruction) {
   clang::TranslationUnitDecl *TU = m_ast->GetTranslationUnitDecl();
 
   // Prepare the declarations/types we need for the template.
-  CompilerType clang_type =
-      m_ast->CreateFunctionType(int_type, nullptr, 0U, false, 0U);
+  CompilerType clang_type = m_ast->CreateFunctionType(int_type, {}, false, 0U);
   FunctionDecl *func = m_ast->CreateFunctionDeclaration(
       TU, OptionalClangModuleID(), "foo", clang_type, StorageClass::SC_None,
       false);
@@ -791,8 +894,7 @@ TEST_F(TestTypeSystemClang, TestFunctionTemplateInRecordConstruction) {
   clang::TagDecl *record = ClangUtil::GetAsTagDecl(record_type);
 
   // Prepare the declarations/types we need for the template.
-  CompilerType clang_type =
-      m_ast->CreateFunctionType(int_type, nullptr, 0U, false, 0U);
+  CompilerType clang_type = m_ast->CreateFunctionType(int_type, {}, false, 0U);
   // We create the FunctionDecl for the template in the TU DeclContext because:
   // 1. FunctionDecls can't be in a Record (only CXXMethodDecls can).
   // 2. It is mirroring the behavior of DWARFASTParserClang::ParseSubroutine.
@@ -826,10 +928,9 @@ TEST_F(TestTypeSystemClang, TestDeletingImplicitCopyCstrDueToMoveCStr) {
 
   // Create a move constructor that will delete the implicit copy constructor.
   CompilerType return_type = m_ast->GetBasicType(lldb::eBasicTypeVoid);
-  CompilerType param_type = t.GetRValueReferenceType();
-  CompilerType function_type =
-      m_ast->CreateFunctionType(return_type, &param_type, /*num_params*/ 1,
-                                /*variadic=*/false, /*quals*/ 0U);
+  std::array<CompilerType, 1> args{t.GetRValueReferenceType()};
+  CompilerType function_type = m_ast->CreateFunctionType(
+      return_type, args, /*variadic=*/false, /*quals*/ 0U);
   bool is_virtual = false;
   bool is_static = false;
   bool is_inline = false;
@@ -870,10 +971,9 @@ TEST_F(TestTypeSystemClang, TestNotDeletingUserCopyCstrDueToMoveCStr) {
   bool is_artificial = false;
   // Create a move constructor.
   {
-    CompilerType param_type = t.GetRValueReferenceType();
-    CompilerType function_type =
-        m_ast->CreateFunctionType(return_type, &param_type, /*num_params*/ 1,
-                                  /*variadic=*/false, /*quals*/ 0U);
+    std::array<CompilerType, 1> args{t.GetRValueReferenceType()};
+    CompilerType function_type = m_ast->CreateFunctionType(
+        return_type, args, /*variadic=*/false, /*quals*/ 0U);
     m_ast->AddMethodToCXXRecordType(
         t.GetOpaqueQualType(), class_name, nullptr, function_type,
         lldb::AccessType::eAccessPublic, is_virtual, is_static, is_inline,
@@ -881,9 +981,10 @@ TEST_F(TestTypeSystemClang, TestNotDeletingUserCopyCstrDueToMoveCStr) {
   }
   // Create a copy constructor.
   {
-    CompilerType param_type = t.GetLValueReferenceType().AddConstModifier();
+    std::array<CompilerType, 1> args{
+        t.GetLValueReferenceType().AddConstModifier()};
     CompilerType function_type =
-        m_ast->CreateFunctionType(return_type, &param_type, /*num_params*/ 1,
+        m_ast->CreateFunctionType(return_type, args,
                                   /*variadic=*/false, /*quals*/ 0U);
     m_ast->AddMethodToCXXRecordType(
         t.GetOpaqueQualType(), class_name, nullptr, function_type,
@@ -901,7 +1002,6 @@ TEST_F(TestTypeSystemClang, AddMethodToObjCObjectType) {
   // Create an interface decl and mark it as having external storage.
   CompilerType c = m_ast->CreateObjCClass("A", m_ast->GetTranslationUnitDecl(),
                                           OptionalClangModuleID(),
-                                          /*IsForwardDecl*/ false,
                                           /*IsInternal*/ false);
   ObjCInterfaceDecl *interface = m_ast->GetAsObjCInterfaceDecl(c);
   m_ast->SetHasExternalStorage(c.GetOpaqueQualType(), true);
@@ -909,16 +1009,14 @@ TEST_F(TestTypeSystemClang, AddMethodToObjCObjectType) {
 
   // Add a method to the interface.
   std::vector<CompilerType> args;
-  CompilerType func_type =
-      m_ast->CreateFunctionType(m_ast->GetBasicType(lldb::eBasicTypeInt),
-                                args.data(), args.size(), /*variadic*/ false,
-                                /*quals*/ 0, clang::CallingConv::CC_C);
+  CompilerType func_type = m_ast->CreateFunctionType(
+      m_ast->GetBasicType(lldb::eBasicTypeInt), args, /*variadic*/ false,
+      /*quals*/ 0, clang::CallingConv::CC_C);
   bool variadic = false;
   bool artificial = false;
   bool objc_direct = false;
   clang::ObjCMethodDecl *method = TypeSystemClang::AddMethodToObjCObjectType(
-      c, "-[A foo]", func_type, lldb::eAccessPublic, artificial, variadic,
-      objc_direct);
+      c, "-[A foo]", func_type, artificial, variadic, objc_direct);
   ASSERT_NE(method, nullptr);
 
   // The interface decl should still have external lexical storage.
@@ -969,13 +1067,52 @@ TEST(TestScratchTypeSystemClang, InferSubASTFromLangOpts) {
       ScratchTypeSystemClang::InferIsolatedASTKindFromLangOpts(lang_opts));
 }
 
-TEST_F(TestTypeSystemClang, GetExeModuleWhenMissingSymbolFile) {
-  CompilerType compiler_type = m_ast->GetBasicTypeFromAST(lldb::eBasicTypeInt);
-  lldb_private::Type t(0, nullptr, ConstString("MyType"), std::nullopt, nullptr,
-                       0, {}, {}, compiler_type,
-                       lldb_private::Type::ResolveState::Full);
-  // Test that getting the execution module when no type system is present
-  // is handled gracefully.
-  ModuleSP module = t.GetExeModule();
-  EXPECT_EQ(module.get(), nullptr);
+TEST_F(TestTypeSystemClang, GetDeclContextByNameWhenMissingSymbolFile) {
+  // Test that a type system without a symbol file is handled gracefully.
+  std::vector<CompilerDecl> decls =
+      m_ast->DeclContextFindDeclByName(nullptr, ConstString("SomeName"), true);
+
+  EXPECT_TRUE(decls.empty());
+}
+
+TEST_F(TestTypeSystemClang, AddMethodToCXXRecordType_ParmVarDecls) {
+  // Tests that AddMethodToCXXRecordType creates ParmVarDecl's with
+  // a correct clang::DeclContext.
+
+  llvm::StringRef class_name = "S";
+  CompilerType t = clang_utils::createRecord(*m_ast, class_name);
+  m_ast->StartTagDeclarationDefinition(t);
+
+  CompilerType return_type = m_ast->GetBasicType(lldb::eBasicTypeVoid);
+  const bool is_virtual = false;
+  const bool is_static = false;
+  const bool is_inline = false;
+  const bool is_explicit = true;
+  const bool is_attr_used = false;
+  const bool is_artificial = false;
+
+  llvm::SmallVector<CompilerType> param_types{
+      m_ast->GetBasicType(lldb::eBasicTypeInt),
+      m_ast->GetBasicType(lldb::eBasicTypeShort)};
+  CompilerType function_type =
+      m_ast->CreateFunctionType(return_type, param_types,
+                                /*variadic=*/false, /*quals*/ 0U);
+  m_ast->AddMethodToCXXRecordType(
+      t.GetOpaqueQualType(), "myFunc", nullptr, function_type,
+      lldb::AccessType::eAccessPublic, is_virtual, is_static, is_inline,
+      is_explicit, is_attr_used, is_artificial);
+
+  // Complete the definition and check the created record.
+  m_ast->CompleteTagDeclarationDefinition(t);
+
+  auto *record = llvm::cast<CXXRecordDecl>(ClangUtil::GetAsTagDecl(t));
+
+  auto method_it = record->method_begin();
+  ASSERT_NE(method_it, record->method_end());
+
+  EXPECT_EQ(method_it->getNumParams(), param_types.size());
+
+  // DeclContext of each parameter should be the CXXMethodDecl itself.
+  EXPECT_EQ(method_it->getParamDecl(0)->getDeclContext(), *method_it);
+  EXPECT_EQ(method_it->getParamDecl(1)->getDeclContext(), *method_it);
 }

@@ -6,11 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "utils/UnitTest/Test.h"
+#include "src/__support/CPP/limits.h" // INT_MAX, INT_MIN, LLONG_MAX, LLONG_MIN
+#include "src/__support/CPP/type_traits.h"
+#include "test/UnitTest/Test.h"
 
-#include <limits.h>
+using LIBC_NAMESPACE::cpp::is_same_v;
 
-template <typename ReturnT> struct AtoTest : public __llvm_libc::testing::Test {
+template <typename ReturnT>
+struct AtoTest : public LIBC_NAMESPACE::testing::Test {
   using FunctionT = ReturnT (*)(const char *);
 
   void validNumbers(FunctionT func) {
@@ -53,6 +56,26 @@ template <typename ReturnT> struct AtoTest : public __llvm_libc::testing::Test {
 
       const char *smallest_long_long = "-9223372036854775808";
       ASSERT_EQ(func(smallest_long_long), static_cast<ReturnT>(LLONG_MIN));
+    }
+
+    // If this is atoi and the size of int is less than the size of long, then
+    // we parse as long and cast to int to match existing behavior. This only
+    // matters for cases where the result would be outside of the int range, and
+    // those cases are undefined, so we can choose whatever output value we
+    // want. In this case we have chosen to cast since that matches existing
+    // implementations and makes differential fuzzing easier, but no user should
+    // rely on this behavior.
+    if constexpr (is_same_v<ReturnT, int> && sizeof(ReturnT) < sizeof(long)) {
+
+      static_assert(sizeof(int) == 4);
+
+      const char *bigger_than_biggest_int = "2147483649";
+      ASSERT_EQ(func(bigger_than_biggest_int),
+                static_cast<ReturnT>(2147483649));
+
+      const char *smaller_than_smallest_int = "-2147483649";
+      ASSERT_EQ(func(smaller_than_smallest_int),
+                static_cast<ReturnT>(-2147483649));
     }
   }
 

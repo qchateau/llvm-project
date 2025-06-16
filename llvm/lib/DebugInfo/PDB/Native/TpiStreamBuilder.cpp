@@ -19,7 +19,7 @@
 #include "llvm/Support/BinaryStreamWriter.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
-#include <algorithm>
+#include "llvm/Support/TimeProfiler.h"
 #include <cstdint>
 #include <numeric>
 
@@ -61,7 +61,7 @@ void TpiStreamBuilder::addTypeRecord(ArrayRef<uint8_t> Record,
          "cause misalignment in the output TPI stream!");
   assert(Record.size() <= codeview::MaxRecordLength);
   uint16_t OneSize = (uint16_t)Record.size();
-  updateTypeIndexOffsets(makeArrayRef(&OneSize, 1));
+  updateTypeIndexOffsets(ArrayRef(&OneSize, 1));
 
   TypeRecBuffers.push_back(Record);
   // FIXME: Require it.
@@ -164,13 +164,14 @@ Error TpiStreamBuilder::finalizeMsfLayout() {
         reinterpret_cast<const uint8_t *>(HashBuffer.data()),
         calculateHashBufferSize());
     HashValueStream =
-        std::make_unique<BinaryByteStream>(Bytes, llvm::support::little);
+        std::make_unique<BinaryByteStream>(Bytes, llvm::endianness::little);
   }
   return Error::success();
 }
 
 Error TpiStreamBuilder::commit(const msf::MSFLayout &Layout,
                                WritableBinaryStreamRef Buffer) {
+  llvm::TimeTraceScope timeScope("Commit TPI stream");
   if (auto EC = finalize())
     return EC;
 

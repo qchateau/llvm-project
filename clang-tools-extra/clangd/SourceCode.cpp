@@ -12,6 +12,7 @@
 #include "Protocol.h"
 #include "support/Context.h"
 #include "support/Logger.h"
+#include "clang/Basic/FileEntry.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
@@ -40,6 +41,7 @@
 #include "llvm/Support/xxhash.h"
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -71,7 +73,7 @@ static bool iterateCodepoints(llvm::StringRef U8, const Callback &CB) {
       continue;
     }
     // This convenient property of UTF-8 holds for all non-ASCII characters.
-    size_t UTF8Length = llvm::countLeadingOnes(C);
+    size_t UTF8Length = llvm::countl_one(C);
     // 0xxx is ASCII, handled above. 10xxx is a trailing byte, invalid here.
     // 11111xxx is not valid UTF-8 at all, maybe some ISO-8859-*.
     if (LLVM_UNLIKELY(UTF8Length < 2 || UTF8Length > 4)) {
@@ -230,7 +232,11 @@ bool isSpelledInSource(SourceLocation Loc, const SourceManager &SM) {
   if (Loc.isFileID())
     return true;
   auto Spelling = SM.getDecomposedSpellingLoc(Loc);
-  StringRef SpellingFile = SM.getSLocEntry(Spelling.first).getFile().getName();
+  bool InvalidSLocEntry = false;
+  const auto SLocEntry = SM.getSLocEntry(Spelling.first, &InvalidSLocEntry);
+  if (InvalidSLocEntry)
+    return false;
+  StringRef SpellingFile = SLocEntry.getFile().getName();
   if (SpellingFile == "<scratch space>")
     return false;
   if (SpellingFile == "<built-in>")
@@ -421,9 +427,9 @@ bool isInsideMainFile(SourceLocation Loc, const SourceManager &SM) {
   return FID == SM.getMainFileID() || FID == SM.getPreambleFileID();
 }
 
-llvm::Optional<SourceRange> toHalfOpenFileRange(const SourceManager &SM,
-                                                const LangOptions &LangOpts,
-                                                SourceRange R) {
+std::optional<SourceRange> toHalfOpenFileRange(const SourceManager &SM,
+                                               const LangOptions &LangOpts,
+                                               SourceRange R) {
   SourceRange R1 = getTokenFileRange(R.getBegin(), SM, LangOpts);
   if (!isValidFileRange(SM, R1))
     return std::nullopt;
@@ -511,15 +517,12 @@ std::vector<TextEdit> replacementsToEdits(llvm::StringRef Code,
   return Edits;
 }
 
-llvm::Optional<std::string> getCanonicalPath(const FileEntry *F,
-                                             const SourceManager &SourceMgr) {
-  if (!F)
-    return std::nullopt;
-
-  llvm::SmallString<128> FilePath = F->getName();
+std::optional<std::string> getCanonicalPath(const FileEntryRef F,
+                                            FileManager &FileMgr) {
+  llvm::SmallString<128> FilePath = F.getName();
   if (!llvm::sys::path::is_absolute(FilePath)) {
     if (auto EC =
-            SourceMgr.getFileManager().getVirtualFileSystem().makeAbsolute(
+            FileMgr.getVirtualFileSystem().makeAbsolute(
                 FilePath)) {
       elog("Could not turn relative path '{0}' to absolute: {1}", FilePath,
            EC.message());
@@ -538,10 +541,10 @@ llvm::Optional<std::string> getCanonicalPath(const FileEntry *F,
   //
   //  The file path of Symbol is "/project/src/foo.h" instead of
   //  "/tmp/build/foo.h"
-  if (auto Dir = SourceMgr.getFileManager().getDirectory(
+  if (auto Dir = FileMgr.getOptionalDirectoryRef(
           llvm::sys::path::parent_path(FilePath))) {
     llvm::SmallString<128> RealPath;
-    llvm::StringRef DirName = SourceMgr.getFileManager().getCanonicalName(*Dir);
+    llvm::StringRef DirName = FileMgr.getCanonicalName(*Dir);
     llvm::sys::path::append(RealPath, DirName,
                             llvm::sys::path::filename(FilePath));
     return RealPath.str().str();
@@ -560,7 +563,7 @@ TextEdit toTextEdit(const FixItHint &FixIt, const SourceManager &M,
 }
 
 FileDigest digest(llvm::StringRef Content) {
-  uint64_t Hash{llvm::xxHash64(Content)};
+  uint64_t Hash{llvm::xxh3_64bits(Content)};
   FileDigest Result;
   for (unsigned I = 0; I < Result.size(); ++I) {
     Result[I] = uint8_t(Hash);
@@ -569,7 +572,7 @@ FileDigest digest(llvm::StringRef Content) {
   return Result;
 }
 
-llvm::Optional<FileDigest> digestFile(const SourceManager &SM, FileID FID) {
+std::optional<FileDigest> digestFile(const SourceManager &SM, FileID FID) {
   bool Invalid = false;
   llvm::StringRef Content = SM.getBufferData(FID, &Invalid);
   if (Invalid)
@@ -579,7 +582,21 @@ llvm::Optional<FileDigest> digestFile(const SourceManager &SM, FileID FID) {
 
 format::FormatStyle getFormatStyleForFile(llvm::StringRef File,
                                           llvm::StringRef Content,
-                                          const ThreadsafeFS &TFS) {
+                                          const ThreadsafeFS &TFS,
+                                          bool FormatFile) {
+  // Unless we're formatting a substantial amount of code (the entire file
+  // or an arbitrarily large range), skip libFormat's heuristic check for
+  // .h files that tries to determine whether the file contains objective-c
+  // code. (This is accomplished by passing empty code contents to getStyle().
+  // The heuristic is the only thing that looks at the contents.)
+  // This is a workaround for PR60151, a known issue in libFormat where this
+  // heuristic can OOM on large files. If we *are* formatting the entire file,
+  // there's no point in doing this because the actual format::reformat() call
+  // will run into the same OOM; we'd just be risking inconsistencies between
+  // clangd and clang-format on smaller .h files where they disagree on what
+  // language is detected.
+  if (!FormatFile)
+    Content = {};
   auto Style = format::getStyle(format::DefaultFormatStyle, File,
                                 format::DefaultFallbackStyle, Content,
                                 TFS.view(/*CWD=*/std::nullopt).get());
@@ -795,6 +812,12 @@ llvm::SmallVector<llvm::StringRef> ancestorNamespaces(llvm::StringRef NS) {
   return Results;
 }
 
+// Checks whether \p FileName is a valid spelling of main file.
+bool isMainFile(llvm::StringRef FileName, const SourceManager &SM) {
+  auto FE = SM.getFileManager().getOptionalFileRef(FileName);
+  return FE && FE == SM.getFileEntryRefForID(SM.getMainFileID());
+}
+
 } // namespace
 
 std::vector<std::string> visibleNamespaces(llvm::StringRef Code,
@@ -841,7 +864,7 @@ std::vector<std::string> visibleNamespaces(llvm::StringRef Code,
       return true;
     return LHS < RHS;
   });
-  Found.erase(std::unique(Found.begin(), Found.end()), Found.end());
+  Found.erase(llvm::unique(Found), Found.end());
   return Found;
 }
 
@@ -886,10 +909,10 @@ llvm::StringSet<> collectWords(llvm::StringRef Content) {
 static bool isLikelyIdentifier(llvm::StringRef Word, llvm::StringRef Before,
                                llvm::StringRef After) {
   // `foo` is an identifier.
-  if (Before.endswith("`") && After.startswith("`"))
+  if (Before.ends_with("`") && After.starts_with("`"))
     return true;
   // In foo::bar, both foo and bar are identifiers.
-  if (Before.endswith("::") || After.startswith("::"))
+  if (Before.ends_with("::") || After.starts_with("::"))
     return true;
   // Doxygen tags like \c foo indicate identifiers.
   // Don't search too far back.
@@ -923,9 +946,9 @@ static bool isLikelyIdentifier(llvm::StringRef Word, llvm::StringRef Before,
   return false;
 }
 
-llvm::Optional<SpelledWord> SpelledWord::touching(SourceLocation SpelledLoc,
-                                                  const syntax::TokenBuffer &TB,
-                                                  const LangOptions &LangOpts) {
+std::optional<SpelledWord> SpelledWord::touching(SourceLocation SpelledLoc,
+                                                 const syntax::TokenBuffer &TB,
+                                                 const LangOptions &LangOpts) {
   const auto &SM = TB.sourceManager();
   auto Touching = syntax::spelledTokensTouching(SpelledLoc, TB);
   for (const auto &T : Touching) {
@@ -973,8 +996,8 @@ llvm::Optional<SpelledWord> SpelledWord::touching(SourceLocation SpelledLoc,
   return Result;
 }
 
-llvm::Optional<DefinedMacro> locateMacroAt(const syntax::Token &SpelledTok,
-                                           Preprocessor &PP) {
+std::optional<DefinedMacro> locateMacroAt(const syntax::Token &SpelledTok,
+                                          Preprocessor &PP) {
   if (SpelledTok.kind() != tok::identifier)
     return std::nullopt;
   SourceLocation Loc = SpelledTok.location();
@@ -1175,7 +1198,7 @@ EligibleRegion getEligiblePoints(llvm::StringRef Code,
     }
 
     // Ignore namespaces that are not a prefix of the target.
-    if (!FullyQualifiedName.startswith(CurrentNamespace))
+    if (!FullyQualifiedName.starts_with(CurrentNamespace))
       return;
 
     // Prefer the namespace that shares the longest prefix with target.
@@ -1195,7 +1218,7 @@ EligibleRegion getEligiblePoints(llvm::StringRef Code,
 }
 
 bool isHeaderFile(llvm::StringRef FileName,
-                  llvm::Optional<LangOptions> LangOpts) {
+                  std::optional<LangOptions> LangOpts) {
   // Respect the langOpts, for non-file-extension cases, e.g. standard library
   // files.
   if (LangOpts && LangOpts->IsHeaderFile)
@@ -1208,15 +1231,46 @@ bool isHeaderFile(llvm::StringRef FileName,
 
 bool isProtoFile(SourceLocation Loc, const SourceManager &SM) {
   auto FileName = SM.getFilename(Loc);
-  if (!FileName.endswith(".proto.h") && !FileName.endswith(".pb.h"))
+  if (!FileName.ends_with(".proto.h") && !FileName.ends_with(".pb.h"))
     return false;
   auto FID = SM.getFileID(Loc);
   // All proto generated headers should start with this line.
   static const char *ProtoHeaderComment =
       "// Generated by the protocol buffer compiler.  DO NOT EDIT!";
   // Double check that this is an actual protobuf header.
-  return SM.getBufferData(FID).startswith(ProtoHeaderComment);
+  return SM.getBufferData(FID).starts_with(ProtoHeaderComment);
 }
 
+SourceLocation translatePreamblePatchLocation(SourceLocation Loc,
+                                              const SourceManager &SM) {
+  auto DefFile = SM.getFileID(Loc);
+  if (auto FE = SM.getFileEntryRefForID(DefFile)) {
+    auto IncludeLoc = SM.getIncludeLoc(DefFile);
+    // Preamble patch is included inside the builtin file.
+    if (IncludeLoc.isValid() && SM.isWrittenInBuiltinFile(IncludeLoc) &&
+        FE->getName().ends_with(PreamblePatch::HeaderName)) {
+      auto Presumed = SM.getPresumedLoc(Loc);
+      // Check that line directive is pointing at main file.
+      if (Presumed.isValid() && Presumed.getFileID().isInvalid() &&
+          isMainFile(Presumed.getFilename(), SM)) {
+        Loc = SM.translateLineCol(SM.getMainFileID(), Presumed.getLine(),
+                                  Presumed.getColumn());
+      }
+    }
+  }
+  return Loc;
+}
+
+clangd::Range rangeTillEOL(llvm::StringRef Code, unsigned HashOffset) {
+  clangd::Range Result;
+  Result.end = Result.start = offsetToPosition(Code, HashOffset);
+
+  // Span the warning until the EOL or EOF.
+  Result.end.character +=
+      lspLength(Code.drop_front(HashOffset).take_until([](char C) {
+        return C == '\n' || C == '\r';
+      }));
+  return Result;
+}
 } // namespace clangd
 } // namespace clang

@@ -86,10 +86,8 @@ define void @test_call_others(i32 %x) nounwind {
 ; CHECK-LABEL: test_call_others:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    cmpl $0, {{[0-9]+}}(%esp)
-; CHECK-NEXT:    je .LBB6_1
-; CHECK-NEXT:  # %bb.2: # %true.case
-; CHECK-NEXT:    jmp external_function@PLT # TAILCALL
-; CHECK-NEXT:  .LBB6_1: # %if.end
+; CHECK-NEXT:    jne external_function@PLT # TAILCALL
+; CHECK-NEXT:  # %bb.1: # %if.end
 ; CHECK-NEXT:    nop
 ; CHECK-NEXT:    nop
 ; CHECK-NEXT:    nop
@@ -112,7 +110,7 @@ define void @test_branch_to_same_bb(i32 %x, i32 %y) nounwind {
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    cmpl $0, {{[0-9]+}}(%esp)
 ; CHECK-NEXT:    jle .LBB7_2
-; CHECK-NEXT:    .p2align 4, 0x90
+; CHECK-NEXT:    .p2align 4
 ; CHECK-NEXT:  .LBB7_1: # %while.cond
 ; CHECK-NEXT:    # =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    jmp .LBB7_1

@@ -13,7 +13,6 @@
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 #include <map>
@@ -39,7 +38,7 @@ translateEdits(const MatchResult &Result, ArrayRef<ASTEdit> ASTEdits) {
     if (!Range)
       return Range.takeError();
     std::optional<CharSourceRange> EditRange =
-        tooling::getRangeForEdit(*Range, *Result.Context);
+        tooling::getFileRangeForEdit(*Range, *Result.Context);
     // FIXME: let user specify whether to treat this case as an error or ignore
     // it as is currently done. This behavior is problematic in that it hides
     // failures from bad ranges. Also, the behavior here differs from
@@ -449,7 +448,7 @@ SourceLocation transformer::detail::getRuleMatchLoc(const MatchResult &Result) {
   auto &NodesMap = Result.Nodes.getMap();
   auto Root = NodesMap.find(RootID);
   assert(Root != NodesMap.end() && "Transformation failed: missing root node.");
-  std::optional<CharSourceRange> RootRange = tooling::getRangeForEdit(
+  std::optional<CharSourceRange> RootRange = tooling::getFileRangeForEdit(
       CharSourceRange::getTokenRange(Root->second.getSourceRange()),
       *Result.Context);
   if (RootRange)

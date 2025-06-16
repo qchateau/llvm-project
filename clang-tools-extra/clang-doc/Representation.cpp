@@ -20,11 +20,67 @@
 //
 //===----------------------------------------------------------------------===//
 #include "Representation.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Path.h"
 
 namespace clang {
 namespace doc {
+
+CommentKind stringToCommentKind(llvm::StringRef KindStr) {
+  static const llvm::StringMap<CommentKind> KindMap = {
+      {"FullComment", CommentKind::CK_FullComment},
+      {"ParagraphComment", CommentKind::CK_ParagraphComment},
+      {"TextComment", CommentKind::CK_TextComment},
+      {"InlineCommandComment", CommentKind::CK_InlineCommandComment},
+      {"HTMLStartTagComment", CommentKind::CK_HTMLStartTagComment},
+      {"HTMLEndTagComment", CommentKind::CK_HTMLEndTagComment},
+      {"BlockCommandComment", CommentKind::CK_BlockCommandComment},
+      {"ParamCommandComment", CommentKind::CK_ParamCommandComment},
+      {"TParamCommandComment", CommentKind::CK_TParamCommandComment},
+      {"VerbatimBlockComment", CommentKind::CK_VerbatimBlockComment},
+      {"VerbatimBlockLineComment", CommentKind::CK_VerbatimBlockLineComment},
+      {"VerbatimLineComment", CommentKind::CK_VerbatimLineComment},
+  };
+
+  auto It = KindMap.find(KindStr);
+  if (It != KindMap.end()) {
+    return It->second;
+  }
+  return CommentKind::CK_Unknown;
+}
+
+llvm::StringRef commentKindToString(CommentKind Kind) {
+  switch (Kind) {
+  case CommentKind::CK_FullComment:
+    return "FullComment";
+  case CommentKind::CK_ParagraphComment:
+    return "ParagraphComment";
+  case CommentKind::CK_TextComment:
+    return "TextComment";
+  case CommentKind::CK_InlineCommandComment:
+    return "InlineCommandComment";
+  case CommentKind::CK_HTMLStartTagComment:
+    return "HTMLStartTagComment";
+  case CommentKind::CK_HTMLEndTagComment:
+    return "HTMLEndTagComment";
+  case CommentKind::CK_BlockCommandComment:
+    return "BlockCommandComment";
+  case CommentKind::CK_ParamCommandComment:
+    return "ParamCommandComment";
+  case CommentKind::CK_TParamCommandComment:
+    return "TParamCommandComment";
+  case CommentKind::CK_VerbatimBlockComment:
+    return "VerbatimBlockComment";
+  case CommentKind::CK_VerbatimBlockLineComment:
+    return "VerbatimBlockLineComment";
+  case CommentKind::CK_VerbatimLineComment:
+    return "VerbatimLineComment";
+  case CommentKind::CK_Unknown:
+    return "Unknown";
+  }
+  llvm_unreachable("Unhandled CommentKind");
+}
 
 namespace {
 
@@ -54,51 +110,16 @@ int getChildIndexIfExists(std::vector<T> &Children, T &ChildToMerge) {
   return -1;
 }
 
-void reduceChildren(std::vector<Reference> &Children,
-                    std::vector<Reference> &&ChildrenToMerge) {
+template <typename T>
+void reduceChildren(std::vector<T> &Children,
+                    std::vector<T> &&ChildrenToMerge) {
   for (auto &ChildToMerge : ChildrenToMerge) {
-    int mergeIdx = getChildIndexIfExists(Children, ChildToMerge);
-    if (mergeIdx == -1) {
+    int MergeIdx = getChildIndexIfExists(Children, ChildToMerge);
+    if (MergeIdx == -1) {
       Children.push_back(std::move(ChildToMerge));
       continue;
     }
-    Children[mergeIdx].merge(std::move(ChildToMerge));
-  }
-}
-
-void reduceChildren(std::vector<FunctionInfo> &Children,
-                    std::vector<FunctionInfo> &&ChildrenToMerge) {
-  for (auto &ChildToMerge : ChildrenToMerge) {
-    int mergeIdx = getChildIndexIfExists(Children, ChildToMerge);
-    if (mergeIdx == -1) {
-      Children.push_back(std::move(ChildToMerge));
-      continue;
-    }
-    Children[mergeIdx].merge(std::move(ChildToMerge));
-  }
-}
-
-void reduceChildren(std::vector<EnumInfo> &Children,
-                    std::vector<EnumInfo> &&ChildrenToMerge) {
-  for (auto &ChildToMerge : ChildrenToMerge) {
-    int mergeIdx = getChildIndexIfExists(Children, ChildToMerge);
-    if (mergeIdx == -1) {
-      Children.push_back(std::move(ChildToMerge));
-      continue;
-    }
-    Children[mergeIdx].merge(std::move(ChildToMerge));
-  }
-}
-
-void reduceChildren(std::vector<TypedefInfo> &Children,
-                    std::vector<TypedefInfo> &&ChildrenToMerge) {
-  for (auto &ChildToMerge : ChildrenToMerge) {
-    int mergeIdx = getChildIndexIfExists(Children, ChildToMerge);
-    if (mergeIdx == -1) {
-      Children.push_back(std::move(ChildToMerge));
-      continue;
-    }
-    Children[mergeIdx].merge(std::move(ChildToMerge));
+    Children[MergeIdx].merge(std::move(ChildToMerge));
   }
 }
 
@@ -122,10 +143,46 @@ mergeInfos(std::vector<std::unique_ptr<Info>> &Values) {
     return reduce<FunctionInfo>(Values);
   case InfoType::IT_typedef:
     return reduce<TypedefInfo>(Values);
-  default:
+  case InfoType::IT_default:
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "unexpected info type");
   }
+  llvm_unreachable("unhandled enumerator");
+}
+
+bool CommentInfo::operator==(const CommentInfo &Other) const {
+  auto FirstCI = std::tie(Kind, Text, Name, Direction, ParamName, CloseName,
+                          SelfClosing, Explicit, AttrKeys, AttrValues, Args);
+  auto SecondCI =
+      std::tie(Other.Kind, Other.Text, Other.Name, Other.Direction,
+               Other.ParamName, Other.CloseName, Other.SelfClosing,
+               Other.Explicit, Other.AttrKeys, Other.AttrValues, Other.Args);
+
+  if (FirstCI != SecondCI || Children.size() != Other.Children.size())
+    return false;
+
+  return std::equal(Children.begin(), Children.end(), Other.Children.begin(),
+                    llvm::deref<std::equal_to<>>{});
+}
+
+bool CommentInfo::operator<(const CommentInfo &Other) const {
+  auto FirstCI = std::tie(Kind, Text, Name, Direction, ParamName, CloseName,
+                          SelfClosing, Explicit, AttrKeys, AttrValues, Args);
+  auto SecondCI =
+      std::tie(Other.Kind, Other.Text, Other.Name, Other.Direction,
+               Other.ParamName, Other.CloseName, Other.SelfClosing,
+               Other.Explicit, Other.AttrKeys, Other.AttrValues, Other.Args);
+
+  if (FirstCI < SecondCI)
+    return true;
+
+  if (FirstCI == SecondCI) {
+    return std::lexicographical_compare(
+        Children.begin(), Children.end(), Other.Children.begin(),
+        Other.Children.end(), llvm::deref<std::less<>>());
+  }
+
+  return false;
 }
 
 static llvm::SmallString<64>
@@ -200,7 +257,7 @@ void Info::mergeBase(Info &&Other) {
   std::move(Other.Description.begin(), Other.Description.end(),
             std::back_inserter(Description));
   llvm::sort(Description);
-  auto Last = std::unique(Description.begin(), Description.end());
+  auto Last = llvm::unique(Description);
   Description.erase(Last, Description.end());
 }
 
@@ -215,10 +272,13 @@ void SymbolInfo::merge(SymbolInfo &&Other) {
   // Unconditionally extend the list of locations, since we want all of them.
   std::move(Other.Loc.begin(), Other.Loc.end(), std::back_inserter(Loc));
   llvm::sort(Loc);
-  auto Last = std::unique(Loc.begin(), Loc.end());
+  auto *Last = llvm::unique(Loc);
   Loc.erase(Last, Loc.end());
   mergeBase(std::move(Other));
 }
+
+NamespaceInfo::NamespaceInfo(SymbolID USR, StringRef Name, StringRef Path)
+    : Info(InfoType::IT_namespace, USR, Name, Path) {}
 
 void NamespaceInfo::merge(NamespaceInfo &&Other) {
   assert(mergeable(Other));
@@ -231,9 +291,12 @@ void NamespaceInfo::merge(NamespaceInfo &&Other) {
   mergeBase(std::move(Other));
 }
 
+RecordInfo::RecordInfo(SymbolID USR, StringRef Name, StringRef Path)
+    : SymbolInfo(InfoType::IT_record, USR, Name, Path) {}
+
 void RecordInfo::merge(RecordInfo &&Other) {
   assert(mergeable(Other));
-  if (!TagType)
+  if (!llvm::to_underlying(TagType))
     TagType = Other.TagType;
   IsTypeDef = IsTypeDef || Other.IsTypeDef;
   if (Members.empty())
@@ -288,6 +351,14 @@ void TypedefInfo::merge(TypedefInfo &&Other) {
     Underlying = Other.Underlying;
   SymbolInfo::merge(std::move(Other));
 }
+
+BaseRecordInfo::BaseRecordInfo() : RecordInfo() {}
+
+BaseRecordInfo::BaseRecordInfo(SymbolID USR, StringRef Name, StringRef Path,
+                               bool IsVirtual, AccessSpecifier Access,
+                               bool IsParent)
+    : RecordInfo(USR, Name, Path), IsVirtual(IsVirtual), Access(Access),
+      IsParent(IsParent) {}
 
 llvm::SmallString<16> Info::extractName() const {
   if (!Name.empty())
@@ -354,23 +425,34 @@ ClangDocContext::ClangDocContext(tooling::ExecutionContext *ECtx,
                                  StringRef ProjectName, bool PublicOnly,
                                  StringRef OutDirectory, StringRef SourceRoot,
                                  StringRef RepositoryUrl,
+                                 StringRef RepositoryLinePrefix, StringRef Base,
                                  std::vector<std::string> UserStylesheets,
-                                 std::vector<std::string> JsScripts)
+                                 bool FTimeTrace)
     : ECtx(ECtx), ProjectName(ProjectName), PublicOnly(PublicOnly),
-      OutDirectory(OutDirectory), UserStylesheets(UserStylesheets),
-      JsScripts(JsScripts) {
+      FTimeTrace(FTimeTrace), OutDirectory(OutDirectory),
+      UserStylesheets(UserStylesheets), Base(Base) {
   llvm::SmallString<128> SourceRootDir(SourceRoot);
   if (SourceRoot.empty())
     // If no SourceRoot was provided the current path is used as the default
     llvm::sys::fs::current_path(SourceRootDir);
-  this->SourceRoot = std::string(SourceRootDir.str());
+  this->SourceRoot = std::string(SourceRootDir);
   if (!RepositoryUrl.empty()) {
     this->RepositoryUrl = std::string(RepositoryUrl);
-    if (!RepositoryUrl.empty() && RepositoryUrl.find("http://") != 0 &&
-        RepositoryUrl.find("https://") != 0)
+    if (!RepositoryUrl.empty() && !RepositoryUrl.starts_with("http://") &&
+        !RepositoryUrl.starts_with("https://"))
       this->RepositoryUrl->insert(0, "https://");
+
+    if (!RepositoryLinePrefix.empty())
+      this->RepositoryLinePrefix = std::string(RepositoryLinePrefix);
   }
 }
 
+void ScopeChildren::sort() {
+  llvm::sort(Namespaces.begin(), Namespaces.end());
+  llvm::sort(Records.begin(), Records.end());
+  llvm::sort(Functions.begin(), Functions.end());
+  llvm::sort(Enums.begin(), Enums.end());
+  llvm::sort(Typedefs.begin(), Typedefs.end());
+}
 } // namespace doc
 } // namespace clang

@@ -31,7 +31,7 @@ struct IntegerTypeStorage : public TypeStorage {
       : width(width), signedness(signedness) {}
 
   /// The hash key used for uniquing.
-  using KeyTy = std::pair<unsigned, IntegerType::SignednessSemantics>;
+  using KeyTy = std::tuple<unsigned, IntegerType::SignednessSemantics>;
 
   static llvm::hash_code hashKey(const KeyTy &key) {
     return llvm::hash_value(key);
@@ -44,7 +44,7 @@ struct IntegerTypeStorage : public TypeStorage {
   static IntegerTypeStorage *construct(TypeStorageAllocator &allocator,
                                        KeyTy key) {
     return new (allocator.allocate<IntegerTypeStorage>())
-        IntegerTypeStorage(key.first, key.second);
+        IntegerTypeStorage(std::get<0>(key), std::get<1>(key));
   }
 
   KeyTy getAsKey() const { return KeyTy(width, signedness); }
@@ -102,7 +102,8 @@ struct FunctionTypeStorage : public TypeStorage {
 /// A type representing a collection of other types.
 struct TupleTypeStorage final
     : public TypeStorage,
-      public llvm::TrailingObjects<TupleTypeStorage, Type> {
+      private llvm::TrailingObjects<TupleTypeStorage, Type> {
+  friend llvm::TrailingObjects<TupleTypeStorage, Type>;
   using KeyTy = TypeRange;
 
   TupleTypeStorage(unsigned numTypes) : numElements(numTypes) {}
@@ -116,8 +117,7 @@ struct TupleTypeStorage final
     auto *result = ::new (rawMem) TupleTypeStorage(key.size());
 
     // Copy in the element types into the trailing storage.
-    std::uninitialized_copy(key.begin(), key.end(),
-                            result->getTrailingObjects<Type>());
+    llvm::uninitialized_copy(key, result->getTrailingObjects());
     return result;
   }
 
@@ -127,9 +127,7 @@ struct TupleTypeStorage final
   unsigned size() const { return numElements; }
 
   /// Return the held types.
-  ArrayRef<Type> getTypes() const {
-    return {getTrailingObjects<Type>(), size()};
-  }
+  ArrayRef<Type> getTypes() const { return getTrailingObjects(size()); }
 
   KeyTy getAsKey() const { return getTypes(); }
 

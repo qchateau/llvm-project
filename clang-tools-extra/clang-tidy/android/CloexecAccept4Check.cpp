@@ -7,15 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "CloexecAccept4Check.h"
-#include "../utils/ASTUtils.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace android {
+namespace clang::tidy::android {
 
 void CloexecAccept4Check::registerMatchers(MatchFinder *Finder) {
   auto SockAddrPointerType =
@@ -34,6 +30,4 @@ void CloexecAccept4Check::check(const MatchFinder::MatchResult &Result) {
   insertMacroFlag(Result, /*MacroFlag=*/"SOCK_CLOEXEC", /*ArgPos=*/3);
 }
 
-} // namespace android
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::android

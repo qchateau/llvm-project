@@ -15,7 +15,6 @@
 #include "llvm/Analysis/MLModelRunner.h"
 #include "llvm/IR/PassManager.h"
 
-#include <deque>
 #include <map>
 #include <memory>
 #include <optional>
@@ -24,11 +23,13 @@ namespace llvm {
 class DiagnosticInfoOptimizationBase;
 class Module;
 class MLInlineAdvice;
+class ProfileSummaryInfo;
 
 class MLInlineAdvisor : public InlineAdvisor {
 public:
   MLInlineAdvisor(Module &M, ModuleAnalysisManager &MAM,
-                  std::unique_ptr<MLModelRunner> ModelRunner);
+                  std::unique_ptr<MLModelRunner> ModelRunner,
+                  std::function<bool(CallBase &)> GetDefaultAdvice);
 
   virtual ~MLInlineAdvisor() = default;
 
@@ -43,7 +44,7 @@ public:
 
   bool isForcedToStop() const { return ForceStop; }
   int64_t getLocalCalls(Function &F);
-  const MLModelRunner &getModelRunner() const { return *ModelRunner.get(); }
+  const MLModelRunner &getModelRunner() const { return *ModelRunner; }
   FunctionPropertiesInfo &getCachedFPI(Function &) const;
 
 protected:
@@ -63,6 +64,7 @@ protected:
   unsigned getInitialFunctionLevel(const Function &F) const;
 
   std::unique_ptr<MLModelRunner> ModelRunner;
+  std::function<bool(CallBase &)> GetDefaultAdvice;
 
 private:
   int64_t getModuleIRSize() const;
@@ -86,7 +88,9 @@ private:
   int32_t CurrentIRSize = 0;
   llvm::SmallPtrSet<const LazyCallGraph::Node *, 1> NodesInLastSCC;
   DenseSet<const LazyCallGraph::Node *> AllNodes;
+  DenseSet<Function *> DeadFunctions;
   bool ForceStop = false;
+  ProfileSummaryInfo &PSI;
 };
 
 /// InlineAdvice that tracks changes post inlining. For that reason, it only

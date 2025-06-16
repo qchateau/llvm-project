@@ -7,14 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "VariadicFunctionDefCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace cert {
+namespace clang::tidy::cert {
 
 void VariadicFunctionDefCheck::registerMatchers(MatchFinder *Finder) {
   // We only care about function *definitions* that are variadic, and do not
@@ -33,6 +30,4 @@ void VariadicFunctionDefCheck::check(const MatchFinder::MatchResult &Result) {
        "parameter pack or currying instead");
 }
 
-} // namespace cert
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::cert

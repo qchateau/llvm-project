@@ -1,8 +1,8 @@
-; RUN: llc -march=amdgcn -mcpu=hawaii -start-before=amdgpu-unify-divergent-exit-nodes -mattr=+flat-for-global -verify-machineinstrs < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-SAFE,SI %s
-; RUN: llc -enable-no-signed-zeros-fp-math -march=amdgcn -mcpu=hawaii -mattr=+flat-for-global -start-before=amdgpu-unify-divergent-exit-nodes -verify-machineinstrs < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-NSZ,SI %s
+; RUN: llc -mtriple=amdgcn -mcpu=hawaii -start-before=amdgpu-unify-divergent-exit-nodes -mattr=+flat-for-global < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-SAFE,SI %s
+; RUN: llc -enable-no-signed-zeros-fp-math -mtriple=amdgcn -mcpu=hawaii -mattr=+flat-for-global -start-before=amdgpu-unify-divergent-exit-nodes < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-NSZ,SI %s
 
-; RUN: llc -march=amdgcn -mcpu=fiji -start-before=amdgpu-unify-divergent-exit-nodes --verify-machineinstrs < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-SAFE,VI %s
-; RUN: llc -enable-no-signed-zeros-fp-math -march=amdgcn -mcpu=fiji -start-before=amdgpu-unify-divergent-exit-nodes -verify-machineinstrs < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-NSZ,VI %s
+; RUN: llc -mtriple=amdgcn -mcpu=fiji -start-before=amdgpu-unify-divergent-exit-nodes < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-SAFE,VI %s
+; RUN: llc -enable-no-signed-zeros-fp-math -mtriple=amdgcn -mcpu=fiji -start-before=amdgpu-unify-divergent-exit-nodes < %s | FileCheck -enable-var-scope --check-prefixes=GCN,GCN-NSZ,VI %s
 
 ; --------------------------------------------------------------------------------
 ; fadd tests
@@ -226,6 +226,10 @@ define amdgpu_kernel void @v_fneg_add_multi_use_fneg_x_f32(ptr addrspace(1) %out
 ; GCN-SAFE-DAG: v_mad_f32 [[A:v[0-9]+]],
 ; GCN-SAFE-DAG: v_cmp_ngt_f32_e32 {{.*}}, [[A]]
 ; GCN-SAFE-DAG: v_cndmask_b32_e64 v{{[0-9]+}}, -[[A]]
+
+; GCN-NSZ-DAG: v_mul_f32_e32 v{{[0-9]+}}, 0, v
+; GCN-NSZ: v_cmp_ngt_f32
+; GCN-NSZ: v_cndmask_b32_e64 v{{[0-9]+}}, -v{{[0-9]+}}, v{{[0-9]+}}
 define amdgpu_ps float @fneg_fadd_0(float inreg %tmp2, float inreg %tmp6, <4 x i32> %arg) local_unnamed_addr #0 {
 .entry:
   %tmp7 = fdiv float 1.000000e+00, %tmp6
@@ -246,9 +250,12 @@ define amdgpu_ps float @fneg_fadd_0(float inreg %tmp2, float inreg %tmp6, <4 x i
 ; GCN-LABEL: {{^}}fneg_fadd_0_nsz:
 ; GCN-NSZ-DAG: v_rcp_f32_e32 [[A:v[0-9]+]],
 ; GCN-NSZ-DAG: v_mov_b32_e32 [[B:v[0-9]+]],
-; GCN-NSZ-DAG: v_mov_b32_e32 [[C:v[0-9]+]],
-; GCN-NSZ-DAG: v_mul_f32_e32 [[D:v[0-9]+]],
-; GCN-NSZ-DAG: v_cmp_nlt_f32_e64 {{.*}}, -[[D]]
+; GCN-NSZ-DAG: v_mov_b32_e32 [[C:v[0-9]+]], 0x7fc00000
+; GCN-NSZ-DAG: v_mul_f32_e32 [[D:v[0-9]+]], 0, [[A]]
+; GCN-NSZ-DAG: v_cmp_ngt_f32_e32 {{.*}}, s{{[0-9]+}}, [[D]]
+; GCN-NSZ-DAG: v_cndmask_b32_e64 [[E:v[0-9]+]], -[[D]], v{{[0-9]+}},
+; GCN-NSZ-DAG: v_cmp_nlt_f32_e32 {{.*}}, 0
+; GCN-NSZ-DAG: v_cndmask_b32_e64 v{{[0-9]+}}, [[C]], 0,
 define amdgpu_ps float @fneg_fadd_0_nsz(float inreg %tmp2, float inreg %tmp6, <4 x i32> %arg) local_unnamed_addr #2 {
 .entry:
   %tmp7 = fdiv afn float 1.000000e+00, %tmp6
@@ -562,7 +569,7 @@ define amdgpu_ps float @v_fneg_negk_minnum_f32_no_ieee(float %a) #0 {
 
 ; GCN-LABEL: {{^}}v_fneg_0_minnum_f32:
 ; GCN: {{buffer|flat}}_load_dword [[A:v[0-9]+]]
-; GCN-NOT [[A]]
+; GCN-NOT: [[A]]
 ; GCN: v_min_f32_e32 [[MIN:v[0-9]+]], 0, [[A]]
 ; GCN: v_xor_b32_e32 [[RESULT:v[0-9]+]], 0x80000000, [[MIN]]
 ; GCN: flat_store_dword v{{\[[0-9]+:[0-9]+\]}}, [[RESULT]]
@@ -846,7 +853,7 @@ define amdgpu_ps <2 x float> @v_fneg_minnum_multi_use_minnum_f32_no_ieee(float %
   %min = call float @llvm.minnum.f32(float %a, float %b)
   %fneg = fneg float %min
   %use1 = fmul float %min, 4.0
-  %ins0 = insertelement <2 x float> undef, float %fneg, i32 0
+  %ins0 = insertelement <2 x float> poison, float %fneg, i32 0
   %ins1 = insertelement <2 x float> %ins0, float %use1, i32 1
   ret <2 x float> %ins1
 }
@@ -1086,7 +1093,7 @@ define amdgpu_ps <2 x float> @v_fneg_maxnum_multi_use_maxnum_f32_no_ieee(float %
   %max = call float @llvm.maxnum.f32(float %a, float %b)
   %fneg = fneg float %max
   %use1 = fmul float %max, 4.0
-  %ins0 = insertelement <2 x float> undef, float %fneg, i32 0
+  %ins0 = insertelement <2 x float> poison, float %fneg, i32 0
   %ins1 = insertelement <2 x float> %ins0, float %use1, i32 1
   ret <2 x float> %ins1
 }
@@ -1531,7 +1538,7 @@ define amdgpu_kernel void @v_fneg_fp_extend_store_use_fneg_f32_to_f64(ptr addrsp
   %fpext = fpext float %fneg.a to double
   %fneg = fsub double -0.000000e+00, %fpext
   store volatile double %fneg, ptr addrspace(1) %out.gep
-  store volatile float %fneg.a, ptr addrspace(1) undef
+  store volatile float %fneg.a, ptr addrspace(1) poison
   ret void
 }
 
@@ -1550,7 +1557,7 @@ define amdgpu_kernel void @v_fneg_multi_use_fp_extend_fneg_f32_to_f64(ptr addrsp
   %fpext = fpext float %a to double
   %fneg = fsub double -0.000000e+00, %fpext
   store volatile double %fneg, ptr addrspace(1) %out.gep
-  store volatile double %fpext, ptr addrspace(1) undef
+  store volatile double %fpext, ptr addrspace(1) poison
   ret void
 }
 
@@ -1658,7 +1665,7 @@ define amdgpu_kernel void @v_fneg_fp_round_store_use_fneg_f64_to_f32(ptr addrspa
   %fpround = fptrunc double %fneg.a to float
   %fneg = fneg float %fpround
   store volatile float %fneg, ptr addrspace(1) %out.gep
-  store volatile double %fneg.a, ptr addrspace(1) undef
+  store volatile double %fneg.a, ptr addrspace(1) poison
   ret void
 }
 
@@ -1680,7 +1687,7 @@ define amdgpu_kernel void @v_fneg_fp_round_multi_use_fneg_f64_to_f32(ptr addrspa
   %fneg = fneg float %fpround
   %use1 = fmul double %fneg.a, %c
   store volatile float %fneg, ptr addrspace(1) %out.gep
-  store volatile double %use1, ptr addrspace(1) undef
+  store volatile double %use1, ptr addrspace(1) poison
   ret void
 }
 
@@ -1752,7 +1759,7 @@ define amdgpu_kernel void @v_fneg_fp_round_store_use_fneg_f32_to_f16(ptr addrspa
   %fpround = fptrunc float %fneg.a to half
   %fneg = fsub half -0.000000e+00, %fpround
   store volatile half %fneg, ptr addrspace(1) %out.gep
-  store volatile float %fneg.a, ptr addrspace(1) undef
+  store volatile float %fneg.a, ptr addrspace(1) poison
   ret void
 }
 
@@ -1773,7 +1780,7 @@ define amdgpu_kernel void @v_fneg_fp_round_multi_use_fneg_f32_to_f16(ptr addrspa
   %fneg = fsub half -0.000000e+00, %fpround
   %use1 = fmul float %fneg.a, %c
   store volatile half %fneg, ptr addrspace(1) %out.gep
-  store volatile float %use1, ptr addrspace(1) undef
+  store volatile float %use1, ptr addrspace(1) poison
   ret void
 }
 
@@ -1830,7 +1837,7 @@ define amdgpu_kernel void @v_fneg_rcp_store_use_fneg_f32(ptr addrspace(1) %out, 
   %rcp = call float @llvm.amdgcn.rcp.f32(float %fneg.a)
   %fneg = fneg float %rcp
   store volatile float %fneg, ptr addrspace(1) %out.gep
-  store volatile float %fneg.a, ptr addrspace(1) undef
+  store volatile float %fneg.a, ptr addrspace(1) poison
   ret void
 }
 
@@ -1851,7 +1858,7 @@ define amdgpu_kernel void @v_fneg_rcp_multi_use_fneg_f32(ptr addrspace(1) %out, 
   %fneg = fneg float %rcp
   %use1 = fmul float %fneg.a, %c
   store volatile float %fneg, ptr addrspace(1) %out.gep
-  store volatile float %use1, ptr addrspace(1) undef
+  store volatile float %use1, ptr addrspace(1) poison
   ret void
 }
 
@@ -2601,10 +2608,9 @@ bb:
 }
 
 ; This expects denormal flushing, so can't turn this fmul into fneg
-; TODO: Keeping this as fmul saves encoding size
 ; GCN-LABEL: {{^}}nnan_fmul_neg1_to_fneg:
-; GCN: v_sub_f32_e32 [[TMP:v[0-9]+]], 0x80000000, v0
-; GCN-NEXT: v_mul_f32_e32 v0, [[TMP]], v1
+; GCN: s_waitcnt
+; GCN-NEXT: v_mul_f32_e64 v0, -v0, v1
 define float @nnan_fmul_neg1_to_fneg(float %x, float %y) #0 {
   %mul = fmul float %x, -1.0
   %add = fmul nnan float %mul, %y
@@ -2624,8 +2630,9 @@ define float @denormal_fmul_neg1_to_fneg(float %x, float %y) {
 
 ; know the source can't be an snan
 ; GCN-LABEL: {{^}}denorm_snan_fmul_neg1_to_fneg:
-; GCN: v_mul_f32_e64 [[TMP:v[0-9]+]], v0, -v0
-; GCN: v_mul_f32_e32 v0, [[TMP]], v1
+; GCN: s_waitcnt
+; GCN-NEXT: v_mul_f32_e64 [[TMP:v[0-9]+]], v0, -v0
+; GCN-NEXT: v_mul_f32_e32 v0, [[TMP]], v1
 ; GCN-NEXT: s_setpc_b64
 define float @denorm_snan_fmul_neg1_to_fneg(float %x, float %y) {
   %canonical = fmul float %x, %x
@@ -2635,14 +2642,173 @@ define float @denorm_snan_fmul_neg1_to_fneg(float %x, float %y) {
 }
 
 ; GCN-LABEL: {{^}}flush_snan_fmul_neg1_to_fneg:
-; GCN: v_mul_f32_e32 [[TMP0:v[0-9]+]], 1.0, v0
-; GCN: v_sub_f32_e32 [[TMP1:v[0-9]+]], 0x80000000, [[TMP0]]
-; GCN-NEXT: v_mul_f32_e32 v0, [[TMP1]], v1
+; GCN: s_waitcnt
+; GCN-NEXT: v_mul_f32_e32 [[TMP:v[0-9]+]], 1.0, v0
+; GCN-NEXT: v_mul_f32_e64 v0, -[[TMP]], v1
 define float @flush_snan_fmul_neg1_to_fneg(float %x, float %y) #0 {
   %quiet = call float @llvm.canonicalize.f32(float %x)
   %mul = fmul float %quiet, -1.0
   %add = fmul float %mul, %y
   ret float %add
+}
+
+; GCN-LABEL: {{^}}fadd_select_fneg_fneg_f32:
+; GCN: v_cmp_eq_u32_e32 vcc, 0, v0
+; GCN-NEXT: v_cndmask_b32_e32 v0, v2, v1, vcc
+; GCN-NEXT: v_sub_f32_e32 v0, v3, v0
+; GCN-NEXT: s_setpc_b64
+define float @fadd_select_fneg_fneg_f32(i32 %arg0, float %x, float %y, float %z) {
+  %cmp = icmp eq i32 %arg0, 0
+  %neg.x = fneg float %x
+  %neg.y  = fneg float %y
+  %select = select i1 %cmp, float %neg.x, float %neg.y
+  %add = fadd float %select, %z
+  ret float %add
+}
+
+; GCN-LABEL: {{^}}fadd_select_fneg_fneg_f64:
+; GCN: v_cmp_eq_u32_e32 vcc, 0, v0
+; GCN-NEXT: v_cndmask_b32_e32 v2, v4, v2, vcc
+; GCN-NEXT: v_cndmask_b32_e32 v1, v3, v1, vcc
+; GCN-NEXT: v_add_f64 v[0:1], v[5:6], -v[1:2]
+; GCN-NEXT: s_setpc_b64
+define double @fadd_select_fneg_fneg_f64(i32 %arg0, double %x, double %y, double %z) {
+  %cmp = icmp eq i32 %arg0, 0
+  %neg.x = fneg double %x
+  %neg.y  = fneg double %y
+  %select = select i1 %cmp, double %neg.x, double %neg.y
+  %add = fadd double %select, %z
+  ret double %add
+}
+
+; GCN-LABEL: {{^}}fadd_select_fneg_fneg_f16:
+; SI: v_cvt_f16_f32
+; SI: v_cvt_f16_f32
+; SI: v_cvt_f16_f32
+; SI: v_cmp_eq_u32
+; SI: v_cvt_f32_f16
+; SI: v_cvt_f32_f16
+; SI: v_cvt_f32_f16
+; SI: v_cndmask_b32_e32 v{{[0-9]+}}, v{{[0-9]+}}, v{{[0-9]+}}, vcc
+; SI-NEXT: v_sub_f32_e32
+; SI-NEXT: s_setpc_b64
+
+; VI: v_cmp_eq_u32_e32 vcc, 0, v0
+; VI-NEXT: v_cndmask_b32_e32 v0, v2, v1, vcc
+; VI-NEXT: v_sub_f16_e32 v0, v3, v0
+; VI-NEXT: s_setpc_b64
+define half @fadd_select_fneg_fneg_f16(i32 %arg0, half %x, half %y, half %z) {
+  %cmp = icmp eq i32 %arg0, 0
+  %neg.x = fneg half %x
+  %neg.y = fneg half %y
+  %select = select i1 %cmp, half %neg.x, half %neg.y
+  %add = fadd half %select, %z
+  ret half %add
+}
+
+; FIXME: Terrible code for SI
+; GCN-LABEL: {{^}}fadd_select_fneg_fneg_v2f16:
+; SI: v_cvt_f16_f32
+; SI: v_cvt_f16_f32
+; SI: v_cvt_f16_f32
+; SI: v_cvt_f16_f32
+; SI: v_cmp_eq_u32
+; SI: v_lshlrev_b32_e32
+; SI: v_or_b32_e32
+; SI: v_cndmask_b32
+; SI: v_lshrrev_b32
+; SI: v_cvt_f32_f16
+; SI: v_cvt_f32_f16
+; SI: v_cvt_f32_f16
+; SI: v_cvt_f32_f16
+; SI: v_sub_f32
+; SI: v_sub_f32
+
+; VI: v_cmp_eq_u32_e32 vcc, 0, v0
+; VI-NEXT: v_cndmask_b32_e32 v0, v2, v1, vcc
+; VI-NEXT: v_sub_f16_sdwa v1, v3, v0 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:WORD_1 src1_sel:WORD_1
+; VI-NEXT: v_sub_f16_e32 v0, v3, v0
+; VI-NEXT: v_or_b32_e32 v0, v0, v1
+define <2 x half> @fadd_select_fneg_fneg_v2f16(i32 %arg0, <2 x half> %x, <2 x half> %y, <2 x half> %z) {
+  %cmp = icmp eq i32 %arg0, 0
+  %neg.x = fneg <2 x half> %x
+  %neg.y = fneg <2 x half> %y
+  %select = select i1 %cmp, <2 x half> %neg.x, <2 x half> %neg.y
+  %add = fadd <2 x half> %select, %z
+  ret <2 x half> %add
+}
+
+; FIXME: This fneg should fold into select
+; GCN-LABEL: {{^}}v_fneg_select_f32:
+; GCN: s_waitcnt
+; GCN-NEXT: v_cmp_eq_u32_e32 vcc, 0, v0
+; GCN-NEXT: v_cndmask_b32_e32 v0, v2, v1, vcc
+; GCN-NEXT: v_xor_b32_e32 v0, 0x80000000, v0
+; GCN-NEXT: s_setpc_b64
+define float @v_fneg_select_f32(i32 %arg0, float %a, float %b, float %c) {
+  %cond = icmp eq i32 %arg0, 0
+  %select = select i1 %cond, float %a, float %b
+  %fneg = fneg float %select
+  ret float %fneg
+}
+
+; FIXME: This fneg should fold into select
+; GCN-LABEL: {{^}}v_fneg_select_2_f32:
+; GCN: s_waitcnt
+; GCN-NSZ-NEXT: v_add_f32_e32 [[ADD2:v[0-9]+]], 2.0, v1
+; GCN-NSZ-NEXT: v_add_f32_e32 [[ADD4:v[0-9]+]], 4.0, v2
+; GCN-NSZ-NEXT: v_cmp_eq_u32_e32 vcc, 0, v0
+; GCN-NSZ-NEXT: v_cndmask_b32_e32 v0, [[ADD4]], [[ADD2]], vcc
+; GCN-NSZ-NEXT: v_xor_b32_e32 v0, 0x80000000, v0
+
+; GCN-SAFE-NEXT: v_add_f32_e32 [[ADD2:v[0-9]+]], 2.0, v1
+; GCN-SAFE-NEXT: v_add_f32_e32 [[ADD4:v[0-9]+]], 4.0, v2
+; GCN-SAFE-NEXT: v_cmp_eq_u32_e32 vcc, 0, v0
+; GCN-SAFE-NEXT: v_cndmask_b32_e32 v0, [[ADD4]], [[ADD2]], vcc
+; GCN-SAFE-NEXT: v_xor_b32_e32 v0, 0x80000000, v0
+
+; GCN-NEXT: s_setpc_b64
+define float @v_fneg_select_2_f32(i32 %arg0, float %a, float %b, float %c) {
+  %cond = icmp eq i32 %arg0, 0
+  %add.0 = fadd float %a, 2.0
+  %add.1 = fadd float %b, 4.0
+  %select = select i1 %cond, float %add.0, float %add.1
+  %neg.select = fneg float %select
+  ret float %neg.select
+}
+
+; GCN-LABEL: {{^}}v_fneg_posk_select_f32:
+; GCN: v_cmp_ne_u32_e32 vcc, 0, v0
+; GCN-NEXT: v_cndmask_b32_e32 v{{[0-9]+}}, 4.0, v{{[0-9]+}}, vcc
+; GCN-NEXT: v_xor_b32_e32 v0, 0x80000000, v0
+define amdgpu_kernel void @v_fneg_posk_select_f32(ptr addrspace(1) %out, ptr addrspace(1) %a.ptr) {
+  %tid = call i32 @llvm.amdgcn.workitem.id.x()
+  %tid.ext = sext i32 %tid to i64
+  %a.gep = getelementptr inbounds float, ptr addrspace(1) %a.ptr, i64 %tid.ext
+  %out.gep = getelementptr inbounds float, ptr addrspace(1) %out, i64 %tid.ext
+  %a = load volatile float, ptr addrspace(1) %a.gep
+  %cond = icmp eq i32 %tid, 0
+  %select = select i1 %cond, float 4.0, float %a
+  %fneg = fneg float %select
+  store float %fneg, ptr addrspace(1) %out.gep
+  ret void
+}
+
+; GCN-LABEL: {{^}}v_fneg_negk_select_f32:
+; GCN: v_cmp_ne_u32_e32 vcc, 0, v0
+; GCN-NEXT: v_cndmask_b32_e32 v{{[0-9]+}}, -4.0, v{{[0-9]+}}, vcc
+; GCN-NEXT: v_xor_b32_e32 v0, 0x80000000, v0
+define amdgpu_kernel void @v_fneg_negk_select_f32(ptr addrspace(1) %out, ptr addrspace(1) %a.ptr) {
+  %tid = call i32 @llvm.amdgcn.workitem.id.x()
+  %tid.ext = sext i32 %tid to i64
+  %a.gep = getelementptr inbounds float, ptr addrspace(1) %a.ptr, i64 %tid.ext
+  %out.gep = getelementptr inbounds float, ptr addrspace(1) %out, i64 %tid.ext
+  %a = load volatile float, ptr addrspace(1) %a.gep
+  %cond = icmp eq i32 %tid, 0
+  %select = select i1 %cond, float -4.0, float %a
+  %fneg = fneg float %select
+  store float %fneg, ptr addrspace(1) %out.gep
+  ret void
 }
 
 declare i32 @llvm.amdgcn.workitem.id.x() #1

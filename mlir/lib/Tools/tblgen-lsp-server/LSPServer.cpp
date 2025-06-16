@@ -8,12 +8,13 @@
 
 #include "LSPServer.h"
 
-#include "../lsp-server-support/Logging.h"
-#include "../lsp-server-support/Protocol.h"
-#include "../lsp-server-support/Transport.h"
 #include "TableGenServer.h"
+#include "mlir/Tools/lsp-server-support/Logging.h"
+#include "mlir/Tools/lsp-server-support/Protocol.h"
+#include "mlir/Tools/lsp-server-support/Transport.h"
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::lsp;
@@ -81,6 +82,7 @@ struct LSPServer {
 
 //===----------------------------------------------------------------------===//
 // Initialization
+//===----------------------------------------------------------------------===//
 
 void LSPServer::onInitialize(const InitializeParams &params,
                              Callback<llvm::json::Value> reply) {
@@ -115,6 +117,7 @@ void LSPServer::onShutdown(const NoParams &, Callback<std::nullptr_t> reply) {
 
 //===----------------------------------------------------------------------===//
 // Document Change
+//===----------------------------------------------------------------------===//
 
 void LSPServer::onDocumentDidOpen(const DidOpenTextDocumentParams &params) {
   PublishDiagnosticsParams diagParams(params.textDocument.uri,
@@ -126,7 +129,8 @@ void LSPServer::onDocumentDidOpen(const DidOpenTextDocumentParams &params) {
   publishDiagnostics(diagParams);
 }
 void LSPServer::onDocumentDidClose(const DidCloseTextDocumentParams &params) {
-  Optional<int64_t> version = server.removeDocument(params.textDocument.uri);
+  std::optional<int64_t> version =
+      server.removeDocument(params.textDocument.uri);
   if (!version)
     return;
 
@@ -148,6 +152,7 @@ void LSPServer::onDocumentDidChange(const DidChangeTextDocumentParams &params) {
 
 //===----------------------------------------------------------------------===//
 // Definitions and References
+//===----------------------------------------------------------------------===//
 
 void LSPServer::onGoToDefinition(const TextDocumentPositionParams &params,
                                  Callback<std::vector<Location>> reply) {
@@ -165,6 +170,7 @@ void LSPServer::onReference(const ReferenceParams &params,
 
 //===----------------------------------------------------------------------===//
 // DocumentLink
+//===----------------------------------------------------------------------===//
 
 void LSPServer::onDocumentLink(const DocumentLinkParams &params,
                                Callback<std::vector<DocumentLink>> reply) {
@@ -175,6 +181,7 @@ void LSPServer::onDocumentLink(const DocumentLinkParams &params,
 
 //===----------------------------------------------------------------------===//
 // Hover
+//===----------------------------------------------------------------------===//
 
 void LSPServer::onHover(const TextDocumentPositionParams &params,
                         Callback<std::optional<Hover>> reply) {

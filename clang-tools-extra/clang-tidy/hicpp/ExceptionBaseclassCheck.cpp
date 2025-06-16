@@ -12,9 +12,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace hicpp {
+namespace clang::tidy::hicpp {
 
 void ExceptionBaseclassCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(
@@ -26,14 +24,12 @@ void ExceptionBaseclassCheck::registerMatchers(MatchFinder *Finder) {
                   isSameOrDerivedFrom(hasName("::std::exception")))))))))),
           // This condition is always true, but will bind to the
           // template value if the thrown type is templated.
-          anyOf(has(expr(
-                    hasType(substTemplateTypeParmType().bind("templ_type")))),
-                anything()),
+          optionally(has(
+              expr(hasType(substTemplateTypeParmType().bind("templ_type"))))),
           // Bind to the declaration of the type of the value that
-          // is thrown. 'anything()' is necessary to always succeed
-          // in the 'eachOf' because builtin types are not
-          // 'namedDecl'.
-          eachOf(has(expr(hasType(namedDecl().bind("decl")))), anything()))
+          // is thrown. 'optionally' is necessary because builtin types
+          // are not 'namedDecl'.
+          optionally(has(expr(hasType(namedDecl().bind("decl"))))))
           .bind("bad_throw"),
       this);
 }
@@ -58,6 +54,4 @@ void ExceptionBaseclassCheck::check(const MatchFinder::MatchResult &Result) {
     diag(TypeDecl->getBeginLoc(), "type defined here", DiagnosticIDs::Note);
 }
 
-} // namespace hicpp
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::hicpp

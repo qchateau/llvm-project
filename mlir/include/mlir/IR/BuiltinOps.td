@@ -78,6 +78,7 @@ def ModuleOp : Builtin_Op<"module", [
     //===------------------------------------------------------------------===//
 
     DataLayoutSpecInterface getDataLayoutSpec();
+    TargetSystemSpecInterface getTargetSystemSpec();
 
     //===------------------------------------------------------------------===//
     // OpAsmOpInterface Methods
@@ -99,7 +100,7 @@ def ModuleOp : Builtin_Op<"module", [
 //===----------------------------------------------------------------------===//
 
 def UnrealizedConversionCastOp : Builtin_Op<"unrealized_conversion_cast", [
-    DeclareOpInterfaceMethods<CastOpInterface>, Pure
+    Pure
   ]> {
   let summary = "An unrealized conversion from one set of types to another";
   let description = [{
@@ -141,6 +142,7 @@ def UnrealizedConversionCastOp : Builtin_Op<"unrealized_conversion_cast", [
     ($inputs^ `:` type($inputs))? `to` type($outputs) attr-dict
   }];
   let hasFolder = 1;
+  let hasVerifier = 1;
 }
 
 #endif // BUILTIN_OPS

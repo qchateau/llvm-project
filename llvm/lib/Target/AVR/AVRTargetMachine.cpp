@@ -14,11 +14,10 @@
 
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
 
 #include "AVR.h"
+#include "AVRMachineFunctionInfo.h"
 #include "AVRTargetObjectFile.h"
 #include "MCTargetDesc/AVRMCTargetDesc.h"
 #include "TargetInfo/AVRTargetInfo.h"
@@ -48,10 +47,10 @@ AVRTargetMachine::AVRTargetMachine(const Target &T, const Triple &TT,
                                    const TargetOptions &Options,
                                    std::optional<Reloc::Model> RM,
                                    std::optional<CodeModel::Model> CM,
-                                   CodeGenOpt::Level OL, bool JIT)
-    : LLVMTargetMachine(T, AVRDataLayout, TT, getCPU(CPU), FS, Options,
-                        getEffectiveRelocModel(RM),
-                        getEffectiveCodeModel(CM, CodeModel::Small), OL),
+                                   CodeGenOptLevel OL, bool JIT)
+    : CodeGenTargetMachineImpl(T, AVRDataLayout, TT, getCPU(CPU), FS, Options,
+                               getEffectiveRelocModel(RM),
+                               getEffectiveCodeModel(CM, CodeModel::Small), OL),
       SubTarget(TT, std::string(getCPU(CPU)), std::string(FS), *this) {
   this->TLOF = std::make_unique<AVRTargetObjectFile>();
   initAsmInfo();
@@ -93,8 +92,10 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAVRTarget() {
   RegisterTargetMachine<AVRTargetMachine> X(getTheAVRTarget());
 
   auto &PR = *PassRegistry::getPassRegistry();
+  initializeAVRAsmPrinterPass(PR);
   initializeAVRExpandPseudoPass(PR);
   initializeAVRShiftExpandPass(PR);
+  initializeAVRDAGToDAGISelLegacyPass(PR);
 }
 
 const AVRSubtarget *AVRTargetMachine::getSubtargetImpl() const {
@@ -103,6 +104,13 @@ const AVRSubtarget *AVRTargetMachine::getSubtargetImpl() const {
 
 const AVRSubtarget *AVRTargetMachine::getSubtargetImpl(const Function &) const {
   return &SubTarget;
+}
+
+MachineFunctionInfo *AVRTargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return AVRMachineFunctionInfo::create<AVRMachineFunctionInfo>(Allocator, F,
+                                                                STI);
 }
 
 //===----------------------------------------------------------------------===//
@@ -118,9 +126,7 @@ bool AVRPassConfig::addInstSelector() {
   return false;
 }
 
-void AVRPassConfig::addPreSched2() {
-  addPass(createAVRExpandPseudoPass());
-}
+void AVRPassConfig::addPreSched2() { addPass(createAVRExpandPseudoPass()); }
 
 void AVRPassConfig::addPreEmitPass() {
   // Must run branch selection immediately preceding the asm printer.

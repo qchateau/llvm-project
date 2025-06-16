@@ -11,7 +11,6 @@
 #include "../utils/OptionsUtils.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
-#include "clang/Frontend/CompilerInstance.h"
 #include "clang/Tooling/Transformer/RewriteRule.h"
 #include "clang/Tooling/Transformer/Stencil.h"
 
@@ -20,9 +19,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace abseil {
+namespace clang::tidy::abseil {
 
 using ::clang::transformer::addInclude;
 using ::clang::transformer::applyFirst;
@@ -32,7 +29,9 @@ using ::clang::transformer::makeRule;
 using ::clang::transformer::node;
 using ::clang::transformer::RewriteRuleWith;
 
+namespace {
 AST_MATCHER(Type, isCharType) { return Node.isCharType(); }
+} // namespace
 
 static const char DefaultStringLikeClasses[] = "::std::basic_string;"
                                                "::std::basic_string_view;"
@@ -107,6 +106,4 @@ void StringFindStrContainsCheck::storeOptions(
                 AbseilStringsMatchHeaderOption);
 }
 
-} // namespace abseil
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::abseil

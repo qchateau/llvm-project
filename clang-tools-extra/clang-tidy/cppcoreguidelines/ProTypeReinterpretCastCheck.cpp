@@ -7,14 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "ProTypeReinterpretCastCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace cppcoreguidelines {
+namespace clang::tidy::cppcoreguidelines {
 
 void ProTypeReinterpretCastCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(cxxReinterpretCastExpr().bind("cast"), this);
@@ -27,6 +24,4 @@ void ProTypeReinterpretCastCheck::check(
   diag(MatchedCast->getOperatorLoc(), "do not use reinterpret_cast");
 }
 
-} // namespace cppcoreguidelines
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::cppcoreguidelines

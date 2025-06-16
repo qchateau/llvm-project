@@ -1,4 +1,4 @@
-; RUN: opt -passes=redundant-dbg-inst-elim -S %s -o - -experimental-assignment-tracking \
+; RUN: opt -passes=redundant-dbg-inst-elim -S %s -o - \
 ; RUN: | FileCheck %s --implicit-check-not="call void @llvm.dbg"
 
 ;; Hand-written. Test how RemoveRedundantDbgInstrs interacts with dbg.assign
@@ -11,7 +11,7 @@ entry:
 ;; Forward scan: This dbg.assign for Local2 contains an undef value component
 ;; in the entry block and is the first debug intrinsic for the variable, but is
 ;; linked to an instruction so should not be deleted.
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i1 undef, metadata ![[Local2:[0-9]+]]
+; CHECK-NEXT: #dbg_assign(i1 undef, ![[Local2:[0-9]+]]
   call void @llvm.dbg.assign(metadata i1 undef, metadata !19, metadata !DIExpression(), metadata !20, metadata ptr %test, metadata !DIExpression()), !dbg !14
 
 ;; Forward scan: dbg.assign for Local unlinked with undef value component, in
@@ -27,7 +27,7 @@ entry:
 
 ;; Backward scan: Check that a dbg.value made redundant by a dbg.assign is
 ;; removed.
-;; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 1, metadata ![[Local:[0-9]+]]
+;; CHECK-NEXT: #dbg_assign(i32 1, ![[Local:[0-9]+]]
 ;; CHECK-NEXT: @step()
   call void @llvm.dbg.value(metadata i32 0, metadata !11, metadata !DIExpression()), !dbg !14
   call void @llvm.dbg.assign(metadata i32 1, metadata !11, metadata !DIExpression(), metadata !15, metadata ptr undef, metadata !DIExpression()), !dbg !14
@@ -35,7 +35,7 @@ entry:
 
 ;; Backward scan: Check that a dbg.assign made redundant by a dbg.value is
 ;; removed.
-;; CHECK-NEXT: call void @llvm.dbg.value(metadata i32 3, metadata ![[Local:[0-9]+]]
+;; CHECK-NEXT: #dbg_value(i32 3, ![[Local:[0-9]+]]
 ;; CHECK-NEXT: @step()
   call void @llvm.dbg.assign(metadata i32 2, metadata !11, metadata !DIExpression(), metadata !15, metadata ptr undef, metadata !DIExpression()), !dbg !14
   call void @llvm.dbg.value(metadata i32 3, metadata !11, metadata !DIExpression()), !dbg !14
@@ -55,13 +55,13 @@ entry:
 
 ;; Forward scan: We've seen non-undef dbg intrinsics for Local in the entry
 ;; block so we shouldn't delete this undef.
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 undef, metadata ![[Local]]
+; CHECK-NEXT: #dbg_assign(i32 undef, ![[Local]]
   call void @llvm.dbg.assign(metadata i32 undef, metadata !11, metadata !DIExpression(), metadata !15, metadata ptr undef, metadata !DIExpression()), !dbg !14
   br label %next
 
 next:
 ;; Forward scan: Do not delete undef dbg.assigns from non-entry blocks.
-; CHECK: call void @llvm.dbg.assign(metadata i32 undef, metadata ![[Local2]]
+; CHECK: #dbg_assign(i32 undef, ![[Local2]]
 ; CHECK-NEXT: @step()
   call void @llvm.dbg.assign(metadata i32 undef, metadata !19, metadata !DIExpression(), metadata !21, metadata ptr %test, metadata !DIExpression()), !dbg !14
   call void @step()
@@ -71,11 +71,11 @@ next:
 ;; isn't removed.
 ;; Backward scan: It (the next dbg.assign) is also followed by another for the
 ;; same variable - check it isn't remove (because it's linked).
-; CHECK-NEXT: call void @llvm.dbg.value(metadata i32 0, metadata ![[Local2]]
+; CHECK-NEXT: #dbg_value(i32 0, ![[Local2]]
 ; CHECK-NEXT: store
 ; CHECK-NEXT: store
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 0, metadata ![[Local2]]
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 1, metadata ![[Local2]]
+; CHECK-NEXT: #dbg_assign(i32 0, ![[Local2]]
+; CHECK-NEXT: #dbg_assign(i32 1, ![[Local2]]
   call void @llvm.dbg.value(metadata i32 0, metadata !19, metadata !DIExpression()), !dbg !14
   store i32 0, ptr %test, !DIAssignID !17
   store i32 1, ptr %test, !DIAssignID !16
@@ -92,7 +92,7 @@ declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, 
 declare void @llvm.dbg.value(metadata, metadata, metadata)
 
 !llvm.dbg.cu = !{!0}
-!llvm.module.flags = !{!2, !3, !4, !5}
+!llvm.module.flags = !{!2, !3, !4, !5, !1000}
 !llvm.ident = !{!6}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 14.0.0", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
@@ -117,3 +117,4 @@ declare void @llvm.dbg.value(metadata, metadata, metadata)
 !19 = !DILocalVariable(name: "Local2", scope: !7, file: !1, line: 2, type: !12)
 !20 = distinct !DIAssignID()
 !21 = distinct !DIAssignID()
+!1000 = !{i32 7, !"debug-info-assignment-tracking", i1 true}

@@ -14,9 +14,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 namespace {
 AST_MATCHER(CXXMethodDecl, isStatic) { return Node.isStatic(); }
@@ -114,7 +112,7 @@ static bool checkOverridingFunctionReturnType(const ASTContext *Context,
 
   // The class type D should have the same cv-qualification as or less
   // cv-qualification than the class type B.
-  if (DTy.isMoreQualifiedThan(BTy))
+  if (DTy.isMoreQualifiedThan(BTy, *Context))
     return false;
 
   return true;
@@ -181,15 +179,15 @@ static bool checkOverrideByDerivedMethod(const CXXMethodDecl *BaseMD,
 
 bool VirtualNearMissCheck::isPossibleToBeOverridden(
     const CXXMethodDecl *BaseMD) {
-  auto Iter = PossibleMap.find(BaseMD);
-  if (Iter != PossibleMap.end())
+  auto [Iter, Inserted] = PossibleMap.try_emplace(BaseMD);
+  if (!Inserted)
     return Iter->second;
 
   bool IsPossible = !BaseMD->isImplicit() && !isa<CXXConstructorDecl>(BaseMD) &&
                     !isa<CXXDestructorDecl>(BaseMD) && BaseMD->isVirtual() &&
                     !BaseMD->isOverloadedOperator() &&
                     !isa<CXXConversionDecl>(BaseMD);
-  PossibleMap[BaseMD] = IsPossible;
+  Iter->second = IsPossible;
   return IsPossible;
 }
 
@@ -267,6 +265,4 @@ void VirtualNearMissCheck::check(const MatchFinder::MatchResult &Result) {
   }
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

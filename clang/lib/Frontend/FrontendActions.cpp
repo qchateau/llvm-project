@@ -26,13 +26,14 @@
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ASTWriter.h"
 #include "clang/Serialization/ModuleFile.h"
+#include "llvm/Config/llvm-config.h" // for LLVM_HOST_TRIPLE
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/YAMLTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
+#include <optional>
 #include <system_error>
 
 using namespace clang;
@@ -140,7 +141,8 @@ GeneratePCHAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
       CI.getPreprocessor(), CI.getModuleCache(), OutputFile, Sysroot, Buffer,
       FrontendOpts.ModuleFileExtensions,
       CI.getPreprocessorOpts().AllowPCHWithCompilerErrors,
-      FrontendOpts.IncludeTimestamps, +CI.getLangOpts().CacheGeneratedPCH));
+      FrontendOpts.IncludeTimestamps, FrontendOpts.BuildingImplicitModule,
+      +CI.getLangOpts().CacheGeneratedPCH));
   Consumers.push_back(CI.getPCHContainerWriter().CreatePCHContainerGenerator(
       CI, std::string(InFile), OutputFile, std::move(OS), Buffer));
 
@@ -182,12 +184,12 @@ bool GeneratePCHAction::BeginSourceFileAction(CompilerInstance &CI) {
   return true;
 }
 
-std::unique_ptr<ASTConsumer>
-GenerateModuleAction::CreateASTConsumer(CompilerInstance &CI,
-                                        StringRef InFile) {
+std::vector<std::unique_ptr<ASTConsumer>>
+GenerateModuleAction::CreateMultiplexConsumer(CompilerInstance &CI,
+                                              StringRef InFile) {
   std::unique_ptr<raw_pwrite_stream> OS = CreateOutputFile(CI, InFile);
   if (!OS)
-    return nullptr;
+    return {};
 
   std::string OutputFile = CI.getFrontendOpts().OutputFile;
   std::string Sysroot;
@@ -201,11 +203,24 @@ GenerateModuleAction::CreateASTConsumer(CompilerInstance &CI,
       /*AllowASTWithErrors=*/
       +CI.getFrontendOpts().AllowPCMWithCompilerErrors,
       /*IncludeTimestamps=*/
-      +CI.getFrontendOpts().BuildingImplicitModule,
+      +CI.getFrontendOpts().BuildingImplicitModule &&
+          +CI.getFrontendOpts().IncludeTimestamps,
+      /*BuildingImplicitModule=*/+CI.getFrontendOpts().BuildingImplicitModule,
       /*ShouldCacheASTInMemory=*/
       +CI.getFrontendOpts().BuildingImplicitModule));
   Consumers.push_back(CI.getPCHContainerWriter().CreatePCHContainerGenerator(
       CI, std::string(InFile), OutputFile, std::move(OS), Buffer));
+  return Consumers;
+}
+
+std::unique_ptr<ASTConsumer>
+GenerateModuleAction::CreateASTConsumer(CompilerInstance &CI,
+                                        StringRef InFile) {
+  std::vector<std::unique_ptr<ASTConsumer>> Consumers =
+      CreateMultiplexConsumer(CI, InFile);
+  if (Consumers.empty())
+    return nullptr;
+
   return std::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
@@ -247,22 +262,60 @@ GenerateModuleFromModuleMapAction::CreateOutputFile(CompilerInstance &CI,
                                     /*ForceUseTemporary=*/true);
 }
 
+bool GenerateModuleInterfaceAction::PrepareToExecuteAction(
+    CompilerInstance &CI) {
+  for (const auto &FIF : CI.getFrontendOpts().Inputs) {
+    if (const auto InputFormat = FIF.getKind().getFormat();
+        InputFormat != InputKind::Format::Source) {
+      CI.getDiagnostics().Report(
+          diag::err_frontend_action_unsupported_input_format)
+          << "module interface compilation" << FIF.getFile() << InputFormat;
+      return false;
+    }
+  }
+  return GenerateModuleAction::PrepareToExecuteAction(CI);
+}
+
 bool GenerateModuleInterfaceAction::BeginSourceFileAction(
     CompilerInstance &CI) {
-  if (!CI.getLangOpts().ModulesTS && !CI.getLangOpts().CPlusPlusModules) {
-    CI.getDiagnostics().Report(diag::err_module_interface_requires_cpp_modules);
-    return false;
-  }
-
   CI.getLangOpts().setCompilingModule(LangOptions::CMK_ModuleInterface);
 
   return GenerateModuleAction::BeginSourceFileAction(CI);
+}
+
+std::unique_ptr<ASTConsumer>
+GenerateModuleInterfaceAction::CreateASTConsumer(CompilerInstance &CI,
+                                                 StringRef InFile) {
+  std::vector<std::unique_ptr<ASTConsumer>> Consumers;
+
+  if (CI.getFrontendOpts().GenReducedBMI &&
+      !CI.getFrontendOpts().ModuleOutputPath.empty()) {
+    Consumers.push_back(std::make_unique<ReducedBMIGenerator>(
+        CI.getPreprocessor(), CI.getModuleCache(),
+        CI.getFrontendOpts().ModuleOutputPath,
+        +CI.getFrontendOpts().AllowPCMWithCompilerErrors));
+  }
+
+  Consumers.push_back(std::make_unique<CXX20ModulesGenerator>(
+      CI.getPreprocessor(), CI.getModuleCache(),
+      CI.getFrontendOpts().OutputFile,
+      +CI.getFrontendOpts().AllowPCMWithCompilerErrors));
+
+  return std::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
 std::unique_ptr<raw_pwrite_stream>
 GenerateModuleInterfaceAction::CreateOutputFile(CompilerInstance &CI,
                                                 StringRef InFile) {
   return CI.createDefaultOutputFile(/*Binary=*/true, InFile, "pcm");
+}
+
+std::unique_ptr<ASTConsumer>
+GenerateReducedModuleInterfaceAction::CreateASTConsumer(CompilerInstance &CI,
+                                                        StringRef InFile) {
+  return std::make_unique<ReducedBMIGenerator>(CI.getPreprocessor(),
+                                               CI.getModuleCache(),
+                                               CI.getFrontendOpts().OutputFile);
 }
 
 bool GenerateHeaderUnitAction::BeginSourceFileAction(CompilerInstance &CI) {
@@ -310,7 +363,7 @@ void VerifyPCHAction::ExecuteAction() {
       DisableValidationForModuleKind::None,
       /*AllowASTWithCompilerErrors*/ false,
       /*AllowConfigurationMismatch*/ true,
-      /*ValidateSystemInputs*/ true));
+      /*ValidateSystemInputs*/ true, /*ForceValidateUserInputs*/ true));
 
   Reader->ReadAST(getCurrentFile(),
                   Preamble ? serialization::MK_Preamble
@@ -375,6 +428,8 @@ private:
       return "ExplicitTemplateArgumentSubstitution";
     case CodeSynthesisContext::DeducedTemplateArgumentSubstitution:
       return "DeducedTemplateArgumentSubstitution";
+    case CodeSynthesisContext::LambdaExpressionSubstitution:
+      return "LambdaExpressionSubstitution";
     case CodeSynthesisContext::PriorTemplateArgumentSubstitution:
       return "PriorTemplateArgumentSubstitution";
     case CodeSynthesisContext::DefaultTemplateArgumentChecking:
@@ -413,6 +468,12 @@ private:
       return "MarkingClassDllexported";
     case CodeSynthesisContext::BuildingBuiltinDumpStructCall:
       return "BuildingBuiltinDumpStructCall";
+    case CodeSynthesisContext::BuildingDeductionGuides:
+      return "BuildingDeductionGuides";
+    case CodeSynthesisContext::TypeAliasTemplateInstantiation:
+      return "TypeAliasTemplateInstantiation";
+    case CodeSynthesisContext::PartialOrderingTTP:
+      return "PartialOrderingTTP";
     }
     return "";
   }
@@ -458,6 +519,8 @@ private:
       OS << "unnamed " << Decl->getKindName();
       return;
     }
+
+    assert(NamedCtx && "NamedCtx cannot be null");
 
     if (const auto *Decl = dyn_cast<ParmVarDecl>(NamedTemplate)) {
       OS << "unnamed function parameter " << Decl->getFunctionScopeIndex()
@@ -577,7 +640,8 @@ namespace {
       Out.indent(2) << "Module map file: " << ModuleMapPath << "\n";
     }
 
-    bool ReadLanguageOptions(const LangOptions &LangOpts, bool Complain,
+    bool ReadLanguageOptions(const LangOptions &LangOpts,
+                             StringRef ModuleFilename, bool Complain,
                              bool AllowCompatibleDifferences) override {
       Out.indent(2) << "Language options:\n";
 #define LANGOPT(Name, Bits, Default, Description) \
@@ -600,7 +664,8 @@ namespace {
       return false;
     }
 
-    bool ReadTargetOptions(const TargetOptions &TargetOpts, bool Complain,
+    bool ReadTargetOptions(const TargetOptions &TargetOpts,
+                           StringRef ModuleFilename, bool Complain,
                            bool AllowCompatibleDifferences) override {
       Out.indent(2) << "Target options:\n";
       Out.indent(4) << "  Triple: " << TargetOpts.Triple << "\n";
@@ -619,26 +684,28 @@ namespace {
       return false;
     }
 
-    bool ReadDiagnosticOptions(IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts,
+    bool ReadDiagnosticOptions(DiagnosticOptions &DiagOpts,
+                               StringRef ModuleFilename,
                                bool Complain) override {
       Out.indent(2) << "Diagnostic options:\n";
-#define DIAGOPT(Name, Bits, Default) DUMP_BOOLEAN(DiagOpts->Name, #Name);
-#define ENUM_DIAGOPT(Name, Type, Bits, Default) \
-      Out.indent(4) << #Name << ": " << DiagOpts->get##Name() << "\n";
-#define VALUE_DIAGOPT(Name, Bits, Default) \
-      Out.indent(4) << #Name << ": " << DiagOpts->Name << "\n";
+#define DIAGOPT(Name, Bits, Default) DUMP_BOOLEAN(DiagOpts.Name, #Name);
+#define ENUM_DIAGOPT(Name, Type, Bits, Default)                              \
+    Out.indent(4) << #Name << ": " << DiagOpts.get##Name() << "\n";
+#define VALUE_DIAGOPT(Name, Bits, Default)                                   \
+    Out.indent(4) << #Name << ": " << DiagOpts.Name << "\n";
 #include "clang/Basic/DiagnosticOptions.def"
 
       Out.indent(4) << "Diagnostic flags:\n";
-      for (const std::string &Warning : DiagOpts->Warnings)
+      for (const std::string &Warning : DiagOpts.Warnings)
         Out.indent(6) << "-W" << Warning << "\n";
-      for (const std::string &Remark : DiagOpts->Remarks)
+      for (const std::string &Remark : DiagOpts.Remarks)
         Out.indent(6) << "-R" << Remark << "\n";
 
       return false;
     }
 
     bool ReadHeaderSearchOptions(const HeaderSearchOptions &HSOpts,
+                                 StringRef ModuleFilename,
                                  StringRef SpecificModuleCachePath,
                                  bool Complain) override {
       Out.indent(2) << "Header search options:\n";
@@ -656,7 +723,23 @@ namespace {
       return false;
     }
 
+    bool ReadHeaderSearchPaths(const HeaderSearchOptions &HSOpts,
+                               bool Complain) override {
+      Out.indent(2) << "Header search paths:\n";
+      Out.indent(4) << "User entries:\n";
+      for (const auto &Entry : HSOpts.UserEntries)
+        Out.indent(6) << Entry.Path << "\n";
+      Out.indent(4) << "System header prefixes:\n";
+      for (const auto &Prefix : HSOpts.SystemHeaderPrefixes)
+        Out.indent(6) << Prefix.Prefix << "\n";
+      Out.indent(4) << "VFS overlay files:\n";
+      for (const auto &Overlay : HSOpts.VFSOverlayFiles)
+        Out.indent(6) << Overlay << "\n";
+      return false;
+    }
+
     bool ReadPreprocessorOptions(const PreprocessorOptions &PPOpts,
+                                 StringRef ModuleFilename, bool ReadMacros,
                                  bool Complain,
                                  std::string &SuggestedPredefines) override {
       Out.indent(2) << "Preprocessor options:\n";
@@ -665,7 +748,7 @@ namespace {
       DUMP_BOOLEAN(PPOpts.DetailedRecord,
                    "Uses detailed preprocessing record (for indexing)");
 
-      if (!PPOpts.Macros.empty()) {
+      if (ReadMacros) {
         Out.indent(4) << "Predefined macros:\n";
       }
 
@@ -707,10 +790,11 @@ namespace {
     /// Indicates that the AST file contains particular input file.
     ///
     /// \returns true to continue receiving the next input file, false to stop.
-    bool visitInputFile(StringRef Filename, bool isSystem,
-                        bool isOverridden, bool isExplicitModule) override {
+    bool visitInputFile(StringRef FilenameAsRequested, StringRef Filename,
+                        bool isSystem, bool isOverridden,
+                        bool isExplicitModule) override {
 
-      Out.indent(2) << "Input file: " << Filename;
+      Out.indent(2) << "Input file: " << FilenameAsRequested;
 
       if (isSystem || isOverridden || isExplicitModule) {
         Out << " [";
@@ -762,14 +846,18 @@ static StringRef ModuleKindName(Module::ModuleKind MK) {
     return "Module Map Module";
   case Module::ModuleInterfaceUnit:
     return "Interface Unit";
+  case Module::ModuleImplementationUnit:
+    return "Implementation Unit";
   case Module::ModulePartitionInterface:
     return "Partition Interface";
   case Module::ModulePartitionImplementation:
     return "Partition Implementation";
   case Module::ModuleHeaderUnit:
     return "Header Unit";
-  case Module::GlobalModuleFragment:
+  case Module::ExplicitGlobalModuleFragment:
     return "Global Module Fragment";
+  case Module::ImplicitGlobalModuleFragment:
+    return "Implicit Module Fragment";
   case Module::PrivateModuleFragment:
     return "Private Module Fragment";
   }
@@ -777,16 +865,21 @@ static StringRef ModuleKindName(Module::ModuleKind MK) {
 }
 
 void DumpModuleInfoAction::ExecuteAction() {
-  assert(isCurrentFileAST() && "dumping non-AST?");
-  // Set up the output file.
-  std::unique_ptr<llvm::raw_fd_ostream> OutFile;
   CompilerInstance &CI = getCompilerInstance();
+
+  // Don't process files of type other than module to avoid crash
+  if (!isCurrentFileAST()) {
+    CI.getDiagnostics().Report(diag::err_file_is_not_module)
+        << getCurrentFile();
+    return;
+  }
+
+  // Set up the output file.
   StringRef OutputFileName = CI.getFrontendOpts().OutputFile;
   if (!OutputFileName.empty() && OutputFileName != "-") {
     std::error_code EC;
-    OutFile.reset(new llvm::raw_fd_ostream(OutputFileName.str(), EC,
-                                           llvm::sys::fs::OF_TextWithCRLF));
-    OutputStream = OutFile.get();
+    OutputStream.reset(new llvm::raw_fd_ostream(
+        OutputFileName.str(), EC, llvm::sys::fs::OF_TextWithCRLF));
   }
   llvm::raw_ostream &Out = OutputStream ? *OutputStream : llvm::outs();
 
@@ -794,13 +887,13 @@ void DumpModuleInfoAction::ExecuteAction() {
   auto &FileMgr = CI.getFileManager();
   auto Buffer = FileMgr.getBufferForFile(getCurrentFile());
   StringRef Magic = (*Buffer)->getMemBufferRef().getBuffer();
-  bool IsRaw = (Magic.size() >= 4 && Magic[0] == 'C' && Magic[1] == 'P' &&
-                Magic[2] == 'C' && Magic[3] == 'H');
+  bool IsRaw = Magic.starts_with("CPCH");
   Out << "  Module format: " << (IsRaw ? "raw" : "obj") << "\n";
 
   Preprocessor &PP = CI.getPreprocessor();
   DumpModuleInfoListener Listener(Out);
-  HeaderSearchOptions &HSOpts = PP.getHeaderSearchInfo().getHeaderSearchOpts();
+  const HeaderSearchOptions &HSOpts =
+      PP.getHeaderSearchInfo().getHeaderSearchOpts();
 
   // The FrontendAction::BeginSourceFile () method loads the AST so that much
   // of the information is already available and modules should have been
@@ -808,7 +901,6 @@ void DumpModuleInfoAction::ExecuteAction() {
 
   const LangOptions &LO = getCurrentASTUnit().getLangOpts();
   if (LO.CPlusPlusModules && !LO.CurrentModule.empty()) {
-
     ASTReader *R = getCurrentASTUnit().getASTReader().get();
     unsigned SubModuleCount = R->getTotalNumSubmodules();
     serialization::ModuleFile &MF = R->getModuleManager().getPrimaryModule();
@@ -883,7 +975,7 @@ void DumpModuleInfoAction::ExecuteAction() {
     }
 
     // Now let's print out any modules we did not see as part of the Primary.
-    for (auto SM : SubModMap) {
+    for (const auto &SM : SubModMap) {
       if (!SM.second.Seen && SM.second.Mod) {
         Out << "  " << ModuleKindName(SM.second.Kind) << " '" << SM.first
             << "' at index #" << SM.second.Idx
@@ -970,7 +1062,7 @@ void PrintPreprocessedAction::ExecuteAction() {
   if (llvm::Triple(LLVM_HOST_TRIPLE).isOSWindows()) {
     BinaryMode = true;
     const SourceManager &SM = CI.getSourceManager();
-    if (llvm::Optional<llvm::MemoryBufferRef> Buffer =
+    if (std::optional<llvm::MemoryBufferRef> Buffer =
             SM.getBufferOrNone(SM.getMainFileID())) {
       const char *cur = Buffer->getBufferStart();
       const char *end = Buffer->getBufferEnd();
@@ -1029,12 +1121,12 @@ void PrintPreambleAction::ExecuteAction() {
   case Language::CUDA:
   case Language::HIP:
   case Language::HLSL:
+  case Language::CIR:
     break;
 
   case Language::Unknown:
   case Language::Asm:
   case Language::LLVM_IR:
-  case Language::RenderScript:
     // We can't do anything with these.
     return;
   }
@@ -1137,9 +1229,9 @@ void GetDependenciesByModuleNameAction::ExecuteAction() {
   SourceManager &SM = PP.getSourceManager();
   FileID MainFileID = SM.getMainFileID();
   SourceLocation FileStart = SM.getLocForStartOfFile(MainFileID);
-  SmallVector<std::pair<IdentifierInfo *, SourceLocation>, 2> Path;
+  SmallVector<IdentifierLoc, 2> Path;
   IdentifierInfo *ModuleID = PP.getIdentifierInfo(ModuleName);
-  Path.push_back(std::make_pair(ModuleID, FileStart));
+  Path.emplace_back(FileStart, ModuleID);
   auto ModResult = CI.loadModule(FileStart, Path, Module::Hidden, false);
   PPCallbacks *CB = PP.getPPCallbacks();
   CB->moduleImport(SourceLocation(), Path, ModResult);

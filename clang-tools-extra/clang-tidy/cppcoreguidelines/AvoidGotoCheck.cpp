@@ -7,14 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "AvoidGotoCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace cppcoreguidelines {
+namespace clang::tidy::cppcoreguidelines {
 
 namespace {
 AST_MATCHER(GotoStmt, isForwardJumping) {
@@ -46,6 +43,4 @@ void AvoidGotoCheck::check(const MatchFinder::MatchResult &Result) {
   diag(Goto->getLabel()->getBeginLoc(), "label defined here",
        DiagnosticIDs::Note);
 }
-} // namespace cppcoreguidelines
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::cppcoreguidelines

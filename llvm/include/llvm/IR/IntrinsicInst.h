@@ -33,6 +33,8 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/MathExtras.h"
 #include <cassert>
 #include <cstdint>
 #include <optional>
@@ -55,6 +57,18 @@ public:
     return getCalledFunction()->getIntrinsicID();
   }
 
+  bool isAssociative() const {
+    switch (getIntrinsicID()) {
+    case Intrinsic::smax:
+    case Intrinsic::smin:
+    case Intrinsic::umax:
+    case Intrinsic::umin:
+      return true;
+    default:
+      return false;
+    }
+  }
+
   /// Return true if swapping the first two arguments to the intrinsic produces
   /// the same result.
   bool isCommutative() const {
@@ -63,6 +77,8 @@ public:
     case Intrinsic::minnum:
     case Intrinsic::maximum:
     case Intrinsic::minimum:
+    case Intrinsic::maximumnum:
+    case Intrinsic::minimumnum:
     case Intrinsic::smax:
     case Intrinsic::smin:
     case Intrinsic::umax:
@@ -111,7 +127,7 @@ public:
 
   /// Check if the intrinsic might lower into a regular function call in the
   /// course of IR transformations
-  static bool mayLowerToFunctionCall(Intrinsic::ID IID);
+  LLVM_ABI static bool mayLowerToFunctionCall(Intrinsic::ID IID);
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const CallInst *I) {
@@ -154,7 +170,6 @@ static inline bool isDbgInfoIntrinsic(Intrinsic::ID ID) {
   switch (ID) {
   case Intrinsic::dbg_declare:
   case Intrinsic::dbg_value:
-  case Intrinsic::dbg_addr:
   case Intrinsic::dbg_label:
   case Intrinsic::dbg_assign:
     return true;
@@ -177,71 +192,137 @@ public:
   /// @}
 };
 
-/// This is the common base class for debug info intrinsics for variables.
-class DbgVariableIntrinsic : public DbgInfoIntrinsic {
+// Iterator for ValueAsMetadata that internally uses direct pointer iteration
+// over either a ValueAsMetadata* or a ValueAsMetadata**, dereferencing to the
+// ValueAsMetadata .
+class location_op_iterator
+    : public iterator_facade_base<location_op_iterator,
+                                  std::bidirectional_iterator_tag, Value *> {
+  PointerUnion<ValueAsMetadata *, ValueAsMetadata **> I;
+
 public:
-  // Iterator for ValueAsMetadata that internally uses direct pointer iteration
-  // over either a ValueAsMetadata* or a ValueAsMetadata**, dereferencing to the
-  // ValueAsMetadata .
-  class location_op_iterator
-      : public iterator_facade_base<location_op_iterator,
-                                    std::bidirectional_iterator_tag, Value *> {
-    PointerUnion<ValueAsMetadata *, ValueAsMetadata **> I;
+  location_op_iterator(ValueAsMetadata *SingleIter) : I(SingleIter) {}
+  location_op_iterator(ValueAsMetadata **MultiIter) : I(MultiIter) {}
 
-  public:
-    location_op_iterator(ValueAsMetadata *SingleIter) : I(SingleIter) {}
-    location_op_iterator(ValueAsMetadata **MultiIter) : I(MultiIter) {}
-
-    location_op_iterator(const location_op_iterator &R) : I(R.I) {}
-    location_op_iterator &operator=(const location_op_iterator &R) {
-      I = R.I;
-      return *this;
-    }
-    bool operator==(const location_op_iterator &RHS) const {
-      return I == RHS.I;
-    }
-    const Value *operator*() const {
-      ValueAsMetadata *VAM = I.is<ValueAsMetadata *>()
-                                 ? I.get<ValueAsMetadata *>()
-                                 : *I.get<ValueAsMetadata **>();
-      return VAM->getValue();
-    };
-    Value *operator*() {
-      ValueAsMetadata *VAM = I.is<ValueAsMetadata *>()
-                                 ? I.get<ValueAsMetadata *>()
-                                 : *I.get<ValueAsMetadata **>();
-      return VAM->getValue();
-    }
-    location_op_iterator &operator++() {
-      if (I.is<ValueAsMetadata *>())
-        I = I.get<ValueAsMetadata *>() + 1;
-      else
-        I = I.get<ValueAsMetadata **>() + 1;
-      return *this;
-    }
-    location_op_iterator &operator--() {
-      if (I.is<ValueAsMetadata *>())
-        I = I.get<ValueAsMetadata *>() - 1;
-      else
-        I = I.get<ValueAsMetadata **>() - 1;
-      return *this;
-    }
+  location_op_iterator(const location_op_iterator &R) : I(R.I) {}
+  location_op_iterator &operator=(const location_op_iterator &R) {
+    I = R.I;
+    return *this;
+  }
+  bool operator==(const location_op_iterator &RHS) const { return I == RHS.I; }
+  const Value *operator*() const {
+    ValueAsMetadata *VAM = isa<ValueAsMetadata *>(I)
+                               ? cast<ValueAsMetadata *>(I)
+                               : *cast<ValueAsMetadata **>(I);
+    return VAM->getValue();
   };
+  Value *operator*() {
+    ValueAsMetadata *VAM = isa<ValueAsMetadata *>(I)
+                               ? cast<ValueAsMetadata *>(I)
+                               : *cast<ValueAsMetadata **>(I);
+    return VAM->getValue();
+  }
+  location_op_iterator &operator++() {
+    if (isa<ValueAsMetadata *>(I))
+      I = cast<ValueAsMetadata *>(I) + 1;
+    else
+      I = cast<ValueAsMetadata **>(I) + 1;
+    return *this;
+  }
+  location_op_iterator &operator--() {
+    if (isa<ValueAsMetadata *>(I))
+      I = cast<ValueAsMetadata *>(I) - 1;
+    else
+      I = cast<ValueAsMetadata **>(I) - 1;
+    return *this;
+  }
+};
 
+/// Lightweight class that wraps the location operand metadata of a debug
+/// intrinsic. The raw location may be a ValueAsMetadata, an empty MDTuple,
+/// or a DIArgList.
+class RawLocationWrapper {
+  Metadata *RawLocation = nullptr;
+
+public:
+  RawLocationWrapper() = default;
+  explicit RawLocationWrapper(Metadata *RawLocation)
+      : RawLocation(RawLocation) {
+    // Allow ValueAsMetadata, empty MDTuple, DIArgList.
+    assert(RawLocation && "unexpected null RawLocation");
+    assert(isa<ValueAsMetadata>(RawLocation) || isa<DIArgList>(RawLocation) ||
+           (isa<MDNode>(RawLocation) &&
+            !cast<MDNode>(RawLocation)->getNumOperands()));
+  }
+  Metadata *getRawLocation() const { return RawLocation; }
   /// Get the locations corresponding to the variable referenced by the debug
   /// info intrinsic.  Depending on the intrinsic, this could be the
   /// variable's value or its address.
-  iterator_range<location_op_iterator> location_ops() const;
+  LLVM_ABI iterator_range<location_op_iterator> location_ops() const;
+  LLVM_ABI Value *getVariableLocationOp(unsigned OpIdx) const;
+  unsigned getNumVariableLocationOps() const {
+    if (hasArgList())
+      return cast<DIArgList>(getRawLocation())->getArgs().size();
+    return 1;
+  }
+  bool hasArgList() const { return isa<DIArgList>(getRawLocation()); }
+  bool isKillLocation(const DIExpression *Expression) const {
+    // Check for "kill" sentinel values.
+    // Non-variadic: empty metadata.
+    if (!hasArgList() && isa<MDNode>(getRawLocation()))
+      return true;
+    // Variadic: empty DIArgList with empty expression.
+    if (getNumVariableLocationOps() == 0 && !Expression->isComplex())
+      return true;
+    // Variadic and non-variadic: Interpret expressions using undef or poison
+    // values as kills.
+    return any_of(location_ops(), [](Value *V) { return isa<UndefValue>(V); });
+  }
 
-  Value *getVariableLocationOp(unsigned OpIdx) const;
+  friend bool operator==(const RawLocationWrapper &A,
+                         const RawLocationWrapper &B) {
+    return A.RawLocation == B.RawLocation;
+  }
+  friend bool operator!=(const RawLocationWrapper &A,
+                         const RawLocationWrapper &B) {
+    return !(A == B);
+  }
+  friend bool operator>(const RawLocationWrapper &A,
+                        const RawLocationWrapper &B) {
+    return A.RawLocation > B.RawLocation;
+  }
+  friend bool operator>=(const RawLocationWrapper &A,
+                         const RawLocationWrapper &B) {
+    return A.RawLocation >= B.RawLocation;
+  }
+  friend bool operator<(const RawLocationWrapper &A,
+                        const RawLocationWrapper &B) {
+    return A.RawLocation < B.RawLocation;
+  }
+  friend bool operator<=(const RawLocationWrapper &A,
+                         const RawLocationWrapper &B) {
+    return A.RawLocation <= B.RawLocation;
+  }
+};
 
-  void replaceVariableLocationOp(Value *OldValue, Value *NewValue);
-  void replaceVariableLocationOp(unsigned OpIdx, Value *NewValue);
+/// This is the common base class for debug info intrinsics for variables.
+class DbgVariableIntrinsic : public DbgInfoIntrinsic {
+public:
+  /// Get the locations corresponding to the variable referenced by the debug
+  /// info intrinsic.  Depending on the intrinsic, this could be the
+  /// variable's value or its address.
+  LLVM_ABI iterator_range<location_op_iterator> location_ops() const;
+
+  LLVM_ABI Value *getVariableLocationOp(unsigned OpIdx) const;
+
+  LLVM_ABI void replaceVariableLocationOp(Value *OldValue, Value *NewValue,
+                                          bool AllowEmpty = false);
+  LLVM_ABI void replaceVariableLocationOp(unsigned OpIdx, Value *NewValue);
   /// Adding a new location operand will always result in this intrinsic using
   /// an ArgList, and must always be accompanied by a new expression that uses
   /// the new operand.
-  void addVariableLocationOps(ArrayRef<Value *> NewValues,
-                              DIExpression *NewExpr);
+  LLVM_ABI void addVariableLocationOps(ArrayRef<Value *> NewValues,
+                                       DIExpression *NewExpr);
 
   void setVariable(DILocalVariable *NewVar) {
     setArgOperand(1, MetadataAsValue::get(NewVar->getContext(), NewVar));
@@ -252,37 +333,40 @@ public:
   }
 
   unsigned getNumVariableLocationOps() const {
-    if (hasArgList())
-      return cast<DIArgList>(getRawLocation())->getArgs().size();
-    return 1;
+    return getWrappedLocation().getNumVariableLocationOps();
   }
 
-  bool hasArgList() const { return isa<DIArgList>(getRawLocation()); }
+  bool hasArgList() const { return getWrappedLocation().hasArgList(); }
 
-  /// Does this describe the address of a local variable. True for dbg.addr and
-  /// dbg.declare, but not dbg.value, which describes its value, or dbg.assign,
-  /// which describes a combination of the variable's value and address.
+  /// Does this describe the address of a local variable. True for dbg.declare,
+  /// but not dbg.value, which describes its value, or dbg.assign, which
+  /// describes a combination of the variable's value and address.
   bool isAddressOfVariable() const {
-    return getIntrinsicID() != Intrinsic::dbg_value &&
-           getIntrinsicID() != Intrinsic::dbg_assign;
+    return getIntrinsicID() == Intrinsic::dbg_declare;
   }
 
-  void setUndef() {
+  /// Determine if this describes the value of a local variable. It is true for
+  /// dbg.value, but false for dbg.declare, which describes its address, and
+  /// false for dbg.assign, which describes a combination of the variable's
+  /// value and address.
+  bool isValueOfVariable() const {
+    return getIntrinsicID() == Intrinsic::dbg_value;
+  }
+
+  void setKillLocation() {
     // TODO: When/if we remove duplicate values from DIArgLists, we don't need
     // this set anymore.
     SmallPtrSet<Value *, 4> RemovedValues;
     for (Value *OldValue : location_ops()) {
       if (!RemovedValues.insert(OldValue).second)
         continue;
-      Value *Undef = UndefValue::get(OldValue->getType());
-      replaceVariableLocationOp(OldValue, Undef);
+      Value *Poison = PoisonValue::get(OldValue->getType());
+      replaceVariableLocationOp(OldValue, Poison);
     }
   }
 
-  bool isUndef() const {
-    return (getNumVariableLocationOps() == 0 &&
-            !getExpression()->isComplex()) ||
-           any_of(location_ops(), [](Value *V) { return isa<UndefValue>(V); });
+  bool isKillLocation() const {
+    return getWrappedLocation().isKillLocation(getExpression());
   }
 
   DILocalVariable *getVariable() const {
@@ -295,6 +379,10 @@ public:
 
   Metadata *getRawLocation() const {
     return cast<MetadataAsValue>(getArgOperand(0))->getMetadata();
+  }
+
+  RawLocationWrapper getWrappedLocation() const {
+    return RawLocationWrapper(getRawLocation());
   }
 
   Metadata *getRawVariable() const {
@@ -314,11 +402,24 @@ public:
 
   /// Get the size (in bits) of the variable, or fragment of the variable that
   /// is described.
-  std::optional<uint64_t> getFragmentSizeInBits() const;
+  LLVM_ABI std::optional<uint64_t> getFragmentSizeInBits() const;
 
   /// Get the FragmentInfo for the variable.
   std::optional<DIExpression::FragmentInfo> getFragment() const {
     return getExpression()->getFragmentInfo();
+  }
+
+  /// Get the FragmentInfo for the variable if it exists, otherwise return a
+  /// FragmentInfo that covers the entire variable if the variable size is
+  /// known, otherwise return a zero-sized fragment.
+  DIExpression::FragmentInfo getFragmentOrEntireVariable() const {
+    DIExpression::FragmentInfo VariableSlice(0, 0);
+    // Get the fragment or variable size, or zero.
+    if (auto Sz = getFragmentSizeInBits())
+      VariableSlice.SizeInBits = *Sz;
+    if (auto Frag = getExpression()->getFragmentInfo())
+      VariableSlice.OffsetInBits = Frag->OffsetInBits;
+    return VariableSlice;
   }
 
   /// \name Casting methods
@@ -327,7 +428,6 @@ public:
     switch (I->getIntrinsicID()) {
     case Intrinsic::dbg_declare:
     case Intrinsic::dbg_value:
-    case Intrinsic::dbg_addr:
     case Intrinsic::dbg_assign:
       return true;
     default:
@@ -363,25 +463,6 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
   /// @}
-};
-
-/// This represents the llvm.dbg.addr instruction.
-class DbgAddrIntrinsic : public DbgVariableIntrinsic {
-public:
-  Value *getAddress() const {
-    assert(getNumVariableLocationOps() == 1 &&
-           "dbg.addr must have exactly 1 location operand.");
-    return getVariableLocationOp(0);
-  }
-
-  /// \name Casting methods
-  /// @{
-  static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::dbg_addr;
-  }
-  static bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
 };
 
 /// This represents the llvm.dbg.value instruction.
@@ -420,7 +501,7 @@ class DbgAssignIntrinsic : public DbgValueInst {
   };
 
 public:
-  Value *getAddress() const;
+  LLVM_ABI Value *getAddress() const;
   Metadata *getRawAddress() const {
     return cast<MetadataAsValue>(getArgOperand(OpAddress))->getMetadata();
   }
@@ -438,9 +519,16 @@ public:
     setArgOperand(OpAddressExpr,
                   MetadataAsValue::get(NewExpr->getContext(), NewExpr));
   }
-  void setAssignId(DIAssignID *New);
-  void setAddress(Value *V);
-  void setValue(Value *V);
+  LLVM_ABI void setAssignId(DIAssignID *New);
+  LLVM_ABI void setAddress(Value *V);
+  /// Kill the address component.
+  LLVM_ABI void setKillAddress();
+  /// Check whether this kills the address component. This doesn't take into
+  /// account the position of the intrinsic, therefore a returned value of false
+  /// does not guarentee the address is a valid location for the variable at the
+  /// intrinsic's position in IR.
+  LLVM_ABI bool isKillAddress() const;
+  LLVM_ABI void setValue(Value *V);
   /// \name Casting methods
   /// @{
   static bool classof(const IntrinsicInst *I) {
@@ -456,6 +544,9 @@ public:
 class DbgLabelInst : public DbgInfoIntrinsic {
 public:
   DILabel *getLabel() const { return cast<DILabel>(getRawLabel()); }
+  void setLabel(DILabel *NewLabel) {
+    setArgOperand(0, MetadataAsValue::get(getContext(), NewLabel));
+  }
 
   Metadata *getRawLabel() const {
     return cast<MetadataAsValue>(getArgOperand(0))->getMetadata();
@@ -478,47 +569,53 @@ public:
   /// \brief Declares a llvm.vp.* intrinsic in \p M that matches the parameters
   /// \p Params. Additionally, the load and gather intrinsics require
   /// \p ReturnType to be specified.
-  static Function *getDeclarationForParams(Module *M, Intrinsic::ID,
-                                           Type *ReturnType,
-                                           ArrayRef<Value *> Params);
+  LLVM_ABI static Function *
+  getOrInsertDeclarationForParams(Module *M, Intrinsic::ID, Type *ReturnType,
+                                  ArrayRef<Value *> Params);
 
-  static std::optional<unsigned> getMaskParamPos(Intrinsic::ID IntrinsicID);
-  static std::optional<unsigned> getVectorLengthParamPos(
-      Intrinsic::ID IntrinsicID);
+  LLVM_ABI static std::optional<unsigned>
+  getMaskParamPos(Intrinsic::ID IntrinsicID);
+  LLVM_ABI static std::optional<unsigned>
+  getVectorLengthParamPos(Intrinsic::ID IntrinsicID);
 
   /// The llvm.vp.* intrinsics for this instruction Opcode
-  static Intrinsic::ID getForOpcode(unsigned OC);
+  LLVM_ABI static Intrinsic::ID getForOpcode(unsigned OC);
+
+  /// The llvm.vp.* intrinsics for this intrinsic ID \p Id. Return \p Id if it
+  /// is already a VP intrinsic.
+  LLVM_ABI static Intrinsic::ID getForIntrinsic(Intrinsic::ID Id);
 
   // Whether \p ID is a VP intrinsic ID.
-  static bool isVPIntrinsic(Intrinsic::ID);
+  LLVM_ABI static bool isVPIntrinsic(Intrinsic::ID);
 
   /// \return The mask parameter or nullptr.
-  Value *getMaskParam() const;
-  void setMaskParam(Value *);
+  LLVM_ABI Value *getMaskParam() const;
+  LLVM_ABI void setMaskParam(Value *);
 
   /// \return The vector length parameter or nullptr.
-  Value *getVectorLengthParam() const;
-  void setVectorLengthParam(Value *);
+  LLVM_ABI Value *getVectorLengthParam() const;
+  LLVM_ABI void setVectorLengthParam(Value *);
 
   /// \return Whether the vector length param can be ignored.
-  bool canIgnoreVectorLengthParam() const;
+  LLVM_ABI bool canIgnoreVectorLengthParam() const;
 
   /// \return The static element count (vector number of elements) the vector
   /// length parameter applies to.
-  ElementCount getStaticVectorLength() const;
+  LLVM_ABI ElementCount getStaticVectorLength() const;
 
   /// \return The alignment of the pointer used by this load/store/gather or
   /// scatter.
-  MaybeAlign getPointerAlignment() const;
+  LLVM_ABI MaybeAlign getPointerAlignment() const;
   // MaybeAlign setPointerAlignment(Align NewAlign); // TODO
 
   /// \return The pointer operand of this load,store, gather or scatter.
-  Value *getMemoryPointerParam() const;
-  static std::optional<unsigned> getMemoryPointerParamPos(Intrinsic::ID);
+  LLVM_ABI Value *getMemoryPointerParam() const;
+  LLVM_ABI static std::optional<unsigned>
+      getMemoryPointerParamPos(Intrinsic::ID);
 
   /// \return The data (payload) operand of this store or scatter.
-  Value *getMemoryDataParam() const;
-  static std::optional<unsigned> getMemoryDataParamPos(Intrinsic::ID);
+  LLVM_ABI Value *getMemoryDataParam() const;
+  LLVM_ABI static std::optional<unsigned> getMemoryDataParamPos(Intrinsic::ID);
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const IntrinsicInst *I) {
@@ -533,20 +630,39 @@ public:
     return getFunctionalOpcodeForVP(getIntrinsicID());
   }
 
+  // Equivalent non-predicated intrinsic ID
+  std::optional<unsigned> getFunctionalIntrinsicID() const {
+    return getFunctionalIntrinsicIDForVP(getIntrinsicID());
+  }
+
+  // Equivalent non-predicated constrained ID
+  std::optional<unsigned> getConstrainedIntrinsicID() const {
+    return getConstrainedIntrinsicIDForVP(getIntrinsicID());
+  }
+
   // Equivalent non-predicated opcode
-  static std::optional<unsigned> getFunctionalOpcodeForVP(Intrinsic::ID ID);
+  LLVM_ABI static std::optional<unsigned>
+  getFunctionalOpcodeForVP(Intrinsic::ID ID);
+
+  // Equivalent non-predicated intrinsic ID
+  LLVM_ABI static std::optional<Intrinsic::ID>
+  getFunctionalIntrinsicIDForVP(Intrinsic::ID ID);
+
+  // Equivalent non-predicated constrained ID
+  LLVM_ABI static std::optional<Intrinsic::ID>
+  getConstrainedIntrinsicIDForVP(Intrinsic::ID ID);
 };
 
 /// This represents vector predication reduction intrinsics.
 class VPReductionIntrinsic : public VPIntrinsic {
 public:
-  static bool isVPReduction(Intrinsic::ID ID);
+  LLVM_ABI static bool isVPReduction(Intrinsic::ID ID);
 
-  unsigned getStartParamPos() const;
-  unsigned getVectorParamPos() const;
+  LLVM_ABI unsigned getStartParamPos() const;
+  LLVM_ABI unsigned getVectorParamPos() const;
 
-  static std::optional<unsigned> getStartParamPos(Intrinsic::ID ID);
-  static std::optional<unsigned> getVectorParamPos(Intrinsic::ID ID);
+  LLVM_ABI static std::optional<unsigned> getStartParamPos(Intrinsic::ID ID);
+  LLVM_ABI static std::optional<unsigned> getVectorParamPos(Intrinsic::ID ID);
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   /// @{
@@ -561,7 +677,7 @@ public:
 
 class VPCastIntrinsic : public VPIntrinsic {
 public:
-  static bool isVPCast(Intrinsic::ID ID);
+  LLVM_ABI static bool isVPCast(Intrinsic::ID ID);
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   /// @{
@@ -576,9 +692,9 @@ public:
 
 class VPCmpIntrinsic : public VPIntrinsic {
 public:
-  static bool isVPCmp(Intrinsic::ID ID);
+  LLVM_ABI static bool isVPCmp(Intrinsic::ID ID);
 
-  CmpInst::Predicate getPredicate() const;
+  LLVM_ABI CmpInst::Predicate getPredicate() const;
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   /// @{
@@ -591,17 +707,32 @@ public:
   /// @}
 };
 
+class VPBinOpIntrinsic : public VPIntrinsic {
+public:
+  LLVM_ABI static bool isVPBinOp(Intrinsic::ID ID);
+
+  /// Methods for support type inquiry through isa, cast, and dyn_cast:
+  /// @{
+  static bool classof(const IntrinsicInst *I) {
+    return VPBinOpIntrinsic::isVPBinOp(I->getIntrinsicID());
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+  /// @}
+};
+
+
 /// This is the common base class for constrained floating point intrinsics.
 class ConstrainedFPIntrinsic : public IntrinsicInst {
 public:
-  bool isUnaryOp() const;
-  bool isTernaryOp() const;
-  std::optional<RoundingMode> getRoundingMode() const;
-  std::optional<fp::ExceptionBehavior> getExceptionBehavior() const;
-  bool isDefaultFPEnvironment() const;
+  LLVM_ABI unsigned getNonMetadataArgCount() const;
+  LLVM_ABI std::optional<RoundingMode> getRoundingMode() const;
+  LLVM_ABI std::optional<fp::ExceptionBehavior> getExceptionBehavior() const;
+  LLVM_ABI bool isDefaultFPEnvironment() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static bool classof(const IntrinsicInst *I);
+  LLVM_ABI static bool classof(const IntrinsicInst *I);
   static bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
@@ -610,7 +741,7 @@ public:
 /// Constrained floating point compare intrinsics.
 class ConstrainedFPCmpIntrinsic : public ConstrainedFPIntrinsic {
 public:
-  FCmpInst::Predicate getPredicate() const;
+  LLVM_ABI FCmpInst::Predicate getPredicate() const;
   bool isSignaling() const {
     return getIntrinsicID() == Intrinsic::experimental_constrained_fcmps;
   }
@@ -721,6 +852,43 @@ public:
   }
 };
 
+/// This class represents a ucmp/scmp intrinsic
+class CmpIntrinsic : public IntrinsicInst {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    switch (I->getIntrinsicID()) {
+    case Intrinsic::scmp:
+    case Intrinsic::ucmp:
+      return true;
+    default:
+      return false;
+    }
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  Value *getLHS() const { return const_cast<Value *>(getArgOperand(0)); }
+  Value *getRHS() const { return const_cast<Value *>(getArgOperand(1)); }
+
+  static bool isSigned(Intrinsic::ID ID) { return ID == Intrinsic::scmp; }
+  bool isSigned() const { return isSigned(getIntrinsicID()); }
+
+  static CmpInst::Predicate getGTPredicate(Intrinsic::ID ID) {
+    return isSigned(ID) ? ICmpInst::ICMP_SGT : ICmpInst::ICMP_UGT;
+  }
+  CmpInst::Predicate getGTPredicate() const {
+    return getGTPredicate(getIntrinsicID());
+  }
+
+  static CmpInst::Predicate getLTPredicate(Intrinsic::ID ID) {
+    return isSigned(ID) ? ICmpInst::ICMP_SLT : ICmpInst::ICMP_ULT;
+  }
+  CmpInst::Predicate getLTPredicate() const {
+    return getLTPredicate(getIntrinsicID());
+  }
+};
+
 /// This class represents an intrinsic that is based on a binary operation.
 /// This includes op.with.overflow and saturating add/sub intrinsics.
 class BinaryOpIntrinsic : public IntrinsicInst {
@@ -750,13 +918,13 @@ public:
   Value *getRHS() const { return const_cast<Value *>(getArgOperand(1)); }
 
   /// Returns the binary operation underlying the intrinsic.
-  Instruction::BinaryOps getBinaryOp() const;
+  LLVM_ABI Instruction::BinaryOps getBinaryOp() const;
 
   /// Whether the intrinsic is signed or unsigned.
-  bool isSigned() const;
+  LLVM_ABI bool isSigned() const;
 
   /// Returns one of OBO::NoSignedWrap or OBO::NoUnsignedWrap.
-  unsigned getNoWrapKind() const;
+  LLVM_ABI unsigned getNoWrapKind() const;
 };
 
 /// Represents an op.with.overflow intrinsic.
@@ -831,6 +999,7 @@ public:
 
   /// FIXME: Remove this function once transition to Align is over.
   /// Use getDestAlign() instead.
+  LLVM_DEPRECATED("Use getDestAlign() instead", "getDestAlign")
   unsigned getDestAlignment() const {
     if (auto MA = getParamAlign(ARG_DEST))
       return MA->value();
@@ -891,6 +1060,7 @@ public:
 
   /// FIXME: Remove this function once transition to Align is over.
   /// Use getSourceAlign() instead.
+  LLVM_DEPRECATED("Use getSourceAlign() instead", "getSourceAlign")
   unsigned getSourceAlignment() const {
     if (auto MA = BaseCL::getParamAlign(ARG_SOURCE))
       return MA->value();
@@ -907,17 +1077,13 @@ public:
     BaseCL::setArgOperand(ARG_SOURCE, Ptr);
   }
 
-  /// FIXME: Remove this function once transition to Align is over.
-  /// Use the version that takes MaybeAlign instead of this one.
-  void setSourceAlignment(unsigned Alignment) {
-    setSourceAlignment(MaybeAlign(Alignment));
-  }
   void setSourceAlignment(MaybeAlign Alignment) {
     BaseCL::removeParamAttr(ARG_SOURCE, Attribute::Alignment);
     if (Alignment)
       BaseCL::addParamAttr(ARG_SOURCE, Attribute::getWithAlignment(
                                            BaseCL::getContext(), *Alignment));
   }
+
   void setSourceAlignment(Align Alignment) {
     BaseCL::removeParamAttr(ARG_SOURCE, Attribute::Alignment);
     BaseCL::addParamAttr(ARG_SOURCE, Attribute::getWithAlignment(
@@ -945,100 +1111,6 @@ public:
   }
 };
 
-// The common base class for the atomic memset/memmove/memcpy intrinsics
-// i.e. llvm.element.unordered.atomic.memset/memcpy/memmove
-class AtomicMemIntrinsic : public MemIntrinsicBase<AtomicMemIntrinsic> {
-private:
-  enum { ARG_ELEMENTSIZE = 3 };
-
-public:
-  Value *getRawElementSizeInBytes() const {
-    return const_cast<Value *>(getArgOperand(ARG_ELEMENTSIZE));
-  }
-
-  ConstantInt *getElementSizeInBytesCst() const {
-    return cast<ConstantInt>(getRawElementSizeInBytes());
-  }
-
-  uint32_t getElementSizeInBytes() const {
-    return getElementSizeInBytesCst()->getZExtValue();
-  }
-
-  void setElementSizeInBytes(Constant *V) {
-    assert(V->getType() == Type::getInt8Ty(getContext()) &&
-           "setElementSizeInBytes called with value of wrong type!");
-    setArgOperand(ARG_ELEMENTSIZE, V);
-  }
-
-  static bool classof(const IntrinsicInst *I) {
-    switch (I->getIntrinsicID()) {
-    case Intrinsic::memcpy_element_unordered_atomic:
-    case Intrinsic::memmove_element_unordered_atomic:
-    case Intrinsic::memset_element_unordered_atomic:
-      return true;
-    default:
-      return false;
-    }
-  }
-  static bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
-};
-
-/// This class represents atomic memset intrinsic
-// i.e. llvm.element.unordered.atomic.memset
-class AtomicMemSetInst : public MemSetBase<AtomicMemIntrinsic> {
-public:
-  static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::memset_element_unordered_atomic;
-  }
-  static bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
-};
-
-// This class wraps the atomic memcpy/memmove intrinsics
-// i.e. llvm.element.unordered.atomic.memcpy/memmove
-class AtomicMemTransferInst : public MemTransferBase<AtomicMemIntrinsic> {
-public:
-  static bool classof(const IntrinsicInst *I) {
-    switch (I->getIntrinsicID()) {
-    case Intrinsic::memcpy_element_unordered_atomic:
-    case Intrinsic::memmove_element_unordered_atomic:
-      return true;
-    default:
-      return false;
-    }
-  }
-  static bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
-};
-
-/// This class represents the atomic memcpy intrinsic
-/// i.e. llvm.element.unordered.atomic.memcpy
-class AtomicMemCpyInst : public AtomicMemTransferInst {
-public:
-  static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::memcpy_element_unordered_atomic;
-  }
-  static bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
-};
-
-/// This class represents the atomic memmove intrinsic
-/// i.e. llvm.element.unordered.atomic.memmove
-class AtomicMemMoveInst : public AtomicMemTransferInst {
-public:
-  static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::memmove_element_unordered_atomic;
-  }
-  static bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
-};
-
 /// This is the common base class for memset/memcpy/memmove.
 class MemIntrinsic : public MemIntrinsicBase<MemIntrinsic> {
 private:
@@ -1052,6 +1124,16 @@ public:
   bool isVolatile() const { return !getVolatileCst()->isZero(); }
 
   void setVolatile(Constant *V) { setArgOperand(ARG_VOLATILE, V); }
+
+  bool isForceInlined() const {
+    switch (getIntrinsicID()) {
+    case Intrinsic::memset_inline:
+    case Intrinsic::memcpy_inline:
+      return true;
+    default:
+      return false;
+    }
+  }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const IntrinsicInst *I) {
@@ -1089,15 +1171,25 @@ public:
   }
 };
 
-/// This class wraps the llvm.memset.inline intrinsic.
-class MemSetInlineInst : public MemSetInst {
+/// This class wraps the llvm.experimental.memset.pattern intrinsic.
+/// Note that despite the inheritance, this is not part of the
+/// MemIntrinsic hierachy in terms of isa/cast.
+class MemSetPatternInst : public MemSetBase<MemIntrinsic> {
+private:
+  enum { ARG_VOLATILE = 3 };
+
 public:
-  ConstantInt *getLength() const {
-    return cast<ConstantInt>(MemSetInst::getLength());
+  ConstantInt *getVolatileCst() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(ARG_VOLATILE)));
   }
+
+  bool isVolatile() const { return !getVolatileCst()->isZero(); }
+
+  void setVolatile(Constant *V) { setArgOperand(ARG_VOLATILE, V); }
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::memset_inline;
+    return I->getIntrinsicID() == Intrinsic::experimental_memset_pattern;
   }
   static bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
@@ -1148,32 +1240,31 @@ public:
   }
 };
 
-/// This class wraps the llvm.memcpy.inline intrinsic.
-class MemCpyInlineInst : public MemCpyInst {
-public:
-  ConstantInt *getLength() const {
-    return cast<ConstantInt>(MemCpyInst::getLength());
-  }
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::memcpy_inline;
-  }
-  static bool classof(const Value *V) {
-    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-  }
-};
-
 // The common base class for any memset/memmove/memcpy intrinsics;
 // whether they be atomic or non-atomic.
 // i.e. llvm.element.unordered.atomic.memset/memcpy/memmove
 //  and llvm.memset/memcpy/memmove
 class AnyMemIntrinsic : public MemIntrinsicBase<AnyMemIntrinsic> {
+private:
+  enum { ARG_ELEMENTSIZE = 3 };
+
 public:
   bool isVolatile() const {
     // Only the non-atomic intrinsics can be volatile
     if (auto *MI = dyn_cast<MemIntrinsic>(this))
       return MI->isVolatile();
     return false;
+  }
+
+  bool isAtomic() const {
+    switch (getIntrinsicID()) {
+    case Intrinsic::memcpy_element_unordered_atomic:
+    case Intrinsic::memmove_element_unordered_atomic:
+    case Intrinsic::memset_element_unordered_atomic:
+      return true;
+    default:
+      return false;
+    }
   }
 
   static bool classof(const IntrinsicInst *I) {
@@ -1193,6 +1284,16 @@ public:
   }
   static bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  Value *getRawElementSizeInBytes() const {
+    assert(isAtomic());
+    return const_cast<Value *>(getArgOperand(ARG_ELEMENTSIZE));
+  }
+
+  uint32_t getElementSizeInBytes() const {
+    assert(isAtomic());
+    return cast<ConstantInt>(getRawElementSizeInBytes())->getZExtValue();
   }
 };
 
@@ -1319,24 +1420,73 @@ public:
 
 /// A base class for all instrprof intrinsics.
 class InstrProfInstBase : public IntrinsicInst {
-public:
-  // The name of the instrumented function.
-  GlobalVariable *getName() const {
-    return cast<GlobalVariable>(
-        const_cast<Value *>(getArgOperand(0))->stripPointerCasts());
+protected:
+  static bool isCounterBase(const IntrinsicInst &I) {
+    switch (I.getIntrinsicID()) {
+    case Intrinsic::instrprof_cover:
+    case Intrinsic::instrprof_increment:
+    case Intrinsic::instrprof_increment_step:
+    case Intrinsic::instrprof_callsite:
+    case Intrinsic::instrprof_timestamp:
+    case Intrinsic::instrprof_value_profile:
+      return true;
+    }
+    return false;
   }
+  static bool isMCDCBitmapBase(const IntrinsicInst &I) {
+    switch (I.getIntrinsicID()) {
+    case Intrinsic::instrprof_mcdc_parameters:
+    case Intrinsic::instrprof_mcdc_tvbitmap_update:
+      return true;
+    }
+    return false;
+  }
+
+public:
+  static bool classof(const Value *V) {
+    if (const auto *Instr = dyn_cast<IntrinsicInst>(V))
+      return isCounterBase(*Instr) || isMCDCBitmapBase(*Instr);
+    return false;
+  }
+
+  // The name of the instrumented function, assuming it is a global variable.
+  GlobalVariable *getName() const {
+    return cast<GlobalVariable>(getNameValue());
+  }
+
+  // The "name" operand of the profile instrumentation instruction - this is the
+  // operand that can be used to relate the instruction to the function it
+  // belonged to at instrumentation time.
+  Value *getNameValue() const {
+    return const_cast<Value *>(getArgOperand(0))->stripPointerCasts();
+  }
+
+  void setNameValue(Value *V) { setArgOperand(0, V); }
+
   // The hash of the CFG for the instrumented function.
   ConstantInt *getHash() const {
     return cast<ConstantInt>(const_cast<Value *>(getArgOperand(1)));
   }
+};
+
+/// A base class for all instrprof counter intrinsics.
+class InstrProfCntrInstBase : public InstrProfInstBase {
+public:
+  static bool classof(const Value *V) {
+    if (const auto *Instr = dyn_cast<IntrinsicInst>(V))
+      return InstrProfInstBase::isCounterBase(*Instr);
+    return false;
+  }
+
   // The number of counters for the instrumented function.
-  ConstantInt *getNumCounters() const;
+  LLVM_ABI ConstantInt *getNumCounters() const;
   // The index of the counter that this instruction acts on.
-  ConstantInt *getIndex() const;
+  LLVM_ABI ConstantInt *getIndex() const;
+  LLVM_ABI void setIndex(uint32_t Idx);
 };
 
 /// This represents the llvm.instrprof.cover intrinsic.
-class InstrProfCoverInst : public InstrProfInstBase {
+class InstrProfCoverInst : public InstrProfCntrInstBase {
 public:
   static bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::instrprof_cover;
@@ -1347,15 +1497,16 @@ public:
 };
 
 /// This represents the llvm.instrprof.increment intrinsic.
-class InstrProfIncrementInst : public InstrProfInstBase {
+class InstrProfIncrementInst : public InstrProfCntrInstBase {
 public:
   static bool classof(const IntrinsicInst *I) {
-    return I->getIntrinsicID() == Intrinsic::instrprof_increment;
+    return I->getIntrinsicID() == Intrinsic::instrprof_increment ||
+           I->getIntrinsicID() == Intrinsic::instrprof_increment_step;
   }
   static bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
-  Value *getStep() const;
+  LLVM_ABI Value *getStep() const;
 };
 
 /// This represents the llvm.instrprof.increment.step intrinsic.
@@ -1369,8 +1520,41 @@ public:
   }
 };
 
+/// This represents the llvm.instrprof.callsite intrinsic.
+/// It is structurally like the increment or step counters, hence the
+/// inheritance relationship, albeit somewhat tenuous (it's not 'counting' per
+/// se)
+class InstrProfCallsite : public InstrProfCntrInstBase {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::instrprof_callsite;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+  // We instrument direct calls (but not to intrinsics), or indirect calls.
+  static bool canInstrumentCallsite(const CallBase &CB) {
+    return !CB.isInlineAsm() &&
+           (CB.isIndirectCall() ||
+            (CB.getIntrinsicID() == Intrinsic::not_intrinsic));
+  }
+  LLVM_ABI Value *getCallee() const;
+  LLVM_ABI void setCallee(Value *Callee);
+};
+
+/// This represents the llvm.instrprof.timestamp intrinsic.
+class InstrProfTimestampInst : public InstrProfCntrInstBase {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::instrprof_timestamp;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
 /// This represents the llvm.instrprof.value.profile intrinsic.
-class InstrProfValueProfileInst : public InstrProfInstBase {
+class InstrProfValueProfileInst : public InstrProfCntrInstBase {
 public:
   static bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::instrprof_value_profile;
@@ -1390,6 +1574,63 @@ public:
   // Returns the value site index.
   ConstantInt *getIndex() const {
     return cast<ConstantInt>(const_cast<Value *>(getArgOperand(4)));
+  }
+};
+
+/// A base class for instrprof mcdc intrinsics that require global bitmap bytes.
+class InstrProfMCDCBitmapInstBase : public InstrProfInstBase {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return InstrProfInstBase::isMCDCBitmapBase(*I);
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  /// \return The number of bits used for the MCDC bitmaps for the instrumented
+  /// function.
+  ConstantInt *getNumBitmapBits() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
+  }
+
+  /// \return The number of bytes used for the MCDC bitmaps for the instrumented
+  /// function.
+  auto getNumBitmapBytes() const {
+    return alignTo(getNumBitmapBits()->getZExtValue(), CHAR_BIT) / CHAR_BIT;
+  }
+};
+
+/// This represents the llvm.instrprof.mcdc.parameters intrinsic.
+class InstrProfMCDCBitmapParameters : public InstrProfMCDCBitmapInstBase {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::instrprof_mcdc_parameters;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
+/// This represents the llvm.instrprof.mcdc.tvbitmap.update intrinsic.
+class InstrProfMCDCTVBitmapUpdate : public InstrProfMCDCBitmapInstBase {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::instrprof_mcdc_tvbitmap_update;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  /// \return The index of the TestVector Bitmap upon which this intrinsic
+  /// acts.
+  ConstantInt *getBitmapIndex() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
+  }
+
+  /// \return The address of the corresponding condition bitmap containing
+  /// the index of the TestVector to update within the TestVector Bitmap.
+  Value *getMCDCCondBitmapAddr() const {
+    return cast<Value>(const_cast<Value *>(getArgOperand(3)));
   }
 };
 
@@ -1464,7 +1705,7 @@ public:
   }
 
   /// The statepoint with which this gc.relocate is associated.
-  const Value *getStatepoint() const;
+  LLVM_ABI const Value *getStatepoint() const;
 };
 
 /// Represents calls to the gc.relocate intrinsic.
@@ -1491,8 +1732,8 @@ public:
     return cast<ConstantInt>(getArgOperand(2))->getZExtValue();
   }
 
-  Value *getBasePtr() const;
-  Value *getDerivedPtr() const;
+  LLVM_ABI Value *getBasePtr() const;
+  LLVM_ABI Value *getDerivedPtr() const;
 };
 
 /// Represents calls to the gc.result intrinsic.
@@ -1517,6 +1758,45 @@ public:
   static bool classof(const Value *V) {
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
+};
+
+/// Check if \p ID corresponds to a convergence control intrinsic.
+static inline bool isConvergenceControlIntrinsic(unsigned IntrinsicID) {
+  switch (IntrinsicID) {
+  default:
+    return false;
+  case Intrinsic::experimental_convergence_anchor:
+  case Intrinsic::experimental_convergence_entry:
+  case Intrinsic::experimental_convergence_loop:
+    return true;
+  }
+}
+
+/// Represents calls to the llvm.experimintal.convergence.* intrinsics.
+class ConvergenceControlInst : public IntrinsicInst {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return isConvergenceControlIntrinsic(I->getIntrinsicID());
+  }
+
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  bool isAnchor() const {
+    return getIntrinsicID() == Intrinsic::experimental_convergence_anchor;
+  }
+  bool isEntry() const {
+    return getIntrinsicID() == Intrinsic::experimental_convergence_entry;
+  }
+  bool isLoop() const {
+    return getIntrinsicID() == Intrinsic::experimental_convergence_loop;
+  }
+
+  LLVM_ABI static ConvergenceControlInst *CreateAnchor(BasicBlock &BB);
+  LLVM_ABI static ConvergenceControlInst *CreateEntry(BasicBlock &BB);
+  LLVM_ABI static ConvergenceControlInst *
+  CreateLoop(BasicBlock &BB, ConvergenceControlInst *Parent);
 };
 
 } // end namespace llvm

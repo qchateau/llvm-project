@@ -12,6 +12,7 @@
 #include "VETargetMachine.h"
 #include "TargetInfo/VETargetInfo.h"
 #include "VE.h"
+#include "VEMachineFunctionInfo.h"
 #include "VETargetTransformInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
@@ -27,6 +28,10 @@ using namespace llvm;
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeVETarget() {
   // Register the target.
   RegisterTargetMachine<VETargetMachine> X(getTheVETarget());
+
+  PassRegistry &PR = *PassRegistry::getPassRegistry();
+  initializeVEAsmPrinterPass(PR);
+  initializeVEDAGToDAGISelLegacyPass(PR);
 }
 
 static std::string computeDataLayout(const Triple &T) {
@@ -65,12 +70,14 @@ static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
   return RM.value_or(Reloc::Static);
 }
 
+namespace {
 class VEELFTargetObjectFile : public TargetLoweringObjectFileELF {
   void Initialize(MCContext &Ctx, const TargetMachine &TM) override {
     TargetLoweringObjectFileELF::Initialize(Ctx, TM);
     InitializeELF(TM.Options.UseInitArray);
   }
 };
+} // namespace
 
 static std::unique_ptr<TargetLoweringObjectFile> createTLOF() {
   return std::make_unique<VEELFTargetObjectFile>();
@@ -82,10 +89,10 @@ VETargetMachine::VETargetMachine(const Target &T, const Triple &TT,
                                  const TargetOptions &Options,
                                  std::optional<Reloc::Model> RM,
                                  std::optional<CodeModel::Model> CM,
-                                 CodeGenOpt::Level OL, bool JIT)
-    : LLVMTargetMachine(T, computeDataLayout(TT), TT, CPU, FS, Options,
-                        getEffectiveRelocModel(RM),
-                        getEffectiveCodeModel(CM, CodeModel::Small), OL),
+                                 CodeGenOptLevel OL, bool JIT)
+    : CodeGenTargetMachineImpl(T, computeDataLayout(TT), TT, CPU, FS, Options,
+                               getEffectiveRelocModel(RM),
+                               getEffectiveCodeModel(CM, CodeModel::Small), OL),
       TLOF(createTLOF()),
       Subtarget(TT, std::string(CPU), std::string(FS), *this) {
   initAsmInfo();
@@ -95,7 +102,14 @@ VETargetMachine::~VETargetMachine() = default;
 
 TargetTransformInfo
 VETargetMachine::getTargetTransformInfo(const Function &F) const {
-  return TargetTransformInfo(VETTIImpl(this, F));
+  return TargetTransformInfo(std::make_unique<VETTIImpl>(this, F));
+}
+
+MachineFunctionInfo *VETargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return VEMachineFunctionInfo::create<VEMachineFunctionInfo>(Allocator, F,
+                                                              STI);
 }
 
 namespace {
@@ -121,7 +135,7 @@ TargetPassConfig *VETargetMachine::createPassConfig(PassManagerBase &PM) {
 
 void VEPassConfig::addIRPasses() {
   // VE requires atomic expand pass.
-  addPass(createAtomicExpandPass());
+  addPass(createAtomicExpandLegacyPass());
   TargetPassConfig::addIRPasses();
 }
 

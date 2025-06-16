@@ -1,4 +1,5 @@
 //===----------------------------------------------------------------------===//
+//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -32,6 +33,7 @@
 #include <utility>
 
 #include "test_macros.h"
+#include "../../types.h"
 
 struct NonMovable {
   NonMovable(NonMovable&&) = delete;
@@ -62,9 +64,7 @@ static_assert(!std::is_move_constructible_v<std::expected<NonMovable, NonMovable
 // Test: This constructor is trivial if
 // - is_trivially_move_constructible_v<T> is true and
 // - is_trivially_move_constructible_v<E> is true.
-#if __cpp_concepts >= 202002
 static_assert(std::is_trivially_move_constructible_v<std::expected<int, int>>);
-#endif
 static_assert(!std::is_trivially_move_constructible_v<std::expected<MovableNonTrivial, int>>);
 static_assert(!std::is_trivially_move_constructible_v<std::expected<int, MovableNonTrivial>>);
 static_assert(!std::is_trivially_move_constructible_v<std::expected<MovableNonTrivial, MovableNonTrivial>>);
@@ -114,13 +114,28 @@ constexpr bool test() {
     assert(e2.error() == 5);
     assert(!e1.has_value());
   }
+
+  // move TailClobbererNonTrivialMove as value
+  {
+    std::expected<TailClobbererNonTrivialMove<0>, bool> e1;
+    auto e2 = std::move(e1);
+    assert(e2.has_value());
+    assert(e1.has_value());
+  }
+
+  // move TailClobbererNonTrivialMove as error
+  {
+    std::expected<bool, TailClobbererNonTrivialMove<1>> e1(std::unexpect);
+    auto e2 = std::move(e1);
+    assert(!e2.has_value());
+    assert(!e1.has_value());
+  }
+
   return true;
 }
 
 void testException() {
 #ifndef TEST_HAS_NO_EXCEPTIONS
-  struct Except {};
-
   struct Throwing {
     Throwing() = default;
     Throwing(Throwing&&) { throw Except{}; }

@@ -21,24 +21,28 @@
 #include "mlir/Dialect/Affine/LoopUtils.h"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/IRMapping.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 namespace mlir {
+namespace affine {
 #define GEN_PASS_DEF_AFFINELOOPTILING
 #include "mlir/Dialect/Affine/Passes.h.inc"
+} // namespace affine
 } // namespace mlir
 
 using namespace mlir;
+using namespace mlir::affine;
 
 #define DEBUG_TYPE "affine-loop-tile"
 
 namespace {
 
 /// A pass to perform loop tiling on all suitable loop nests of a Function.
-struct LoopTiling : public impl::AffineLoopTilingBase<LoopTiling> {
+struct LoopTiling : public affine::impl::AffineLoopTilingBase<LoopTiling> {
   LoopTiling() = default;
   explicit LoopTiling(uint64_t cacheSizeBytes, bool avoidMaxMinBounds = true)
       : avoidMaxMinBounds(avoidMaxMinBounds) {
@@ -61,10 +65,11 @@ struct LoopTiling : public impl::AffineLoopTilingBase<LoopTiling> {
 /// Creates a pass to perform loop tiling on all suitable loop nests of a
 /// Function.
 std::unique_ptr<OperationPass<func::FuncOp>>
-mlir::createLoopTilingPass(uint64_t cacheSizeBytes) {
+mlir::affine::createLoopTilingPass(uint64_t cacheSizeBytes) {
   return std::make_unique<LoopTiling>(cacheSizeBytes);
 }
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLoopTilingPass() {
+std::unique_ptr<OperationPass<func::FuncOp>>
+mlir::affine::createLoopTilingPass() {
   return std::make_unique<LoopTiling>();
 }
 
@@ -75,7 +80,7 @@ static void adjustToDivisorsOfTripCounts(ArrayRef<AffineForOp> band,
   assert(band.size() == tileSizes->size() && "invalid tile size count");
   for (unsigned i = 0, e = band.size(); i < e; i++) {
     unsigned &tSizeAdjusted = (*tileSizes)[i];
-    Optional<uint64_t> mayConst = getConstantTripCount(band[i]);
+    std::optional<uint64_t> mayConst = getConstantTripCount(band[i]);
     if (!mayConst)
       continue;
     // Adjust the tile size to largest factor of the trip count less than
@@ -105,13 +110,20 @@ void LoopTiling::getTileSizes(ArrayRef<AffineForOp> band,
     return;
   }
 
-  // Use tileSizes and fill them with default tile size if it's short.
+  // Use supplied tile sizes and fill them with default tile size if it's short.
   if (!this->tileSizes.empty()) {
     tileSizes->assign(this->tileSizes.begin(), this->tileSizes.end());
     tileSizes->resize(band.size(), kDefaultTileSize);
     return;
   }
   tileSizes->resize(band.size());
+
+  // If the cache size is zero, set the minimum valid tile size. No good reason
+  // to pick another specific size over this.
+  if (cacheSizeInKiB == 0) {
+    std::fill(tileSizes->begin(), tileSizes->end(), 1);
+    return;
+  }
 
   // The first loop in the band.
   AffineForOp rootForOp = band[0];
@@ -121,7 +133,7 @@ void LoopTiling::getTileSizes(ArrayRef<AffineForOp> band,
   // the cache size. This is an approximation with the assumption that the
   // footprint increases with the tile size linearly in that dimension (i.e.,
   // assumes one-to-one access function).
-  Optional<int64_t> fp = getMemoryFootprintBytes(band[0], 0);
+  std::optional<int64_t> fp = getMemoryFootprintBytes(band[0], 0);
   if (!fp) {
     // Fill with default tile sizes if footprint is unknown.
     std::fill(tileSizes->begin(), tileSizes->end(),
@@ -174,6 +186,11 @@ void LoopTiling::runOnOperation() {
 
   // Tile each band.
   for (auto &band : bands) {
+    if (!isTilingValid(band)) {
+      band.front().emitRemark("tiling nest is invalid due to dependences");
+      continue;
+    }
+
     // Set up tile sizes; fill missing tile sizes at the end with default tile
     // size or tileSize if one was provided.
     SmallVector<unsigned, 6> tileSizes;

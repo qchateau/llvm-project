@@ -10,16 +10,16 @@
 #define _LIBCPP___MEMORY_RESOURCE_UNSYNCHRONIZED_POOL_RESOURCE_H
 
 #include <__config>
+#include <__cstddef/size_t.h>
 #include <__memory_resource/memory_resource.h>
 #include <__memory_resource/pool_options.h>
-#include <cstddef>
 #include <cstdint>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #  pragma GCC system_header
 #endif
 
-#if _LIBCPP_STD_VER > 14
+#if _LIBCPP_STD_VER >= 17
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
@@ -27,7 +27,7 @@ namespace pmr {
 
 // [mem.res.pool.overview]
 
-class _LIBCPP_TYPE_VIS unsynchronized_pool_resource : public memory_resource {
+class _LIBCPP_AVAILABILITY_PMR _LIBCPP_EXPORTED_FROM_ABI unsynchronized_pool_resource : public memory_resource {
   class __fixed_pool;
 
   class __adhoc_pool {
@@ -70,7 +70,7 @@ public:
 
   unsynchronized_pool_resource(const unsynchronized_pool_resource&) = delete;
 
-  _LIBCPP_HIDE_FROM_ABI ~unsynchronized_pool_resource() override { release(); }
+  _LIBCPP_HIDE_FROM_ABI_VIRTUAL ~unsynchronized_pool_resource() override { release(); }
 
   unsynchronized_pool_resource& operator=(const unsynchronized_pool_resource&) = delete;
 
@@ -85,7 +85,7 @@ protected:
 
   void do_deallocate(void* __p, size_t __bytes, size_t __align) override;
 
-  _LIBCPP_HIDE_FROM_ABI bool do_is_equal(const memory_resource& __other) const _NOEXCEPT override {
+  _LIBCPP_HIDE_FROM_ABI_VIRTUAL bool do_is_equal(const memory_resource& __other) const _NOEXCEPT override {
     return &__other == this;
   }
 
@@ -101,6 +101,6 @@ private:
 
 _LIBCPP_END_NAMESPACE_STD
 
-#endif // _LIBCPP_STD_VER > 14
+#endif // _LIBCPP_STD_VER >= 17
 
 #endif // _LIBCPP___MEMORY_RESOURCE_UNSYNCHRONIZED_POOL_RESOURCE_H

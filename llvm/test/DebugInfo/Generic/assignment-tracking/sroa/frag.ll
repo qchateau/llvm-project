@@ -1,4 +1,4 @@
-; RUN: opt %s -S -passes=sroa -o - -experimental-assignment-tracking | FileCheck %s
+; RUN: opt %s -S -passes=sroa -o - | FileCheck %s
 
 ;; $ cat test.cpp
 ;; class c {
@@ -21,8 +21,8 @@
 ; CHECK: %call = call
 ; CHECK-NEXT: %0 = extractvalue { <2 x float>, <2 x float> } %call, 0
 ; CHECK-NEXT: %1 = extractvalue { <2 x float>, <2 x float> } %call, 1
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata <2 x float> %0, metadata ![[var:[0-9]+]], metadata !DIExpression(DW_OP_LLVM_fragment, 256, 64),{{.+}},{{.+}}undef, metadata !DIExpression()), !dbg
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata <2 x float> %1, metadata ![[var]], metadata !DIExpression(DW_OP_LLVM_fragment, 320, 64),{{.+}},{{.+}}undef, metadata !DIExpression()), !dbg
+; CHECK-NEXT: #dbg_value(<2 x float> %0, ![[var:[0-9]+]], !DIExpression(DW_OP_LLVM_fragment, 256, 64),
+; CHECK-NEXT: #dbg_value(<2 x float> %1, ![[var]], !DIExpression(DW_OP_LLVM_fragment, 320, 64),
 
 %class.c = type { [4 x float] }
 
@@ -33,9 +33,9 @@ entry:
   call void @llvm.dbg.assign(metadata i1 undef, metadata !11, metadata !DIExpression(), metadata !22, metadata ptr %a, metadata !DIExpression()), !dbg !23
   %ref.tmp = alloca %class.c, align 4
   %0 = bitcast ptr %a to ptr, !dbg !24
-  call void @llvm.lifetime.start.p0i8(i64 48, ptr %0) #4, !dbg !24
+  call void @llvm.lifetime.start.p0(i64 48, ptr %0) #4, !dbg !24
   %1 = bitcast ptr %ref.tmp to ptr, !dbg !25
-  call void @llvm.lifetime.start.p0i8(i64 16, ptr %1) #4, !dbg !25
+  call void @llvm.lifetime.start.p0(i64 16, ptr %1) #4, !dbg !25
   %call = call { <2 x float>, <2 x float> } @_Z3fn1v(), !dbg !25
   %coerce.dive = getelementptr inbounds %class.c, ptr %ref.tmp, i32 0, i32 0, !dbg !25
   %2 = bitcast ptr %coerce.dive to ptr, !dbg !25
@@ -48,17 +48,17 @@ entry:
   %arrayidx = getelementptr inbounds [3 x %class.c], ptr %a, i64 0, i64 2, !dbg !26
   %7 = bitcast ptr %arrayidx to ptr, !dbg !27
   %8 = bitcast ptr %ref.tmp to ptr, !dbg !27
-  call void @llvm.memcpy.p0i8.p0i8.i64(ptr align 16 %7, ptr align 4 %8, i64 16, i1 false), !dbg !27, !DIAssignID !32
+  call void @llvm.memcpy.p0.p0.i64(ptr align 16 %7, ptr align 4 %8, i64 16, i1 false), !dbg !27, !DIAssignID !32
   call void @llvm.dbg.assign(metadata i1 undef, metadata !11, metadata !DIExpression(DW_OP_LLVM_fragment, 256, 128), metadata !32, metadata ptr %7, metadata !DIExpression()), !dbg !23
   %9 = bitcast ptr %ref.tmp to ptr, !dbg !26
-  call void @llvm.lifetime.end.p0i8(i64 16, ptr %9) #4, !dbg !26
+  call void @llvm.lifetime.end.p0(i64 16, ptr %9) #4, !dbg !26
   %10 = bitcast ptr %a to ptr, !dbg !33
-  call void @llvm.lifetime.end.p0i8(i64 48, ptr %10) #4, !dbg !33
+  call void @llvm.lifetime.end.p0(i64 48, ptr %10) #4, !dbg !33
   ret void, !dbg !33
 }
 
 ; Function Attrs: argmemonly nofree nosync nounwind willreturn
-declare void @llvm.lifetime.start.p0i8(i64 immarg, ptr nocapture) #1
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1
 
 ; Function Attrs: nofree nosync nounwind readnone speculatable willreturn
 declare void @llvm.dbg.declare(metadata, metadata, metadata) #2
@@ -66,16 +66,16 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata) #2
 declare !dbg !34 dso_local { <2 x float>, <2 x float> } @_Z3fn1v() #3
 
 ; Function Attrs: argmemonly nofree nosync nounwind willreturn
-declare void @llvm.memcpy.p0i8.p0i8.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg) #1
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg) #1
 
 ; Function Attrs: argmemonly nofree nosync nounwind willreturn
-declare void @llvm.lifetime.end.p0i8(i64 immarg, ptr nocapture) #1
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
 
 ; Function Attrs: nofree nosync nounwind readnone speculatable willreturn
 declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, metadata) #2
 
 !llvm.dbg.cu = !{!0}
-!llvm.module.flags = !{!3, !4, !5}
+!llvm.module.flags = !{!3, !4, !5, !1000}
 !llvm.ident = !{!6}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, file: !1, producer: "clang version 12.0.0", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, splitDebugInlining: false, nameTableKind: None)
@@ -111,3 +111,4 @@ declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, 
 !34 = !DISubprogram(name: "fn1", linkageName: "_Z3fn1v", scope: !1, file: !1, line: 4, type: !35, flags: DIFlagPrototyped, spFlags: DISPFlagOptimized, retainedNodes: !2)
 !35 = !DISubroutineType(types: !36)
 !36 = !{!13}
+!1000 = !{i32 7, !"debug-info-assignment-tracking", i1 true}

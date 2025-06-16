@@ -1,12 +1,12 @@
 ; REQUIRES: asserts
 ; RUN: opt -passes=loop-vectorize,dce,instcombine -mtriple riscv64-linux-gnu \
-; RUN:   -mattr=+v -debug-only=loop-vectorize \
+; RUN:   -mattr=+v -debug-only=loop-vectorize --disable-output \
 ; RUN:   -riscv-v-vector-bits-min=128 -scalable-vectorization=off -S < %s 2>&1 | FileCheck %s
 
 ; CHECK-LABEL: foo
 ; CHECK: LV: IC is 2
-; CHECK: %{{.*}} = add <4 x i32> %{{.*}}, <i32 4, i32 4, i32 4, i32 4>
-; CHECK: %{{.*}} = add {{.*}}, 8
+; CHECK: %{{.*}} = add <8 x i32> %{{.*}}, splat (i32 8)
+; CHECK: %{{.*}} = add {{.*}}, 16
 
 ; Function Attrs: nofree norecurse nosync nounwind writeonly
 define dso_local void @foo(i32 signext %n, ptr nocapture %A) local_unnamed_addr #0 {
@@ -41,7 +41,7 @@ attributes #0 = { nofree norecurse nosync nounwind writeonly "frame-pointer"="no
 
 !0 = !{i32 1, !"wchar_size", i32 4}
 !1 = !{i32 1, !"target-abi", !"lp64"}
-!2 = !{i32 1, !"SmallDataLimit", i32 8}
+!2 = !{i32 8, !"SmallDataLimit", i32 8}
 !3 = !{!"clang version 13.0.0"}
 !4 = !{!5, !5, i64 0}
 !5 = !{!"int", !6, i64 0}

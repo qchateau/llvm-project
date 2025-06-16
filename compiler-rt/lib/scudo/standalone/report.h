@@ -12,18 +12,19 @@
 #include "internal_defs.h"
 
 namespace scudo {
-
 // Reports are *fatal* unless stated otherwise.
 
-// Generic error.
+// Generic error, adds newline to end of message.
 void NORETURN reportError(const char *Message);
+
+// Generic error, but the message is not modified.
+void NORETURN reportRawError(const char *Message);
 
 // Flags related errors.
 void NORETURN reportInvalidFlag(const char *FlagType, const char *Value);
 
 // Chunk header related errors.
-void NORETURN reportHeaderCorruption(void *Ptr);
-void NORETURN reportHeaderRace(void *Ptr);
+void NORETURN reportHeaderCorruption(void *Header, void *Ptr);
 
 // Sanity checks related error.
 void NORETURN reportSanityCheckError(const char *Field);
@@ -32,6 +33,7 @@ void NORETURN reportSanityCheckError(const char *Field);
 void NORETURN reportAlignmentTooBig(uptr Alignment, uptr MaxAlignment);
 void NORETURN reportAllocationSizeTooBig(uptr UserSize, uptr TotalSize,
                                          uptr MaxSize);
+void NORETURN reportOutOfBatchClass();
 void NORETURN reportOutOfMemory(uptr RequestedSize);
 enum class AllocatorAction : u8 {
   Recycling,

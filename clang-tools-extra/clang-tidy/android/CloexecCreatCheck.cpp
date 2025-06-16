@@ -7,23 +7,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "CloexecCreatCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace android {
+namespace clang::tidy::android {
 
 void CloexecCreatCheck::registerMatchers(MatchFinder *Finder) {
   auto CharPointerType = hasType(pointerType(pointee(isAnyCharacter())));
   auto MODETType = hasType(namedDecl(hasName("mode_t")));
-  registerMatchersImpl(Finder,
-                       functionDecl(isExternC(), returns(isInteger()),
-                                    hasName("creat"),
-                                    hasParameter(0, CharPointerType),
-                                    hasParameter(1, MODETType)));
+  registerMatchersImpl(Finder, functionDecl(isExternC(), returns(isInteger()),
+                                            hasName("creat"),
+                                            hasParameter(0, CharPointerType),
+                                            hasParameter(1, MODETType)));
 }
 
 void CloexecCreatCheck::check(const MatchFinder::MatchResult &Result) {
@@ -37,6 +33,4 @@ void CloexecCreatCheck::check(const MatchFinder::MatchResult &Result) {
               ReplacementText);
 }
 
-} // namespace android
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::android

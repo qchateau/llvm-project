@@ -13,6 +13,7 @@
 #include "lldb/Utility/Log.h"
 #include "clang/Sema/Lookup.h"
 #include "llvm/Support/Error.h"
+#include <optional>
 
 using namespace lldb_private;
 using namespace clang;
@@ -41,7 +42,7 @@ CxxModuleHandler::CxxModuleHandler(ASTImporter &importer, ASTContext *target)
       "allocator",
       "pair",
   };
-  m_supported_templates.insert(supported_names.begin(), supported_names.end());
+  m_supported_templates.insert_range(supported_names);
 }
 
 /// Builds a list of scopes that point into the given context.
@@ -180,7 +181,7 @@ T *createDecl(ASTImporter &importer, Decl *from_d, Args &&... args) {
   return to_d;
 }
 
-llvm::Optional<Decl *> CxxModuleHandler::tryInstantiateStdTemplate(Decl *d) {
+std::optional<Decl *> CxxModuleHandler::tryInstantiateStdTemplate(Decl *d) {
   Log *log = GetLog(LLDBLog::Expressions);
 
   // If we don't have a template to instiantiate, then there is nothing to do.
@@ -238,7 +239,8 @@ llvm::Optional<Decl *> CxxModuleHandler::tryInstantiateStdTemplate(Decl *d) {
         LLDB_LOG_ERROR(log, type.takeError(), "Couldn't import type: {0}");
         return std::nullopt;
       }
-      imported_args.push_back(TemplateArgument(*type));
+      imported_args.push_back(
+          TemplateArgument(*type, /*isNullPtr*/ false, arg.getIsDefaulted()));
       break;
     }
     case TemplateArgument::Integral: {
@@ -249,8 +251,8 @@ llvm::Optional<Decl *> CxxModuleHandler::tryInstantiateStdTemplate(Decl *d) {
         LLDB_LOG_ERROR(log, type.takeError(), "Couldn't import type: {0}");
         return std::nullopt;
       }
-      imported_args.push_back(
-          TemplateArgument(d->getASTContext(), integral, *type));
+      imported_args.push_back(TemplateArgument(d->getASTContext(), integral,
+                                               *type, arg.getIsDefaulted()));
       break;
     }
     default:
@@ -278,7 +280,8 @@ llvm::Optional<Decl *> CxxModuleHandler::tryInstantiateStdTemplate(Decl *d) {
       new_class_template->getDeclContext(),
       new_class_template->getTemplatedDecl()->getLocation(),
       new_class_template->getLocation(), new_class_template, imported_args,
-      nullptr);
+      td->hasStrictPackMatch(),
+      /*PrevDecl=*/nullptr);
 
   new_class_template->AddSpecialization(result, InsertPos);
   if (new_class_template->isOutOfLine())
@@ -287,7 +290,7 @@ llvm::Optional<Decl *> CxxModuleHandler::tryInstantiateStdTemplate(Decl *d) {
   return result;
 }
 
-llvm::Optional<Decl *> CxxModuleHandler::Import(Decl *d) {
+std::optional<Decl *> CxxModuleHandler::Import(Decl *d) {
   if (!isValid())
     return {};
 

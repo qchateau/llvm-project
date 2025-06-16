@@ -6,15 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Arith/Transforms/Passes.h"
-
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
 namespace arith {
-#define GEN_PASS_DEF_ARITHEXPANDOPS
+#define GEN_PASS_DEF_ARITHEXPANDOPSPASS
 #include "mlir/Dialect/Arith/Transforms/Passes.h.inc"
 } // namespace arith
 } // namespace mlir
@@ -24,8 +26,20 @@ using namespace mlir;
 /// Create an integer or index constant.
 static Value createConst(Location loc, Type type, int value,
                          PatternRewriter &rewriter) {
-  return rewriter.create<arith::ConstantOp>(
-      loc, rewriter.getIntegerAttr(type, value));
+  auto attr = rewriter.getIntegerAttr(getElementTypeOrSelf(type), value);
+  if (auto shapedTy = dyn_cast<ShapedType>(type)) {
+    return rewriter.create<arith::ConstantOp>(
+        loc, DenseElementsAttr::get(shapedTy, attr));
+  }
+  return rewriter.create<arith::ConstantOp>(loc, attr);
+}
+
+/// Creates shapedType using shape from cloneFrom and base type from cloneTo
+static Type cloneToShapedType(Type cloneFrom, Type cloneTo) {
+  if (auto shapedTy = dyn_cast<ShapedType>(cloneFrom)) {
+    return shapedTy.clone(cloneTo);
+  }
+  return cloneTo;
 }
 
 namespace {
@@ -51,9 +65,13 @@ struct CeilDivUIOpConverter : public OpRewritePattern<arith::CeilDivUIOp> {
   }
 };
 
-/// Expands CeilDivSIOp (n, m) into
-///   1) x = (m > 0) ? -1 : 1
-///   2) (n*m>0) ? ((n+x) / m) + 1 : - (-n / m)
+/// Expands CeilDivSIOp (a, b) into
+/// z = a / b
+/// if (z * b != a && (a < 0) == (b < 0)) {
+///   return z + 1;
+/// } else {
+///   return z;
+/// }
 struct CeilDivSIOpConverter : public OpRewritePattern<arith::CeilDivSIOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(arith::CeilDivSIOp op,
@@ -62,50 +80,40 @@ struct CeilDivSIOpConverter : public OpRewritePattern<arith::CeilDivSIOp> {
     Type type = op.getType();
     Value a = op.getLhs();
     Value b = op.getRhs();
-    Value plusOne = createConst(loc, type, 1, rewriter);
+
     Value zero = createConst(loc, type, 0, rewriter);
-    Value minusOne = createConst(loc, type, -1, rewriter);
-    // Compute x = (b>0) ? -1 : 1.
-    Value compare =
-        rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, b, zero);
-    Value x = rewriter.create<arith::SelectOp>(loc, compare, minusOne, plusOne);
-    // Compute positive res: 1 + ((x+a)/b).
-    Value xPlusA = rewriter.create<arith::AddIOp>(loc, x, a);
-    Value xPlusADivB = rewriter.create<arith::DivSIOp>(loc, xPlusA, b);
-    Value posRes = rewriter.create<arith::AddIOp>(loc, plusOne, xPlusADivB);
-    // Compute negative res: - ((-a)/b).
-    Value minusA = rewriter.create<arith::SubIOp>(loc, zero, a);
-    Value minusADivB = rewriter.create<arith::DivSIOp>(loc, minusA, b);
-    Value negRes = rewriter.create<arith::SubIOp>(loc, zero, minusADivB);
-    // Result is (a*b>0) ? pos result : neg result.
-    // Note, we want to avoid using a*b because of possible overflow.
-    // The case that matters are a>0, a==0, a<0, b>0 and b<0. We do
-    // not particuliarly care if a*b<0 is true or false when b is zero
-    // as this will result in an illegal divide. So `a*b<0` can be reformulated
-    // as `(a<0 && b<0) || (a>0 && b>0)' or `(a<0 && b<0) || (a>0 && b>=0)'.
-    // We pick the first expression here.
+    Value one = createConst(loc, type, 1, rewriter);
+
+    Value quotient = rewriter.create<arith::DivSIOp>(loc, a, b);
+    Value product = rewriter.create<arith::MulIOp>(loc, quotient, b);
+    Value notEqualDivisor = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ne, a, product);
+
     Value aNeg =
         rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, a, zero);
-    Value aPos =
-        rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, a, zero);
     Value bNeg =
         rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, b, zero);
-    Value bPos =
-        rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, b, zero);
-    Value firstTerm = rewriter.create<arith::AndIOp>(loc, aNeg, bNeg);
-    Value secondTerm = rewriter.create<arith::AndIOp>(loc, aPos, bPos);
-    Value compareRes =
-        rewriter.create<arith::OrIOp>(loc, firstTerm, secondTerm);
-    // Perform substitution and return success.
-    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, compareRes, posRes,
-                                                 negRes);
+
+    Value signEqual = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, aNeg, bNeg);
+    Value cond =
+        rewriter.create<arith::AndIOp>(loc, notEqualDivisor, signEqual);
+
+    Value quotientPlusOne = rewriter.create<arith::AddIOp>(loc, quotient, one);
+
+    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, cond, quotientPlusOne,
+                                                 quotient);
     return success();
   }
 };
 
-/// Expands FloorDivSIOp (n, m) into
-///   1)  x = (m<0) ? 1 : -1
-///   2)  return (n*m<0) ? - ((-n+x) / m) -1 : n / m
+/// Expands FloorDivSIOp (x, y) into
+/// z = x / y
+/// if (z * y != x && (x < 0) != (y < 0)) {
+///   return  z - 1;
+/// } else {
+///   return z;
+/// }
 struct FloorDivSIOpConverter : public OpRewritePattern<arith::FloorDivSIOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(arith::FloorDivSIOp op,
@@ -114,47 +122,51 @@ struct FloorDivSIOpConverter : public OpRewritePattern<arith::FloorDivSIOp> {
     Type type = op.getType();
     Value a = op.getLhs();
     Value b = op.getRhs();
-    Value plusOne = createConst(loc, type, 1, rewriter);
+
+    Value quotient = rewriter.create<arith::DivSIOp>(loc, a, b);
+    Value product = rewriter.create<arith::MulIOp>(loc, quotient, b);
+    Value notEqualDivisor = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ne, a, product);
     Value zero = createConst(loc, type, 0, rewriter);
-    Value minusOne = createConst(loc, type, -1, rewriter);
-    // Compute x = (b<0) ? 1 : -1.
-    Value compare =
-        rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, b, zero);
-    Value x = rewriter.create<arith::SelectOp>(loc, compare, plusOne, minusOne);
-    // Compute negative res: -1 - ((x-a)/b).
-    Value xMinusA = rewriter.create<arith::SubIOp>(loc, x, a);
-    Value xMinusADivB = rewriter.create<arith::DivSIOp>(loc, xMinusA, b);
-    Value negRes = rewriter.create<arith::SubIOp>(loc, minusOne, xMinusADivB);
-    // Compute positive res: a/b.
-    Value posRes = rewriter.create<arith::DivSIOp>(loc, a, b);
-    // Result is (a*b<0) ? negative result : positive result.
-    // Note, we want to avoid using a*b because of possible overflow.
-    // The case that matters are a>0, a==0, a<0, b>0 and b<0. We do
-    // not particuliarly care if a*b<0 is true or false when b is zero
-    // as this will result in an illegal divide. So `a*b<0` can be reformulated
-    // as `(a>0 && b<0) || (a>0 && b<0)' or `(a>0 && b<0) || (a>0 && b<=0)'.
-    // We pick the first expression here.
+
     Value aNeg =
         rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, a, zero);
-    Value aPos =
-        rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, a, zero);
     Value bNeg =
         rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, b, zero);
-    Value bPos =
-        rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, b, zero);
-    Value firstTerm = rewriter.create<arith::AndIOp>(loc, aNeg, bPos);
-    Value secondTerm = rewriter.create<arith::AndIOp>(loc, aPos, bNeg);
-    Value compareRes =
-        rewriter.create<arith::OrIOp>(loc, firstTerm, secondTerm);
-    // Perform substitution and return success.
-    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, compareRes, negRes,
-                                                 posRes);
+
+    Value signOpposite = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ne, aNeg, bNeg);
+    Value cond =
+        rewriter.create<arith::AndIOp>(loc, notEqualDivisor, signOpposite);
+
+    Value minusOne = createConst(loc, type, -1, rewriter);
+    Value quotientMinusOne =
+        rewriter.create<arith::AddIOp>(loc, quotient, minusOne);
+
+    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, cond, quotientMinusOne,
+                                                 quotient);
+    return success();
+  }
+};
+
+template <typename OpTy, arith::CmpIPredicate pred>
+struct MaxMinIOpConverter : public OpRewritePattern<OpTy> {
+public:
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const final {
+    Value lhs = op.getLhs();
+    Value rhs = op.getRhs();
+
+    Value cmp = rewriter.create<arith::CmpIOp>(op.getLoc(), pred, lhs, rhs);
+    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, cmp, lhs, rhs);
     return success();
   }
 };
 
 template <typename OpTy, arith::CmpFPredicate pred>
-struct MaxMinFOpConverter : public OpRewritePattern<OpTy> {
+struct MaximumMinimumFOpConverter : public OpRewritePattern<OpTy> {
 public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
 
@@ -179,24 +191,306 @@ public:
   }
 };
 
-template <typename OpTy, arith::CmpIPredicate pred>
-struct MaxMinIOpConverter : public OpRewritePattern<OpTy> {
+template <typename OpTy, arith::CmpFPredicate pred>
+struct MaxNumMinNumFOpConverter : public OpRewritePattern<OpTy> {
 public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
+
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const final {
     Value lhs = op.getLhs();
     Value rhs = op.getRhs();
 
     Location loc = op.getLoc();
-    Value cmp = rewriter.create<arith::CmpIOp>(loc, pred, lhs, rhs);
-    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, cmp, lhs, rhs);
+    // If any operand is NaN, 'cmp' will be true (and 'select' returns 'lhs').
+    static_assert(pred == arith::CmpFPredicate::UGT ||
+                      pred == arith::CmpFPredicate::ULT,
+                  "pred must be either UGT or ULT");
+    Value cmp = rewriter.create<arith::CmpFOp>(loc, pred, lhs, rhs);
+    Value select = rewriter.create<arith::SelectOp>(loc, cmp, lhs, rhs);
+
+    // Handle the case where lhs is NaN: 'isNaN(lhs) ? rhs : select'.
+    Value isNaN = rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::UNO,
+                                                 lhs, lhs);
+    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, isNaN, rhs, select);
+    return success();
+  }
+};
+
+struct BFloat16ExtFOpConverter : public OpRewritePattern<arith::ExtFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::ExtFOp op,
+                                PatternRewriter &rewriter) const final {
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    auto operand = op.getOperand();
+    Type operandTy = operand.getType();
+    Type resultTy = op.getType();
+    Type operandETy = getElementTypeOrSelf(operandTy);
+    Type resultETy = getElementTypeOrSelf(resultTy);
+
+    if (!operandETy.isBF16() || !resultETy.isF32()) {
+      return rewriter.notifyMatchFailure(op, "not a ext of bf16 to f32.");
+    }
+
+    Type i16Ty = cloneToShapedType(operandTy, b.getI16Type());
+    Type i32Ty = cloneToShapedType(operandTy, b.getI32Type());
+
+    Value bitcast = b.create<arith::BitcastOp>(i16Ty, operand);
+    Value exti = b.create<arith::ExtUIOp>(i32Ty, bitcast);
+
+    Value c16 = createConst(op.getLoc(), i32Ty, 16, rewriter);
+    Value shl = b.create<arith::ShLIOp>(exti, c16);
+    Value result = b.create<arith::BitcastOp>(resultTy, shl);
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct BFloat16TruncFOpConverter : public OpRewritePattern<arith::TruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::TruncFOp op,
+                                PatternRewriter &rewriter) const final {
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    auto operand = op.getOperand();
+    Type operandTy = operand.getType();
+    Type resultTy = op.getType();
+    Type operandETy = getElementTypeOrSelf(operandTy);
+    Type resultETy = getElementTypeOrSelf(resultTy);
+
+    if (!operandETy.isF32() || !resultETy.isBF16()) {
+      return rewriter.notifyMatchFailure(op, "not a trunc of f32 to bf16.");
+    }
+
+    if (op.getRoundingmodeAttr()) {
+      return rewriter.notifyMatchFailure(
+          op, "only applicable to default rounding mode.");
+    }
+
+    Type i16Ty = cloneToShapedType(operandTy, b.getI16Type());
+    Type i32Ty = cloneToShapedType(operandTy, b.getI32Type());
+
+    // Algorithm borrowed from this excellent code:
+    // https://github.com/pytorch/pytorch/blob/e1502c0cdbfd17548c612f25d5a65b1e4b86224d/c10/util/BFloat16.h#L60-L79
+    // There is a magic idea there, to let the addition of the rounding_bias to
+    // the mantissa simply overflow into the exponent bits. It's a bit of an
+    // aggressive, obfuscating optimization, but it is well-tested code, and it
+    // results in more concise and efficient IR.
+    // The case of NaN is handled separately (see isNaN and the final select).
+    // The case of infinities is NOT handled separately, which deserves an
+    // explanation. As the encoding of infinities has zero mantissa, the
+    // rounding-bias addition never carries into the exponent so that just gets
+    // truncated away, and as bfloat16 and float32 have the same number of
+    // exponent bits, that simple truncation is the desired outcome for
+    // infinities.
+    Value isNan =
+        b.create<arith::CmpFOp>(arith::CmpFPredicate::UNE, operand, operand);
+    // Constant used to make the rounding bias.
+    Value c7FFF = createConst(op.getLoc(), i32Ty, 0x7fff, rewriter);
+    // Constant used to generate a quiet NaN.
+    Value c7FC0I16 = createConst(op.getLoc(), i16Ty, 0x7fc0, rewriter);
+    // Small constants used to address bits.
+    Value c16 = createConst(op.getLoc(), i32Ty, 16, rewriter);
+    Value c1 = createConst(op.getLoc(), i32Ty, 1, rewriter);
+    // Reinterpret the input f32 value as bits.
+    Value bitcast = b.create<arith::BitcastOp>(i32Ty, operand);
+    // Read bit 16 as a value in {0,1}.
+    Value bit16 =
+        b.create<arith::AndIOp>(b.create<arith::ShRUIOp>(bitcast, c16), c1);
+    // Determine the rounding bias to add as either 0x7fff or 0x8000 depending
+    // on bit 16, implementing the tie-breaking "to nearest even".
+    Value roundingBias = b.create<arith::AddIOp>(bit16, c7FFF);
+    // Add the rounding bias. Generally we want this to be added to the
+    // mantissa, but nothing prevents this to from carrying into the exponent
+    // bits, which would feel like a bug, but this is the magic trick here:
+    // when that happens, the mantissa gets reset to zero and the exponent
+    // gets incremented by the carry... which is actually exactly what we
+    // want.
+    Value biased = b.create<arith::AddIOp>(bitcast, roundingBias);
+    // Now that the rounding-bias has been added, truncating the low bits
+    // yields the correctly rounded result.
+    Value biasedAndShifted = b.create<arith::ShRUIOp>(biased, c16);
+    Value normalCaseResultI16 =
+        b.create<arith::TruncIOp>(i16Ty, biasedAndShifted);
+    // Select either the above-computed result, or a quiet NaN constant
+    // if the input was NaN.
+    Value select =
+        b.create<arith::SelectOp>(isNan, c7FC0I16, normalCaseResultI16);
+    Value result = b.create<arith::BitcastOp>(resultTy, select);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct F8E8M0ExtFOpConverter : public OpRewritePattern<arith::ExtFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::ExtFOp op,
+                                PatternRewriter &rewriter) const final {
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    Value operand = op.getOperand();
+    Type operandTy = operand.getType();
+    Type resultTy = op.getType();
+    Type operandETy = getElementTypeOrSelf(operandTy);
+    Type resultETy = getElementTypeOrSelf(resultTy);
+
+    if (!llvm::isa<Float8E8M0FNUType>(operandETy)) {
+      return rewriter.notifyMatchFailure(op, "not a ext of F8E8M0FNU");
+    }
+
+    Type i8Ty = cloneToShapedType(operandTy, b.getI8Type());
+    Type i32Ty = cloneToShapedType(operandTy, b.getI32Type());
+    Type f32Ty = cloneToShapedType(operandTy, b.getF32Type());
+
+    Value bitcast = b.create<arith::BitcastOp>(i8Ty, operand);
+    // create constants for NaNs
+    Value cF8NaN = createConst(op.getLoc(), i8Ty, 0xff, rewriter);
+    Value cF32NaN = createConst(op.getLoc(), i32Ty, 0xffffffff, rewriter);
+    Value cF32MantissaWidth = createConst(op->getLoc(), i32Ty, 23, rewriter);
+
+    Value exti = b.create<arith::ExtUIOp>(i32Ty, bitcast);
+    Value f32Bits = b.create<arith::ShLIOp>(exti, cF32MantissaWidth);
+
+    Value isNan =
+        b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, bitcast, cF8NaN);
+    // select for NaNs
+    f32Bits = b.create<arith::SelectOp>(isNan, cF32NaN, f32Bits);
+    Value result = b.create<arith::BitcastOp>(f32Ty, f32Bits);
+    if (resultETy.getIntOrFloatBitWidth() < 32) {
+      result = b.create<arith::TruncFOp>(resultTy, result, nullptr,
+                                         op.getFastmathAttr());
+    } else if (resultETy.getIntOrFloatBitWidth() > 32) {
+      result = b.create<arith::ExtFOp>(resultTy, result, op.getFastmathAttr());
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/*
+TruncF to F8E8M0 is expected to extract exponent bits out of F32 type
+Since All kinds of Infs and NaNs are mapped to same exponent bits in F32 type,
+they all map to NaN in F8E8M0 Type.
+*/
+struct F8E8M0TruncFOpConverter : public OpRewritePattern<arith::TruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::TruncFOp op,
+                                PatternRewriter &rewriter) const final {
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    Value operand = op.getOperand();
+    Type operandTy = operand.getType();
+    Type operandETy = getElementTypeOrSelf(operandTy);
+    Type resultTy = op.getType();
+    Type resultETy = getElementTypeOrSelf(resultTy);
+    if (!llvm::isa<Float8E8M0FNUType>(resultETy)) {
+      return rewriter.notifyMatchFailure(op, "not a truncf to f8E8M0FNU");
+    }
+
+    if (op.getRoundingmodeAttr()) {
+      return rewriter.notifyMatchFailure(
+          op, "only applicable to default rounding mode.");
+    }
+
+    Type i8Ty = cloneToShapedType(operandTy, b.getI8Type());
+    Type i32Ty = cloneToShapedType(operandTy, b.getI32Type());
+    Type f32Ty = cloneToShapedType(operandTy, b.getF32Type());
+
+    if (operandETy.getIntOrFloatBitWidth() < 32) {
+      operand = b.create<arith::ExtFOp>(f32Ty, operand, op.getFastmathAttr());
+    } else if (operandETy.getIntOrFloatBitWidth() > 32) {
+      operand = b.create<arith::TruncFOp>(
+          f32Ty, operand, op.getRoundingmodeAttr(), op.getFastmathAttr());
+    }
+    Value f32Bits = b.create<arith::BitcastOp>(i32Ty, operand);
+    Value cF32MantissaWidth = createConst(op->getLoc(), i32Ty, 23, rewriter);
+    Value f32SignExp = b.create<arith::ShRUIOp>(f32Bits, cF32MantissaWidth);
+    Value exp8Bits = b.create<arith::TruncIOp>(i8Ty, f32SignExp);
+    Value result = b.create<arith::BitcastOp>(resultTy, exp8Bits);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct ScalingExtFOpConverter : public OpRewritePattern<arith::ScalingExtFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::ScalingExtFOp op,
+                                PatternRewriter &rewriter) const final {
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    Value inputOperand = op.getIn();
+    Value scaleOperand = op.getScale();
+    Type scaleTy = scaleOperand.getType();
+    Type scaleETy = getElementTypeOrSelf(scaleOperand);
+    // allow implicit exponent extraction from 16/32 bits floats
+    if (scaleETy.getIntOrFloatBitWidth() >= 16) {
+      scaleETy = b.getF8E8M0Type();
+      scaleTy = cloneToShapedType(scaleTy, scaleETy);
+      scaleOperand = b.create<arith::TruncFOp>(scaleTy, scaleOperand, nullptr,
+                                               op.getFastmathAttr());
+    }
+    if (!llvm::isa<Float8E8M0FNUType>(scaleETy)) {
+      return rewriter.notifyMatchFailure(
+          op, "scaling_extf is using scales of type which can not be converted "
+              "to f8E8M0FNU");
+    }
+    Type resultTy = op.getType();
+    // extf on scale will essentially create floating point number
+    // of type resulTy that is 2^scale and will also propagate NaNs
+    Value scaleExt =
+        b.create<arith::ExtFOp>(resultTy, scaleOperand, op.getFastmathAttr());
+    Value inputExt =
+        b.create<arith::ExtFOp>(resultTy, inputOperand, op.getFastmathAttr());
+    Value result =
+        b.create<arith::MulFOp>(inputExt, scaleExt, op.getFastmathAttr());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/*
+Expands arith.ScalingTruncFOp(in, scale) into
+  scale = arith.truncf(scale) : scaleTy -> f8E8M0FNU
+  result = arith.truncf(in / (2^scale))
+ */
+struct ScalingTruncFOpConverter
+    : public OpRewritePattern<arith::ScalingTruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(arith::ScalingTruncFOp op,
+                                PatternRewriter &rewriter) const final {
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    Value inputOperand = op.getIn();
+    Value scaleOperand = op.getScale();
+    Type scaleTy = scaleOperand.getType();
+    Type scaleETy = getElementTypeOrSelf(scaleOperand);
+    // allow implicit exponent extraction from 16/32 bits floats
+    if (scaleETy.getIntOrFloatBitWidth() >= 16) {
+      scaleETy = b.getF8E8M0Type();
+      scaleTy = cloneToShapedType(scaleTy, scaleETy);
+      scaleOperand = b.create<arith::TruncFOp>(scaleTy, scaleOperand, nullptr,
+                                               op.getFastmathAttr());
+    }
+    if (!llvm::isa<Float8E8M0FNUType>(scaleETy)) {
+      return rewriter.notifyMatchFailure(
+          op, "scaling_truncf is using scales type which can not be converted "
+              "to f8E8M0FNU");
+    }
+    Type resultTy = op.getType();
+    Type inputTy = inputOperand.getType();
+    // this will create a floating point number of type
+    // inputTy that is 2^scale and will also propagate NaNs
+    scaleOperand =
+        b.create<arith::ExtFOp>(inputTy, scaleOperand, op.getFastmathAttr());
+    Value result = b.create<arith::DivFOp>(inputOperand, scaleOperand,
+                                           op.getFastmathAttr());
+    Value resultCast = b.create<arith::TruncFOp>(
+        resultTy, result, op.getRoundingmodeAttr(), op.getFastmathAttr());
+    rewriter.replaceOp(op, resultCast);
     return success();
   }
 };
 
 struct ArithExpandOpsPass
-    : public arith::impl::ArithExpandOpsBase<ArithExpandOpsPass> {
+    : public arith::impl::ArithExpandOpsPassBase<ArithExpandOpsPass> {
+  using ArithExpandOpsPassBase::ArithExpandOpsPassBase;
+
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
@@ -209,13 +503,49 @@ struct ArithExpandOpsPass
       arith::CeilDivSIOp,
       arith::CeilDivUIOp,
       arith::FloorDivSIOp,
-      arith::MaxFOp,
       arith::MaxSIOp,
       arith::MaxUIOp,
-      arith::MinFOp,
       arith::MinSIOp,
-      arith::MinUIOp
+      arith::MinUIOp,
+      arith::MaximumFOp,
+      arith::MinimumFOp,
+      arith::MaxNumFOp,
+      arith::MinNumFOp,
+      arith::ScalingExtFOp,
+      arith::ScalingTruncFOp
     >();
+
+    if (includeBf16) {
+      arith::populateExpandBFloat16Patterns(patterns);
+    }
+    if (includeF8E8M0) {
+      arith::populateExpandF8E8M0Patterns(patterns);
+    }
+
+    target.addDynamicallyLegalOp<arith::ExtFOp>(
+      [=](arith::ExtFOp op) {
+        Type inETy = getElementTypeOrSelf(op.getOperand().getType());
+        Type outETy = getElementTypeOrSelf(op.getType());
+        bool legalTypes = true;
+        if (includeBf16) 
+          legalTypes &= !(inETy.isBF16() && outETy.isF32());
+        if (includeF8E8M0)
+          legalTypes &= !llvm::isa<Float8E8M0FNUType>(inETy);
+        return legalTypes;
+      });
+
+    target.addDynamicallyLegalOp<arith::TruncFOp>(
+      [=](arith::TruncFOp op)  {
+        Type inETy = getElementTypeOrSelf(op.getOperand().getType());
+        Type outETy = getElementTypeOrSelf(op.getType());
+        bool legalTypes = true;
+        if (includeBf16) 
+          legalTypes &= !(inETy.isF32() && outETy.isBF16());
+        if (includeF8E8M0) 
+          legalTypes &= !(llvm::isa<Float8E8M0FNUType>(outETy)); 
+        return legalTypes;
+      });
+
     // clang-format on
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
@@ -232,20 +562,35 @@ void mlir::arith::populateCeilFloorDivExpandOpsPatterns(
           patterns.getContext());
 }
 
+void mlir::arith::populateExpandBFloat16Patterns(RewritePatternSet &patterns) {
+  patterns.add<BFloat16ExtFOpConverter, BFloat16TruncFOpConverter>(
+      patterns.getContext());
+}
+
+void mlir::arith::populateExpandF8E8M0Patterns(RewritePatternSet &patterns) {
+  patterns.add<F8E8M0ExtFOpConverter, F8E8M0TruncFOpConverter>(
+      patterns.getContext());
+}
+
+void mlir::arith::populateExpandScalingExtTruncPatterns(
+    RewritePatternSet &patterns) {
+  patterns.add<ScalingExtFOpConverter, ScalingTruncFOpConverter>(
+      patterns.getContext());
+}
+
 void mlir::arith::populateArithExpandOpsPatterns(RewritePatternSet &patterns) {
   populateCeilFloorDivExpandOpsPatterns(patterns);
+  populateExpandScalingExtTruncPatterns(patterns);
   // clang-format off
   patterns.add<
-    MaxMinFOpConverter<MaxFOp, arith::CmpFPredicate::UGT>,
-    MaxMinFOpConverter<MinFOp, arith::CmpFPredicate::ULT>,
     MaxMinIOpConverter<MaxSIOp, arith::CmpIPredicate::sgt>,
     MaxMinIOpConverter<MaxUIOp, arith::CmpIPredicate::ugt>,
     MaxMinIOpConverter<MinSIOp, arith::CmpIPredicate::slt>,
-    MaxMinIOpConverter<MinUIOp, arith::CmpIPredicate::ult>
+    MaxMinIOpConverter<MinUIOp, arith::CmpIPredicate::ult>,
+    MaximumMinimumFOpConverter<MaximumFOp, arith::CmpFPredicate::UGT>,
+    MaximumMinimumFOpConverter<MinimumFOp, arith::CmpFPredicate::ULT>,
+    MaxNumMinNumFOpConverter<MaxNumFOp, arith::CmpFPredicate::UGT>,
+    MaxNumMinNumFOpConverter<MinNumFOp, arith::CmpFPredicate::ULT> 
    >(patterns.getContext());
   // clang-format on
-}
-
-std::unique_ptr<Pass> mlir::arith::createArithExpandOpsPass() {
-  return std::make_unique<ArithExpandOpsPass>();
 }

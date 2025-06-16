@@ -16,9 +16,7 @@
 using namespace clang;
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace modernize {
+namespace clang::tidy::modernize {
 
 namespace {
 static const char AutoPtrTokenId[] = "AutoPrTokenId";
@@ -143,13 +141,10 @@ void ReplaceAutoPtrCheck::check(const MatchFinder::MatchResult &Result) {
       "auto_ptr")
     return;
 
-  SourceLocation EndLoc =
-      AutoPtrLoc.getLocWithOffset(strlen("auto_ptr") - 1);
+  SourceLocation EndLoc = AutoPtrLoc.getLocWithOffset(strlen("auto_ptr") - 1);
   diag(AutoPtrLoc, "auto_ptr is deprecated, use unique_ptr instead")
       << FixItHint::CreateReplacement(SourceRange(AutoPtrLoc, EndLoc),
                                       "unique_ptr");
 }
 
-} // namespace modernize
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::modernize

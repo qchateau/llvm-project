@@ -12,7 +12,7 @@
 
 #include "sanitizer_platform.h"
 #if SANITIZER_FREEBSD || SANITIZER_LINUX || SANITIZER_NETBSD || \
-    SANITIZER_SOLARIS
+    SANITIZER_SOLARIS || SANITIZER_HAIKU
 #include "sanitizer_common.h"
 #include "sanitizer_stacktrace.h"
 
@@ -139,13 +139,7 @@ void BufferedStackTrace::UnwindSlow(uptr pc, u32 max_depth) {
   if (to_pop == 0 && size > 1)
     to_pop = 1;
   PopStackFrames(to_pop);
-#if defined(__GNUC__) && defined(__sparc__)
-  // __builtin_return_address returns the address of the call instruction
-  // on the SPARC and not the return address, so we need to compensate.
-  trace_buffer[0] = GetNextInstructionPc(pc);
-#else
   trace_buffer[0] = pc;
-#endif
 }
 
 void BufferedStackTrace::UnwindSlow(uptr pc, void *context, u32 max_depth) {
@@ -177,4 +171,4 @@ void BufferedStackTrace::UnwindSlow(uptr pc, void *context, u32 max_depth) {
 }  // namespace __sanitizer
 
 #endif  // SANITIZER_FREEBSD || SANITIZER_LINUX || SANITIZER_NETBSD ||
-        // SANITIZER_SOLARIS
+        // SANITIZER_SOLARIS || SANITIZER_HAIKU

@@ -12,7 +12,7 @@
 ; CHECK:          DW_AT_name {{.*}} "reserved"
 ; CHECK:          DW_AT_byte_size  {{.*}} (0x04)
 ; CHECK:          DW_AT_bit_size   {{.*}} (0x1c)
-; CHECK:          DW_AT_bit_offset {{.*}} (0xfffffffffffffff8)
+; CHECK:          DW_AT_bit_offset {{.*}} (-8)
 ; CHECK:          DW_AT_data_member_location {{.*}} (DW_OP_plus_uconst 0x0)
 
 %struct.anon = type { i8, [5 x i8] }
@@ -33,7 +33,7 @@
 !7 = !{!8, !10}
 !8 = !DIDerivedType(tag: DW_TAG_member, name: "c", scope: !6, file: !3, line: 2, baseType: !9, size: 8, align: 8)
 !9 = !DIBasicType(name: "char", size: 8, align: 8, encoding: DW_ATE_signed_char)
-!10 = !DIDerivedType(tag: DW_TAG_member, name: "reserved", scope: !6, file: !3, line: 4, baseType: !11, size: 28, align: 32, offset: 12)
+!10 = !DIDerivedType(tag: DW_TAG_member, name: "reserved", scope: !6, file: !3, line: 4, baseType: !11, size: 28, align: 32, offset: 12, flags: DIFlagBitField)
 !11 = !DIBasicType(name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
 !12 = !{i32 2, !"Dwarf Version", i32 2}
 !13 = !{i32 2, !"Debug Info Version", i32 3}

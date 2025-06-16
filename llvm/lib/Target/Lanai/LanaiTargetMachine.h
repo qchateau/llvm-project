@@ -17,12 +17,12 @@
 #include "LanaiInstrInfo.h"
 #include "LanaiSelectionDAGInfo.h"
 #include "LanaiSubtarget.h"
-#include "llvm/Target/TargetMachine.h"
+#include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include <optional>
 
 namespace llvm {
 
-class LanaiTargetMachine : public LLVMTargetMachine {
+class LanaiTargetMachine : public CodeGenTargetMachineImpl {
   LanaiSubtarget Subtarget;
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
 
@@ -32,7 +32,7 @@ public:
                      const TargetOptions &Options,
                      std::optional<Reloc::Model> RM,
                      std::optional<CodeModel::Model> CodeModel,
-                     CodeGenOpt::Level OptLevel, bool JIT);
+                     CodeGenOptLevel OptLevel, bool JIT);
 
   const LanaiSubtarget *
   getSubtargetImpl(const llvm::Function & /*Fn*/) const override {
@@ -47,6 +47,10 @@ public:
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
   }
+
+  MachineFunctionInfo *
+  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
+                            const TargetSubtargetInfo *STI) const override;
 
   bool isMachineVerifierClean() const override {
     return false;

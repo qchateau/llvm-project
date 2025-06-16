@@ -5,7 +5,7 @@
 ; block to the enclosing loop and not get confused by the unreachable
 ; bogus loop entry.
 
-define void @is_extract_cab() nounwind {
+define void @is_extract_cab(i1 %arg) nounwind {
 entry:
   br label %header
 
@@ -13,7 +13,7 @@ header:                                       ; preds = %if.end206, %cond.end66,
   br label %while.body115
 
 while.body115:                                    ; preds = %9, %if.end192, %if.end101
-  br i1 undef, label %header, label %while.body115
+  br i1 %arg, label %header, label %while.body115
 
 foo:
   br label %while.body115
@@ -22,7 +22,7 @@ foo:
 ; When loopsimplify generates dedicated exit block for blocks that are landing
 ; pads (i.e. innerLoopExit in this test), we should not get confused with the
 ; unreachable pred (unreachableB) to innerLoopExit.
-define void @baz(i32 %trip) personality i32* ()* @wobble {
+define void @baz(i32 %trip) personality ptr @wobble {
 entry:
   br label %outerHeader
 
@@ -34,7 +34,7 @@ innerPreheader:
   br label %innerH
 
 innerH:
-  %tmp50 = invoke i8 * undef()
+  %tmp50 = invoke ptr undef()
           to label %innerLatch unwind label %innerLoopExit
 
 innerLatch:
@@ -42,19 +42,19 @@ innerLatch:
   br i1 %cmp, label %innerH, label %retblock
 
 unreachableB:                                             ; No predecessors!
-  %tmp62 = invoke i8 * undef()
+  %tmp62 = invoke ptr undef()
           to label %retblock unwind label %innerLoopExit
 
 ; undedicated exit block (preds from inner and outer loop)
 ; Also has unreachableB as pred.
 innerLoopExit:
-  %tmp65 = landingpad { i8*, i32 }
+  %tmp65 = landingpad { ptr, i32 }
           cleanup
   invoke void @foo()
           to label %outerHeader unwind label %unwindblock
 
 unwindblock:
-  %tmp67 = landingpad { i8*, i32 }
+  %tmp67 = landingpad { ptr, i32 }
           cleanup
   ret void
 
@@ -63,7 +63,7 @@ retblock:
 }
 
 ; Function Attrs: nounwind
-declare i32* @wobble()
+declare ptr @wobble()
 
 ; Function Attrs: uwtable
 declare void @foo()

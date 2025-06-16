@@ -57,7 +57,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
-#include "llvm/Pass.h"
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
 
@@ -103,7 +103,7 @@ public:
   }
 
   /// Fetch condition in the form of PredicateConstraint, if possible.
-  std::optional<PredicateConstraint> getConstraint() const;
+  LLVM_ABI std::optional<PredicateConstraint> getConstraint() const;
 
 protected:
   PredicateBase(PredicateType PT, Value *Op, Value *Condition)
@@ -177,13 +177,13 @@ public:
 /// accesses.
 class PredicateInfo {
 public:
-  PredicateInfo(Function &, DominatorTree &, AssumptionCache &);
-  ~PredicateInfo();
+  LLVM_ABI PredicateInfo(Function &, DominatorTree &, AssumptionCache &);
+  LLVM_ABI ~PredicateInfo();
 
-  void verifyPredicateInfo() const;
+  LLVM_ABI void verifyPredicateInfo() const;
 
-  void dump() const;
-  void print(raw_ostream &) const;
+  LLVM_ABI void dump() const;
+  LLVM_ABI void print(raw_ostream &) const;
 
   const PredicateBase *getPredicateInfoFor(const Value *V) const {
     return PredicateMap.lookup(V);
@@ -192,7 +192,6 @@ public:
 protected:
   // Used by PredicateInfo annotater, dumpers, and wrapper pass.
   friend class PredicateInfoAnnotatedWriter;
-  friend class PredicateInfoPrinterLegacyPass;
   friend class PredicateInfoBuilder;
 
 private:
@@ -209,18 +208,6 @@ private:
   SmallSet<AssertingVH<Function>, 20> CreatedDeclarations;
 };
 
-// This pass does eager building and then printing of PredicateInfo. It is used
-// by
-// the tests to be able to build, dump, and verify PredicateInfo.
-class PredicateInfoPrinterLegacyPass : public FunctionPass {
-public:
-  PredicateInfoPrinterLegacyPass();
-
-  static char ID;
-  bool runOnFunction(Function &) override;
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-};
-
 /// Printer pass for \c PredicateInfo.
 class PredicateInfoPrinterPass
     : public PassInfoMixin<PredicateInfoPrinterPass> {
@@ -228,12 +215,14 @@ class PredicateInfoPrinterPass
 
 public:
   explicit PredicateInfoPrinterPass(raw_ostream &OS) : OS(OS) {}
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
 };
 
 /// Verifier pass for \c PredicateInfo.
 struct PredicateInfoVerifierPass : PassInfoMixin<PredicateInfoVerifierPass> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
 };
 
 } // end namespace llvm

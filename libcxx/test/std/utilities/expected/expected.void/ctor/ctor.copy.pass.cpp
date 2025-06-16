@@ -1,4 +1,5 @@
 //===----------------------------------------------------------------------===//
+//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -25,6 +26,7 @@
 #include <utility>
 
 #include "test_macros.h"
+#include "../../types.h"
 
 struct NonCopyable {
   NonCopyable(const NonCopyable&) = delete;
@@ -43,9 +45,7 @@ static_assert(std::is_copy_constructible_v<std::expected<void, CopyableNonTrivia
 static_assert(!std::is_copy_constructible_v<std::expected<void, NonCopyable>>);
 
 // Test: This constructor is trivial if is_trivially_copy_constructible_v<E> is true.
-#if __cpp_concepts >= 202002
 static_assert(std::is_trivially_copy_constructible_v<std::expected<void, int>>);
-#endif
 static_assert(!std::is_trivially_copy_constructible_v<std::expected<void, CopyableNonTrivial>>);
 
 constexpr bool test() {
@@ -64,13 +64,19 @@ constexpr bool test() {
     assert(!e2.has_value());
     assert(e2.error() == 5);
   }
+
+  // copy TailClobberer as error
+  {
+    const std::expected<void, TailClobberer<1>> e1(std::unexpect);
+    auto e2 = e1;
+    assert(!e2.has_value());
+  }
+
   return true;
 }
 
 void testException() {
 #ifndef TEST_HAS_NO_EXCEPTIONS
-  struct Except {};
-
   struct Throwing {
     Throwing() = default;
     Throwing(const Throwing&) { throw Except{}; }

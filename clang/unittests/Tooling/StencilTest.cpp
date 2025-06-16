@@ -16,6 +16,7 @@
 #include "llvm/Testing/Support/Error.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include <optional>
 
 using namespace clang;
 using namespace transformer;
@@ -69,9 +70,9 @@ struct TestMatch {
 // `StatementCode` exactly -- that is, produce exactly one match. However,
 // `StatementCode` may contain other statements not described by `Matcher`.
 // `ExtraPreface` (optionally) adds extra decls to the TU, before the code.
-static llvm::Optional<TestMatch> matchStmt(StringRef StatementCode,
-                                           StatementMatcher Matcher,
-                                           StringRef ExtraPreface = "") {
+static std::optional<TestMatch> matchStmt(StringRef StatementCode,
+                                          StatementMatcher Matcher,
+                                          StringRef ExtraPreface = "") {
   auto AstUnit = tooling::buildASTFromCodeWithArgs(
       wrapSnippet(ExtraPreface, StatementCode), {"-Wno-unused-value"});
   if (AstUnit == nullptr) {
@@ -561,6 +562,28 @@ TEST_F(StencilTest, DescribeAnonNamespaceType) {
       matchStmt(Snippet, declRefExpr(hasType(qualType().bind("type"))));
   ASSERT_TRUE(StmtMatch);
   EXPECT_THAT_EXPECTED(describe("type")->eval(StmtMatch->Result),
+                       HasValue(std::string(Expected)));
+}
+
+TEST_F(StencilTest, DescribeFunction) {
+  std::string Snippet = "int F(); F();";
+  std::string Expected = "F";
+  auto StmtMatch = matchStmt(Snippet, callExpr(callee(namedDecl().bind("fn"))));
+  ASSERT_TRUE(StmtMatch);
+  EXPECT_THAT_EXPECTED(describe("fn")->eval(StmtMatch->Result),
+                       HasValue(std::string(Expected)));
+}
+
+TEST_F(StencilTest, DescribeImplicitOperator) {
+  std::string Snippet = "struct Tag {}; [](Tag){};";
+  std::string Expected = "operator()";
+  auto StmtMatch = matchStmt(
+      Snippet,
+      stmt(hasDescendant(
+          cxxMethodDecl(hasParameter(0, hasType(namedDecl(hasName("Tag")))))
+              .bind("fn"))));
+  ASSERT_TRUE(StmtMatch);
+  EXPECT_THAT_EXPECTED(describe("fn")->eval(StmtMatch->Result),
                        HasValue(std::string(Expected)));
 }
 

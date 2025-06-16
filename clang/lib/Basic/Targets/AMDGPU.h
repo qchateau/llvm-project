@@ -17,9 +17,10 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/TargetParser.h"
+#include "llvm/TargetParser/TargetParser.h"
+#include "llvm/TargetParser/Triple.h"
 #include <optional>
 
 namespace clang {
@@ -27,22 +28,20 @@ namespace targets {
 
 class LLVM_LIBRARY_VISIBILITY AMDGPUTargetInfo final : public TargetInfo {
 
-  static const Builtin::Info BuiltinInfo[];
   static const char *const GCCRegNames[];
 
-  enum AddrSpace {
-    Generic = 0,
-    Global = 1,
-    Local = 3,
-    Constant = 4,
-    Private = 5
-  };
   static const LangASMap AMDGPUDefIsGenMap;
   static const LangASMap AMDGPUDefIsPrivMap;
 
   llvm::AMDGPU::GPUKind GPUKind;
   unsigned GPUFeatures;
   unsigned WavefrontSize;
+
+  /// Whether to use cumode or WGP mode. True for cumode. False for WGP mode.
+  bool CUMode;
+
+  /// Whether having image instructions.
+  bool HasImage = false;
 
   /// Target ID is device name followed by optional feature name postfixed
   /// by plus or minus sign delimitted by colon, e.g. gfx908:xnack+:sramecc-.
@@ -53,7 +52,7 @@ class LLVM_LIBRARY_VISIBILITY AMDGPUTargetInfo final : public TargetInfo {
   std::string TargetID;
 
   bool hasFP64() const {
-    return getTriple().getArch() == llvm::Triple::amdgcn ||
+    return getTriple().isAMDGCN() ||
            !!(GPUFeatures & llvm::AMDGPU::FEATURE_FP64);
   }
 
@@ -63,12 +62,10 @@ class LLVM_LIBRARY_VISIBILITY AMDGPUTargetInfo final : public TargetInfo {
   }
 
   /// Has fast fma f64
-  bool hasFastFMA() const {
-    return getTriple().getArch() == llvm::Triple::amdgcn;
-  }
+  bool hasFastFMA() const { return getTriple().isAMDGCN(); }
 
   bool hasFMAF() const {
-    return getTriple().getArch() == llvm::Triple::amdgcn ||
+    return getTriple().isAMDGCN() ||
            !!(GPUFeatures & llvm::AMDGPU::FEATURE_FMA);
   }
 
@@ -77,13 +74,11 @@ class LLVM_LIBRARY_VISIBILITY AMDGPUTargetInfo final : public TargetInfo {
   }
 
   bool hasLDEXPF() const {
-    return getTriple().getArch() == llvm::Triple::amdgcn ||
+    return getTriple().isAMDGCN() ||
            !!(GPUFeatures & llvm::AMDGPU::FEATURE_LDEXP);
   }
 
-  static bool isAMDGCN(const llvm::Triple &TT) {
-    return TT.getArch() == llvm::Triple::amdgcn;
-  }
+  static bool isAMDGCN(const llvm::Triple &TT) { return TT.isAMDGCN(); }
 
   static bool isR600(const llvm::Triple &TT) {
     return TT.getArch() == llvm::Triple::r600;
@@ -101,7 +96,8 @@ public:
       return 32;
     unsigned TargetAS = getTargetAddressSpace(AS);
 
-    if (TargetAS == Private || TargetAS == Local)
+    if (TargetAS == llvm::AMDGPUAS::PRIVATE_ADDRESS ||
+        TargetAS == llvm::AMDGPUAS::LOCAL_ADDRESS)
       return 32;
 
     return 64;
@@ -111,19 +107,31 @@ public:
     return getPointerWidthV(AddrSpace);
   }
 
+  virtual bool isAddressSpaceSupersetOf(LangAS A, LangAS B) const override {
+    // The flat address space AS(0) is a superset of all the other address
+    // spaces used by the backend target.
+    return A == B ||
+           ((A == LangAS::Default ||
+             (isTargetAddressSpace(A) &&
+              toTargetAddressSpace(A) == llvm::AMDGPUAS::FLAT_ADDRESS)) &&
+            isTargetAddressSpace(B) &&
+            toTargetAddressSpace(B) >= llvm::AMDGPUAS::FLAT_ADDRESS &&
+            toTargetAddressSpace(B) <= llvm::AMDGPUAS::PRIVATE_ADDRESS &&
+            toTargetAddressSpace(B) != llvm::AMDGPUAS::REGION_ADDRESS);
+  }
+
   uint64_t getMaxPointerWidth() const override {
-    return getTriple().getArch() == llvm::Triple::amdgcn ? 64 : 32;
+    return getTriple().isAMDGCN() ? 64 : 32;
   }
 
   bool hasBFloat16Type() const override { return isAMDGCN(getTriple()); }
-  const char *getBFloat16Mangling() const override { return "u6__bf16"; };
 
-  const char *getClobbers() const override { return ""; }
+  std::string_view getClobbers() const override { return ""; }
 
   ArrayRef<const char *> getGCCRegNames() const override;
 
   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
-    return std::nullopt;
+    return {};
   }
 
   /// Accepted register names: (n, m is unsigned integer, n < m)
@@ -169,11 +177,7 @@ public:
       return true;
     }
 
-    bool HasLeftParen = false;
-    if (S.front() == '{') {
-      HasLeftParen = true;
-      S = S.drop_front();
-    }
+    bool HasLeftParen = S.consume_front("{");
     if (S.empty())
       return false;
     if (S.front() != 'v' && S.front() != 's' && S.front() != 'a') {
@@ -199,30 +203,23 @@ public:
       Name = S.data() - 1;
       return true;
     }
-    bool HasLeftBracket = false;
-    if (!S.empty() && S.front() == '[') {
-      HasLeftBracket = true;
-      S = S.drop_front();
-    }
+    bool HasLeftBracket = S.consume_front("[");
     unsigned long long N;
     if (S.empty() || consumeUnsignedInteger(S, 10, N))
       return false;
-    if (!S.empty() && S.front() == ':') {
+    if (S.consume_front(":")) {
       if (!HasLeftBracket)
         return false;
-      S = S.drop_front();
       unsigned long long M;
       if (consumeUnsignedInteger(S, 10, M) || N >= M)
         return false;
     }
     if (HasLeftBracket) {
-      if (S.empty() || S.front() != ']')
+      if (!S.consume_front("]"))
         return false;
-      S = S.drop_front();
     }
-    if (S.empty() || S.front() != '}')
+    if (!S.consume_front("}"))
       return false;
-    S = S.drop_front();
     if (!S.empty())
       return false;
     // Found {vn}, {sn}, {an}, {v[n]}, {s[n]}, {a[n]}, {v[n:m]}, {s[n:m]}
@@ -256,7 +253,7 @@ public:
                  StringRef CPU,
                  const std::vector<std::string> &FeatureVec) const override;
 
-  ArrayRef<Builtin::Info> getTargetBuiltins() const override;
+  llvm::SmallVector<Builtin::InfosShard> getTargetBuiltins() const override;
 
   bool useFP16ConversionIntrinsics() const override { return false; }
 
@@ -268,7 +265,7 @@ public:
   }
 
   bool isValidCPUName(StringRef Name) const override {
-    if (getTriple().getArch() == llvm::Triple::amdgcn)
+    if (getTriple().isAMDGCN())
       return llvm::AMDGPU::parseArchAMDGCN(Name) != llvm::AMDGPU::GK_NONE;
     return llvm::AMDGPU::parseArchR600(Name) != llvm::AMDGPU::GK_NONE;
   }
@@ -276,7 +273,7 @@ public:
   void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
 
   bool setCPU(const std::string &Name) override {
-    if (getTriple().getArch() == llvm::Triple::amdgcn) {
+    if (getTriple().isAMDGCN()) {
       GPUKind = llvm::AMDGPU::parseArchAMDGCN(Name);
       GPUFeatures = llvm::AMDGPU::getArchAttrAMDGCN(GPUKind);
     } else {
@@ -321,6 +318,9 @@ public:
       Opts["__opencl_c_images"] = true;
       Opts["__opencl_c_3d_image_writes"] = true;
       Opts["cl_khr_3d_image_writes"] = true;
+
+      Opts["__opencl_c_generic_address_space"] =
+          GPUKind >= llvm::AMDGPU::GK_GFX700;
     }
   }
 
@@ -371,8 +371,8 @@ public:
     }
   }
 
-  llvm::Optional<LangAS> getConstantAddressSpace() const override {
-    return getLangASFromTargetAS(Constant);
+  std::optional<LangAS> getConstantAddressSpace() const override {
+    return getLangASFromTargetAS(llvm::AMDGPUAS::CONSTANT_ADDRESS);
   }
 
   const llvm::omp::GV &getGridValue() const override {
@@ -388,7 +388,7 @@ public:
 
   /// \returns Target specific vtbl ptr address space.
   unsigned getVtblPtrAddressSpace() const override {
-    return static_cast<unsigned>(Constant);
+    return static_cast<unsigned>(llvm::AMDGPUAS::CONSTANT_ADDRESS);
   }
 
   /// \returns If a target requires an address within a target specific address
@@ -401,9 +401,9 @@ public:
   getDWARFAddressSpace(unsigned AddressSpace) const override {
     const unsigned DWARF_Private = 1;
     const unsigned DWARF_Local = 2;
-    if (AddressSpace == Private) {
+    if (AddressSpace == llvm::AMDGPUAS::PRIVATE_ADDRESS) {
       return DWARF_Private;
-    } else if (AddressSpace == Local) {
+    } else if (AddressSpace == llvm::AMDGPUAS::LOCAL_ADDRESS) {
       return DWARF_Local;
     } else {
       return std::nullopt;
@@ -415,8 +415,7 @@ public:
     default:
       return CCCR_Warning;
     case CC_C:
-    case CC_OpenCLKernel:
-    case CC_AMDGPUKernelCall:
+    case CC_DeviceKernel:
       return CCCR_OK;
     }
   }
@@ -426,8 +425,10 @@ public:
   // value ~0.
   uint64_t getNullPointerValue(LangAS AS) const override {
     // FIXME: Also should handle region.
-    return (AS == LangAS::opencl_local || AS == LangAS::opencl_private)
-      ? ~0 : 0;
+    return (AS == LangAS::opencl_local || AS == LangAS::opencl_private ||
+            AS == LangAS::sycl_local || AS == LangAS::sycl_private)
+               ? ~0
+               : 0;
   }
 
   void setAuxTarget(const TargetInfo *Aux) override;
@@ -444,17 +445,23 @@ public:
       assert(F.front() == '+' || F.front() == '-');
       if (F == "+wavefrontsize64")
         WavefrontSize = 64;
+      else if (F == "+cumode")
+        CUMode = true;
+      else if (F == "-cumode")
+        CUMode = false;
+      else if (F == "+image-insts")
+        HasImage = true;
       bool IsOn = F.front() == '+';
       StringRef Name = StringRef(F).drop_front();
       if (!llvm::is_contained(TargetIDFeatures, Name))
         continue;
-      assert(OffloadArchFeatures.find(Name) == OffloadArchFeatures.end());
+      assert(!OffloadArchFeatures.contains(Name));
       OffloadArchFeatures[Name] = IsOn;
     }
     return true;
   }
 
-  Optional<std::string> getTargetID() const override {
+  std::optional<std::string> getTargetID() const override {
     if (!isAMDGCN(getTriple()))
       return std::nullopt;
     // When -target-cpu is not set, we assume generic code that it is valid
@@ -463,6 +470,16 @@ public:
       return std::string("");
     return getCanonicalTargetID(getArchNameAMDGCN(GPUKind),
                                 OffloadArchFeatures);
+  }
+
+  bool hasHIPImageSupport() const override { return HasImage; }
+
+  std::pair<unsigned, unsigned> hardwareInterferenceSizes() const override {
+    // This is imprecise as the value can vary between 64, 128 (even 256!) bytes
+    // depending on the level of cache and the target architecture. We select
+    // the size that corresponds to the largest L1 cache line for all
+    // architectures.
+    return std::make_pair(128, 128);
   }
 };
 

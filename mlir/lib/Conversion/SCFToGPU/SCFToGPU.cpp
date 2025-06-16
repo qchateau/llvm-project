@@ -22,8 +22,8 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineExpr.h"
-#include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -31,10 +31,12 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 #define DEBUG_TYPE "loops-to-gpu"
 
 using namespace mlir;
+using namespace mlir::affine;
 using namespace mlir::scf;
 
 // Name of internal attribute to mark visited operations during conversion.
@@ -84,7 +86,7 @@ static Operation::operand_range getUpperBoundOperands(AffineForOp forOp) {
 // materialize a corresponding constant using builder.
 static Value getOrCreateStep(AffineForOp forOp, OpBuilder &builder) {
   return builder.create<arith::ConstantIndexOp>(forOp.getLoc(),
-                                                forOp.getStep());
+                                                forOp.getStepAsInt());
 }
 
 // Get a Value for the loop lower bound.  If the value requires computation,
@@ -152,7 +154,8 @@ namespace {
 // Helper structure that holds common state of the loop to GPU kernel
 // conversion.
 struct AffineLoopToGpuConverter {
-  Optional<AffineForOp> collectBounds(AffineForOp forOp, unsigned numLoops);
+  std::optional<AffineForOp> collectBounds(AffineForOp forOp,
+                                           unsigned numLoops);
 
   void createLaunch(AffineForOp rootForOp, AffineForOp innermostForOp,
                     unsigned numBlockDims, unsigned numThreadDims);
@@ -168,19 +171,12 @@ struct AffineLoopToGpuConverter {
 };
 } // namespace
 
-// Return true if the value is obviously a constant "one".
-static bool isConstantOne(Value value) {
-  if (auto def = value.getDefiningOp<arith::ConstantIndexOp>())
-    return def.value() == 1;
-  return false;
-}
-
 // Collect ranges, bounds, steps and induction variables in preparation for
 // mapping a loop nest of depth "numLoops" rooted at "forOp" to a GPU kernel.
 // This may fail if the IR for computing loop bounds cannot be constructed, for
 // example if an affine loop uses semi-affine maps. Return the last loop to be
 // mapped on success, std::nullopt on failure.
-Optional<AffineForOp>
+std::optional<AffineForOp>
 AffineLoopToGpuConverter::collectBounds(AffineForOp forOp, unsigned numLoops) {
   OpBuilder builder(forOp.getOperation());
   dims.reserve(numLoops);
@@ -198,8 +194,9 @@ AffineLoopToGpuConverter::collectBounds(AffineForOp forOp, unsigned numLoops) {
     Value range = builder.create<arith::SubIOp>(currentLoop.getLoc(),
                                                 upperBound, lowerBound);
     Value step = getOrCreateStep(currentLoop, builder);
-    if (!isConstantOne(step))
-      range = builder.create<arith::DivSIOp>(currentLoop.getLoc(), range, step);
+    if (getConstantIntValue(step) != static_cast<int64_t>(1))
+      range =
+          builder.create<arith::CeilDivSIOp>(currentLoop.getLoc(), range, step);
     dims.push_back(range);
 
     lbs.push_back(lowerBound);
@@ -266,7 +263,7 @@ void AffineLoopToGpuConverter::createLaunch(AffineForOp rootForOp,
             ? getDim3Value(launchOp.getBlockIds(), en.index())
             : getDim3Value(launchOp.getThreadIds(), en.index() - numBlockDims);
     Value step = steps[en.index()];
-    if (!isConstantOne(step))
+    if (getConstantIntValue(step) != static_cast<int64_t>(1))
       id = builder.create<arith::MulIOp>(rootForOp.getLoc(), step, id);
 
     Value ivReplacement =
@@ -322,7 +319,7 @@ static Value deriveStaticUpperBound(Value upperBound,
 
   if (auto minOp = upperBound.getDefiningOp<AffineMinOp>()) {
     for (const AffineExpr &result : minOp.getMap().getResults()) {
-      if (auto constExpr = result.dyn_cast<AffineConstantExpr>()) {
+      if (auto constExpr = dyn_cast<AffineConstantExpr>(result)) {
         return rewriter.create<arith::ConstantIndexOp>(minOp.getLoc(),
                                                        constExpr.getValue());
       }
@@ -403,16 +400,16 @@ static unsigned getLaunchOpArgumentNum(gpu::Processor processor) {
 /// worklist. This signals the processor of the worklist to pop the rewriter
 /// one scope-level up.
 static LogicalResult processParallelLoop(
-    ParallelOp parallelOp, gpu::LaunchOp launchOp,
-    BlockAndValueMapping &cloningMap, SmallVectorImpl<Operation *> &worklist,
+    ParallelOp parallelOp, gpu::LaunchOp launchOp, IRMapping &cloningMap,
+    SmallVectorImpl<Operation *> &worklist,
     DenseMap<gpu::Processor, Value> &bounds, PatternRewriter &rewriter) {
   // TODO: Verify that this is a valid GPU mapping.
   // processor ids: 0-2 block [x/y/z], 3-5 -> thread [x/y/z], 6-> sequential
   ArrayAttr mapping =
       parallelOp->getAttrOfType<ArrayAttr>(gpu::getMappingAttrName());
 
-  // TODO: Support reductions.
-  if (!mapping || parallelOp.getNumResults() != 0)
+  // TODO: Support multiple reductions.
+  if (!mapping || parallelOp.getNumResults() > 1)
     return failure();
 
   Location loc = parallelOp.getLoc();
@@ -438,7 +435,7 @@ static LogicalResult processParallelLoop(
     Value iv, lowerBound, upperBound, step;
     std::tie(mappingAttribute, iv, lowerBound, upperBound, step) = config;
     auto annotation =
-        mappingAttribute.dyn_cast<gpu::ParallelLoopDimMappingAttr>();
+        dyn_cast<gpu::ParallelLoopDimMappingAttr>(mappingAttribute);
     if (!annotation)
       return parallelOp.emitOpError()
              << "expected mapping attribute for lowering to GPU";
@@ -459,7 +456,8 @@ static LogicalResult processParallelLoop(
               rewriter.getAffineSymbolExpr(1));
       newIndex = rewriter.create<AffineApplyOp>(
           loc, annotation.getMap().compose(lowerAndStep),
-          ValueRange{operand, step, lowerBound});
+          ValueRange{operand, ensureLaunchIndependent(step),
+                     ensureLaunchIndependent(lowerBound)});
       // If there was also a bound, insert that, too.
       // TODO: Check that we do not assign bounds twice.
       if (annotation.getBound()) {
@@ -511,12 +509,11 @@ static LogicalResult processParallelLoop(
                   ensureLaunchIndependent(cloningMap.lookupOrDefault(step))});
           // todo(herhut,ravishankarm): Update the behavior of setMappingAttr
           // when this condition is relaxed.
-          if (bounds.find(processor) != bounds.end()) {
+          if (!bounds.try_emplace(processor, launchBound).second) {
             return rewriter.notifyMatchFailure(
                 parallelOp, "cannot redefine the bound for processor " +
                                 Twine(static_cast<int64_t>(processor)));
           }
-          bounds[processor] = launchBound;
         }
         if (!boundIsPrecise) {
           // We are using an approximation, create a surrounding conditional.
@@ -559,6 +556,11 @@ static LogicalResult processParallelLoop(
 
   Block *body = parallelOp.getBody();
   worklist.reserve(worklist.size() + body->getOperations().size());
+  // Include scf.reduce terminator if exists and has an operand.
+  if (auto terminator = body->getTerminator();
+      isa<scf::ReduceOp>(terminator) && terminator->getOperands().size() == 1) {
+    worklist.push_back(terminator);
+  }
   for (Operation &op : llvm::reverse(body->without_terminator()))
     worklist.push_back(&op);
   return success();
@@ -615,7 +617,7 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
   rewriter.create<gpu::TerminatorOp>(loc);
   rewriter.setInsertionPointToStart(&launchOp.getBody().front());
 
-  BlockAndValueMapping cloningMap;
+  IRMapping cloningMap;
   llvm::DenseMap<gpu::Processor, Value> launchBounds;
   SmallVector<Operation *, 16> worklist;
   if (failed(processParallelLoop(parallelOp, launchOp, cloningMap, worklist,
@@ -651,6 +653,33 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
       rewriter.setInsertionPointAfter(parent);
       leftNestingScope = true;
       seenSideeffects = false;
+    } else if (auto reduceOp = dyn_cast<scf::ReduceOp>(op)) {
+      // Convert scf.reduction op
+      auto parentLoop = op->getParentOfType<ParallelOp>();
+      if (!parentLoop || op->getOperands().size() != 1)
+        return failure();
+      auto operand = op->getOperands().front();
+      auto newValue = cloningMap.lookupOrNull(operand);
+      if (!newValue || !operand.getType().isSignlessIntOrFloat())
+        return failure();
+      // Ensure reduction region is isolated from above.
+      llvm::SetVector<Value> externalValues;
+      getUsedValuesDefinedAbove(reduceOp.getRegion(0), externalValues);
+      if (externalValues.size())
+        return failure();
+      // Replace by gpu.all_reduce.
+      auto gpuRedOp = rewriter.create<gpu::AllReduceOp>(loc, newValue);
+      cloningMap.map(parentLoop->getResult(0), gpuRedOp.getResult());
+      // Copy region.
+      rewriter.inlineRegionBefore(reduceOp.getRegion(0), gpuRedOp.getRegion(),
+                                  gpuRedOp.getRegion().begin());
+      // Replace src.reduce.return with gpu.yield.
+      auto scfReturn = gpuRedOp.getRegion().front().getTerminator();
+      auto ip = rewriter.saveInsertionPoint();
+      rewriter.setInsertionPointToEnd(&gpuRedOp.getRegion().front());
+      rewriter.replaceOpWithNewOp<gpu::YieldOp>(
+          scfReturn, scfReturn->getOperands().front());
+      rewriter.restoreInsertionPoint(ip);
     } else {
       // Otherwise we copy it over.
       Operation *clone = rewriter.clone(*op, cloningMap);

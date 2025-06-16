@@ -16,7 +16,6 @@
 
 #include "MCTargetDesc/HexagonMCInstrInfo.h"
 #include "MCTargetDesc/HexagonMCTargetDesc.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -58,7 +57,7 @@ public:
 
   // Check if the resources are in ascending slot order.
   static bool lessUnits(const HexagonResource &A, const HexagonResource &B) {
-    return (countPopulation(A.getUnits()) < countPopulation(B.getUnits()));
+    return (llvm::popcount(A.getUnits()) < llvm::popcount(B.getUnits()));
   }
 
   // Check if the resources are in ascending weight order.

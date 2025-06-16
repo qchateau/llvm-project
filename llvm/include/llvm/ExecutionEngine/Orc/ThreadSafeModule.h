@@ -139,8 +139,17 @@ public:
   /// Locks the associated ThreadSafeContext and calls the given function
   /// on the contained Module.
   template <typename Func> decltype(auto) withModuleDo(Func &&F) const {
+    assert(M && "Can not call on null module");
     auto Lock = TSCtx.getLock();
     return F(*M);
+  }
+
+  /// Locks the associated ThreadSafeContext and calls the given function,
+  /// passing the contained std::unique_ptr<Module>. The given function should
+  /// consume the Module.
+  template <typename Func> decltype(auto) consumingModuleDo(Func &&F) {
+    auto Lock = TSCtx.getLock();
+    return F(std::move(M));
   }
 
   /// Get a raw pointer to the contained module without locking the context.
@@ -161,10 +170,9 @@ using GVPredicate = std::function<bool(const GlobalValue &)>;
 using GVModifier = std::function<void(GlobalValue &)>;
 
 /// Clones the given module on to a new context.
-ThreadSafeModule
-cloneToNewContext(const ThreadSafeModule &TSMW,
-                  GVPredicate ShouldCloneDef = GVPredicate(),
-                  GVModifier UpdateClonedDefSource = GVModifier());
+LLVM_ABI ThreadSafeModule cloneToNewContext(
+    const ThreadSafeModule &TSMW, GVPredicate ShouldCloneDef = GVPredicate(),
+    GVModifier UpdateClonedDefSource = GVModifier());
 
 } // End namespace orc
 } // End namespace llvm

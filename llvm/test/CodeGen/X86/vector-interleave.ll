@@ -265,15 +265,10 @@ define <16 x i32> @interleave2x8i32(<8 x i32> %a, <8 x i32> %b) {
 ;
 ; AVX1-LABEL: interleave2x8i32:
 ; AVX1:       # %bb.0:
-; AVX1-NEXT:    vunpckhps {{.*#+}} xmm2 = xmm0[2],xmm1[2],xmm0[3],xmm1[3]
-; AVX1-NEXT:    vunpcklps {{.*#+}} xmm3 = xmm0[0],xmm1[0],xmm0[1],xmm1[1]
-; AVX1-NEXT:    vinsertf128 $1, %xmm2, %ymm3, %ymm2
-; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm1
-; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm0
-; AVX1-NEXT:    vunpckhps {{.*#+}} xmm3 = xmm0[2],xmm1[2],xmm0[3],xmm1[3]
-; AVX1-NEXT:    vunpcklps {{.*#+}} xmm0 = xmm0[0],xmm1[0],xmm0[1],xmm1[1]
-; AVX1-NEXT:    vinsertf128 $1, %xmm3, %ymm0, %ymm1
-; AVX1-NEXT:    vmovaps %ymm2, %ymm0
+; AVX1-NEXT:    vunpckhps {{.*#+}} ymm2 = ymm0[2],ymm1[2],ymm0[3],ymm1[3],ymm0[6],ymm1[6],ymm0[7],ymm1[7]
+; AVX1-NEXT:    vunpcklps {{.*#+}} ymm0 = ymm0[0],ymm1[0],ymm0[1],ymm1[1],ymm0[4],ymm1[4],ymm0[5],ymm1[5]
+; AVX1-NEXT:    vperm2f128 {{.*#+}} ymm1 = ymm0[2,3],ymm2[2,3]
+; AVX1-NEXT:    vinsertf128 $1, %xmm2, %ymm0, %ymm0
 ; AVX1-NEXT:    retq
 ;
 ; AVX2-LABEL: interleave2x8i32:
@@ -538,10 +533,10 @@ define void @splat2_i32(ptr %s, ptr %d) {
 ; AVX1:       # %bb.0:
 ; AVX1-NEXT:    vmovups (%rdi), %xmm0
 ; AVX1-NEXT:    vmovups 16(%rdi), %xmm1
-; AVX1-NEXT:    vpermilps {{.*#+}} xmm2 = xmm0[0,0,1,1]
-; AVX1-NEXT:    vpermilps {{.*#+}} xmm0 = xmm0[2,2,3,3]
-; AVX1-NEXT:    vpermilps {{.*#+}} xmm3 = xmm1[0,0,1,1]
-; AVX1-NEXT:    vpermilps {{.*#+}} xmm1 = xmm1[2,2,3,3]
+; AVX1-NEXT:    vshufps {{.*#+}} xmm2 = xmm0[0,0,1,1]
+; AVX1-NEXT:    vshufps {{.*#+}} xmm0 = xmm0[2,2,3,3]
+; AVX1-NEXT:    vshufps {{.*#+}} xmm3 = xmm1[0,0,1,1]
+; AVX1-NEXT:    vshufps {{.*#+}} xmm1 = xmm1[2,2,3,3]
 ; AVX1-NEXT:    vmovups %xmm1, 48(%rsi)
 ; AVX1-NEXT:    vmovups %xmm3, 32(%rsi)
 ; AVX1-NEXT:    vmovups %xmm0, 16(%rsi)
@@ -551,8 +546,8 @@ define void @splat2_i32(ptr %s, ptr %d) {
 ; AVX2-LABEL: splat2_i32:
 ; AVX2:       # %bb.0:
 ; AVX2-NEXT:    vpermpd $216, (%rdi), %ymm0 # ymm0 = mem[0,2,1,3]
-; AVX2-NEXT:    vpermilps {{.*#+}} ymm1 = ymm0[0,0,1,1,4,4,5,5]
-; AVX2-NEXT:    vpermilps {{.*#+}} ymm0 = ymm0[2,2,3,3,6,6,7,7]
+; AVX2-NEXT:    vshufps {{.*#+}} ymm1 = ymm0[0,0,1,1,4,4,5,5]
+; AVX2-NEXT:    vshufps {{.*#+}} ymm0 = ymm0[2,2,3,3,6,6,7,7]
 ; AVX2-NEXT:    vmovups %ymm0, 32(%rsi)
 ; AVX2-NEXT:    vmovups %ymm1, (%rsi)
 ; AVX2-NEXT:    vzeroupper
@@ -581,12 +576,12 @@ define void @splat2_i64(ptr %s, ptr %d) {
 ;
 ; AVX1-LABEL: splat2_i64:
 ; AVX1:       # %bb.0:
-; AVX1-NEXT:    vperm2f128 $51, (%rdi), %ymm0, %ymm0 # ymm0 = mem[2,3,2,3]
-; AVX1-NEXT:    vpermilpd {{.*#+}} ymm0 = ymm0[0,0,3,3]
-; AVX1-NEXT:    vbroadcastf128 (%rdi), %ymm1 # ymm1 = mem[0,1,0,1]
-; AVX1-NEXT:    vpermilpd {{.*#+}} ymm1 = ymm1[0,0,3,3]
-; AVX1-NEXT:    vmovupd %ymm0, 32(%rsi)
-; AVX1-NEXT:    vmovupd %ymm1, (%rsi)
+; AVX1-NEXT:    vbroadcastf128 (%rdi), %ymm0 # ymm0 = mem[0,1,0,1]
+; AVX1-NEXT:    vshufpd {{.*#+}} ymm0 = ymm0[0,0,3,3]
+; AVX1-NEXT:    vbroadcastf128 16(%rdi), %ymm1 # ymm1 = mem[0,1,0,1]
+; AVX1-NEXT:    vshufpd {{.*#+}} ymm1 = ymm1[0,0,3,3]
+; AVX1-NEXT:    vmovupd %ymm1, 32(%rsi)
+; AVX1-NEXT:    vmovupd %ymm0, (%rsi)
 ; AVX1-NEXT:    vzeroupper
 ; AVX1-NEXT:    retq
 ;

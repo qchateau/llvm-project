@@ -7,7 +7,7 @@ define void @f1(i32 %a, i32 %b) {
 ; CHECK-LABEL: @f1(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[A_255:%.*]] = and i32 [[A:%.*]], 255
-; CHECK-NEXT:    [[A_2:%.*]] = add i32 [[A_255]], 20
+; CHECK-NEXT:    [[A_2:%.*]] = add nuw nsw i32 [[A_255]], 20
 ; CHECK-NEXT:    [[BC:%.*]] = icmp ugt i32 [[B:%.*]], [[A_2]]
 ; CHECK-NEXT:    br i1 [[BC]], label [[TRUE:%.*]], label [[FALSE:%.*]]
 ; CHECK:       true:
@@ -178,7 +178,7 @@ define i32 @f5(i64 %sz) {
 ; CHECK-NEXT:    br label [[COND_END]]
 ; CHECK:       cond.end:
 ; CHECK-NEXT:    [[COND:%.*]] = phi i64 [ [[DIV]], [[COND_TRUE]] ], [ 1, [[ENTRY:%.*]] ]
-; CHECK-NEXT:    [[CONV:%.*]] = trunc i64 [[COND]] to i32
+; CHECK-NEXT:    [[CONV:%.*]] = trunc nuw nsw i64 [[COND]] to i32
 ; CHECK-NEXT:    ret i32 [[CONV]]
 ;
 entry:
@@ -260,7 +260,7 @@ define void @f8_nested_conds(i32 %a, i32 %b) {
 ; CHECK-LABEL: @f8_nested_conds(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[A_255:%.*]] = and i32 [[A:%.*]], 255
-; CHECK-NEXT:    [[A_2:%.*]] = add i32 [[A_255]], 20
+; CHECK-NEXT:    [[A_2:%.*]] = add nuw nsw i32 [[A_255]], 20
 ; CHECK-NEXT:    [[BC_1:%.*]] = icmp ugt i32 [[B:%.*]], [[A_2]]
 ; CHECK-NEXT:    br i1 [[BC_1]], label [[TRUE:%.*]], label [[FALSE:%.*]]
 ; CHECK:       true:
@@ -631,10 +631,13 @@ false:
 define void @f14_constexpr2() {
 ; CHECK-LABEL: @f14_constexpr2(
 ; CHECK-NEXT:  entry:
-; CHECK-NEXT:    br i1 icmp eq (i32 ptrtoint (ptr @A to i32), i32 ptrtoint (ptr @B to i32)), label [[TRUE:%.*]], label [[FALSE:%.*]]
+; CHECK-NEXT:    [[BC_1:%.*]] = icmp eq i32 ptrtoint (ptr @A to i32), ptrtoint (ptr @B to i32)
+; CHECK-NEXT:    br i1 [[BC_1]], label [[TRUE:%.*]], label [[FALSE:%.*]]
 ; CHECK:       true:
-; CHECK-NEXT:    call void @use(i1 icmp ne (i32 ptrtoint (ptr @B to i32), i32 ptrtoint (ptr @A to i32)))
-; CHECK-NEXT:    call void @use(i1 icmp eq (i32 ptrtoint (ptr @B to i32), i32 ptrtoint (ptr @A to i32)))
+; CHECK-NEXT:    [[F_1:%.*]] = icmp ne i32 ptrtoint (ptr @B to i32), ptrtoint (ptr @A to i32)
+; CHECK-NEXT:    call void @use(i1 [[F_1]])
+; CHECK-NEXT:    [[F_2:%.*]] = icmp eq i32 ptrtoint (ptr @B to i32), ptrtoint (ptr @A to i32)
+; CHECK-NEXT:    call void @use(i1 [[F_2]])
 ; CHECK-NEXT:    ret void
 ; CHECK:       false:
 ; CHECK-NEXT:    ret void
@@ -718,7 +721,7 @@ define void @loop() {
 ; CHECK-NEXT:    [[INC27]] = add nsw i32 [[I_0]], 1
 ; CHECK-NEXT:    br label [[FOR_COND]]
 ; CHECK:       for.body14:
-; CHECK-NEXT:    [[INC]] = add nsw i32 [[J_0]], 1
+; CHECK-NEXT:    [[INC]] = add nuw nsw i32 [[J_0]], 1
 ; CHECK-NEXT:    br label [[FOR_COND11]]
 ;
 entry:
@@ -759,7 +762,7 @@ define i32 @udiv_1(i64 %sz) {
 ; CHECK-NEXT:    br label [[COND_END]]
 ; CHECK:       cond.end:
 ; CHECK-NEXT:    [[COND:%.*]] = phi i64 [ [[DIV]], [[COND_TRUE]] ], [ 1, [[ENTRY:%.*]] ]
-; CHECK-NEXT:    [[CONV:%.*]] = trunc i64 [[COND]] to i32
+; CHECK-NEXT:    [[CONV:%.*]] = trunc nuw nsw i64 [[COND]] to i32
 ; CHECK-NEXT:    ret i32 [[CONV]]
 ;
 entry:
@@ -786,7 +789,7 @@ define i32 @udiv_2(i64 %sz) {
 ; CHECK-NEXT:    br label [[COND_END]]
 ; CHECK:       cond.end:
 ; CHECK-NEXT:    [[COND:%.*]] = phi i64 [ 0, [[COND_TRUE]] ], [ 1, [[ENTRY:%.*]] ]
-; CHECK-NEXT:    [[CONV:%.*]] = trunc i64 [[COND]] to i32
+; CHECK-NEXT:    [[CONV:%.*]] = trunc nuw nsw i64 [[COND]] to i32
 ; CHECK-NEXT:    ret i32 [[CONV]]
 ;
 entry:

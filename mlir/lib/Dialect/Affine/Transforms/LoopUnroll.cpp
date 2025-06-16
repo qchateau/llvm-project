@@ -22,15 +22,19 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 namespace mlir {
+namespace affine {
 #define GEN_PASS_DEF_AFFINELOOPUNROLL
 #include "mlir/Dialect/Affine/Passes.h.inc"
+} // namespace affine
 } // namespace mlir
 
 #define DEBUG_TYPE "affine-loop-unroll"
 
 using namespace mlir;
+using namespace mlir::affine;
 
 namespace {
 
@@ -41,7 +45,7 @@ namespace {
 /// full unroll threshold was specified, in which case, fully unrolls all loops
 /// with trip count less than the specified threshold. The latter is for testing
 /// purposes, especially for testing outer loop unrolling.
-struct LoopUnroll : public impl::AffineLoopUnrollBase<LoopUnroll> {
+struct LoopUnroll : public affine::impl::AffineLoopUnrollBase<LoopUnroll> {
   // Callback to obtain unroll factors; if this has a callable target, takes
   // precedence over command-line argument or passed argument.
   const std::function<unsigned(AffineForOp)> getUnrollFactor;
@@ -51,7 +55,7 @@ struct LoopUnroll : public impl::AffineLoopUnrollBase<LoopUnroll> {
 
       = default;
   explicit LoopUnroll(
-      Optional<unsigned> unrollFactor = std::nullopt,
+      std::optional<unsigned> unrollFactor = std::nullopt,
       bool unrollUpToFactor = false, bool unrollFull = false,
       const std::function<unsigned(AffineForOp)> &getUnrollFactor = nullptr)
       : getUnrollFactor(getUnrollFactor) {
@@ -78,7 +82,7 @@ static bool isInnermostAffineForOp(AffineForOp op) {
 }
 
 /// Gathers loops that have no affine.for's nested within.
-static void gatherInnermostLoops(func::FuncOp f,
+static void gatherInnermostLoops(FunctionOpInterface f,
                                  SmallVectorImpl<AffineForOp> &loops) {
   f.walk([&](AffineForOp forOp) {
     if (isInnermostAffineForOp(forOp))
@@ -87,7 +91,7 @@ static void gatherInnermostLoops(func::FuncOp f,
 }
 
 void LoopUnroll::runOnOperation() {
-  func::FuncOp func = getOperation();
+  FunctionOpInterface func = getOperation();
   if (func.isExternal())
     return;
 
@@ -96,10 +100,10 @@ void LoopUnroll::runOnOperation() {
     SmallVector<AffineForOp, 4> loops;
 
     // Gathers all loops with trip count <= minTripCount. Do a post order walk
-    // so that loops are gathered from innermost to outermost (or else unrolling
-    // an outer one may delete gathered inner ones).
+    // so that loops are gathered from innermost to outermost (or else
+    // unrolling an outer one may delete gathered inner ones).
     getOperation().walk([&](AffineForOp forOp) {
-      Optional<uint64_t> tripCount = getConstantTripCount(forOp);
+      std::optional<uint64_t> tripCount = getConstantTripCount(forOp);
       if (tripCount && *tripCount <= unrollFullThreshold)
         loops.push_back(forOp);
     });
@@ -141,10 +145,11 @@ LogicalResult LoopUnroll::runOnAffineForOp(AffineForOp forOp) {
                             cleanUpUnroll);
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLoopUnrollPass(
+std::unique_ptr<InterfacePass<FunctionOpInterface>>
+mlir::affine::createLoopUnrollPass(
     int unrollFactor, bool unrollUpToFactor, bool unrollFull,
     const std::function<unsigned(AffineForOp)> &getUnrollFactor) {
   return std::make_unique<LoopUnroll>(
-      unrollFactor == -1 ? std::nullopt : Optional<unsigned>(unrollFactor),
+      unrollFactor == -1 ? std::nullopt : std::optional<unsigned>(unrollFactor),
       unrollUpToFactor, unrollFull, getUnrollFactor);
 }

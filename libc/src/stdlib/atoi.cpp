@@ -8,16 +8,20 @@
 
 #include "src/stdlib/atoi.h"
 #include "src/__support/common.h"
+#include "src/__support/libc_errno.h"
+#include "src/__support/macros/config.h"
 #include "src/__support/str_to_integer.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
 LLVM_LIBC_FUNCTION(int, atoi, (const char *str)) {
-  auto result = internal::strtointeger<int>(str, 10);
+  // This is done because the standard specifies that atoi is identical to
+  // (int)(strtol).
+  auto result = internal::strtointeger<long>(str, 10);
   if (result.has_error())
-    errno = result.error;
+    libc_errno = result.error;
 
-  return result;
+  return static_cast<int>(result);
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

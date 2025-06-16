@@ -24,18 +24,17 @@
 using namespace llvm;
 
 #define RISCV_EXPAND_ATOMIC_PSEUDO_NAME                                        \
-  "RISCV atomic pseudo instruction expansion pass"
+  "RISC-V atomic pseudo instruction expansion pass"
 
 namespace {
 
 class RISCVExpandAtomicPseudo : public MachineFunctionPass {
 public:
+  const RISCVSubtarget *STI;
   const RISCVInstrInfo *TII;
   static char ID;
 
-  RISCVExpandAtomicPseudo() : MachineFunctionPass(ID) {
-    initializeRISCVExpandAtomicPseudoPass(*PassRegistry::getPassRegistry());
-  }
+  RISCVExpandAtomicPseudo() : MachineFunctionPass(ID) {}
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 
@@ -58,15 +57,35 @@ private:
   bool expandAtomicCmpXchg(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MBBI, bool IsMasked,
                            int Width, MachineBasicBlock::iterator &NextMBBI);
+#ifndef NDEBUG
+  unsigned getInstSizeInBytes(const MachineFunction &MF) const {
+    unsigned Size = 0;
+    for (auto &MBB : MF)
+      for (auto &MI : MBB)
+        Size += TII->getInstSizeInBytes(MI);
+    return Size;
+  }
+#endif
 };
 
 char RISCVExpandAtomicPseudo::ID = 0;
 
 bool RISCVExpandAtomicPseudo::runOnMachineFunction(MachineFunction &MF) {
-  TII = static_cast<const RISCVInstrInfo *>(MF.getSubtarget().getInstrInfo());
+  STI = &MF.getSubtarget<RISCVSubtarget>();
+  TII = STI->getInstrInfo();
+
+#ifndef NDEBUG
+  const unsigned OldSize = getInstSizeInBytes(MF);
+#endif
+
   bool Modified = false;
   for (auto &MBB : MF)
     Modified |= expandMBB(MBB);
+
+#ifndef NDEBUG
+  const unsigned NewSize = getInstSizeInBytes(MF);
+  assert(OldSize >= NewSize);
+#endif
   return Modified;
 }
 
@@ -86,8 +105,8 @@ bool RISCVExpandAtomicPseudo::expandMBB(MachineBasicBlock &MBB) {
 bool RISCVExpandAtomicPseudo::expandMI(MachineBasicBlock &MBB,
                                        MachineBasicBlock::iterator MBBI,
                                        MachineBasicBlock::iterator &NextMBBI) {
-  // RISCVInstrInfo::getInstSizeInBytes expects that the total size of the       
-  // expanded instructions for each pseudo is correct in the Size field of the   
+  // RISCVInstrInfo::getInstSizeInBytes expects that the total size of the
+  // expanded instructions for each pseudo is correct in the Size field of the
   // tablegen definition for the pseudo.
   switch (MBBI->getOpcode()) {
   case RISCV::PseudoAtomicLoadNand32:
@@ -129,24 +148,30 @@ bool RISCVExpandAtomicPseudo::expandMI(MachineBasicBlock &MBB,
   return false;
 }
 
-static unsigned getLRForRMW32(AtomicOrdering Ordering) {
+static unsigned getLRForRMW32(AtomicOrdering Ordering,
+                              const RISCVSubtarget *Subtarget) {
   switch (Ordering) {
   default:
     llvm_unreachable("Unexpected AtomicOrdering");
   case AtomicOrdering::Monotonic:
     return RISCV::LR_W;
   case AtomicOrdering::Acquire:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::LR_W;
     return RISCV::LR_W_AQ;
   case AtomicOrdering::Release:
     return RISCV::LR_W;
   case AtomicOrdering::AcquireRelease:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::LR_W;
     return RISCV::LR_W_AQ;
   case AtomicOrdering::SequentiallyConsistent:
     return RISCV::LR_W_AQ_RL;
   }
 }
 
-static unsigned getSCForRMW32(AtomicOrdering Ordering) {
+static unsigned getSCForRMW32(AtomicOrdering Ordering,
+                              const RISCVSubtarget *Subtarget) {
   switch (Ordering) {
   default:
     llvm_unreachable("Unexpected AtomicOrdering");
@@ -155,32 +180,42 @@ static unsigned getSCForRMW32(AtomicOrdering Ordering) {
   case AtomicOrdering::Acquire:
     return RISCV::SC_W;
   case AtomicOrdering::Release:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::SC_W;
     return RISCV::SC_W_RL;
   case AtomicOrdering::AcquireRelease:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::SC_W;
     return RISCV::SC_W_RL;
   case AtomicOrdering::SequentiallyConsistent:
-    return RISCV::SC_W_AQ_RL;
+    return RISCV::SC_W_RL;
   }
 }
 
-static unsigned getLRForRMW64(AtomicOrdering Ordering) {
+static unsigned getLRForRMW64(AtomicOrdering Ordering,
+                              const RISCVSubtarget *Subtarget) {
   switch (Ordering) {
   default:
     llvm_unreachable("Unexpected AtomicOrdering");
   case AtomicOrdering::Monotonic:
     return RISCV::LR_D;
   case AtomicOrdering::Acquire:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::LR_D;
     return RISCV::LR_D_AQ;
   case AtomicOrdering::Release:
     return RISCV::LR_D;
   case AtomicOrdering::AcquireRelease:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::LR_D;
     return RISCV::LR_D_AQ;
   case AtomicOrdering::SequentiallyConsistent:
     return RISCV::LR_D_AQ_RL;
   }
 }
 
-static unsigned getSCForRMW64(AtomicOrdering Ordering) {
+static unsigned getSCForRMW64(AtomicOrdering Ordering,
+                              const RISCVSubtarget *Subtarget) {
   switch (Ordering) {
   default:
     llvm_unreachable("Unexpected AtomicOrdering");
@@ -189,27 +224,33 @@ static unsigned getSCForRMW64(AtomicOrdering Ordering) {
   case AtomicOrdering::Acquire:
     return RISCV::SC_D;
   case AtomicOrdering::Release:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::SC_D;
     return RISCV::SC_D_RL;
   case AtomicOrdering::AcquireRelease:
+    if (Subtarget->hasStdExtZtso())
+      return RISCV::SC_D;
     return RISCV::SC_D_RL;
   case AtomicOrdering::SequentiallyConsistent:
-    return RISCV::SC_D_AQ_RL;
+    return RISCV::SC_D_RL;
   }
 }
 
-static unsigned getLRForRMW(AtomicOrdering Ordering, int Width) {
+static unsigned getLRForRMW(AtomicOrdering Ordering, int Width,
+                            const RISCVSubtarget *Subtarget) {
   if (Width == 32)
-    return getLRForRMW32(Ordering);
+    return getLRForRMW32(Ordering, Subtarget);
   if (Width == 64)
-    return getLRForRMW64(Ordering);
+    return getLRForRMW64(Ordering, Subtarget);
   llvm_unreachable("Unexpected LR width\n");
 }
 
-static unsigned getSCForRMW(AtomicOrdering Ordering, int Width) {
+static unsigned getSCForRMW(AtomicOrdering Ordering, int Width,
+                            const RISCVSubtarget *Subtarget) {
   if (Width == 32)
-    return getSCForRMW32(Ordering);
+    return getSCForRMW32(Ordering, Subtarget);
   if (Width == 64)
-    return getSCForRMW64(Ordering);
+    return getSCForRMW64(Ordering, Subtarget);
   llvm_unreachable("Unexpected SC width\n");
 }
 
@@ -217,7 +258,8 @@ static void doAtomicBinOpExpansion(const RISCVInstrInfo *TII, MachineInstr &MI,
                                    DebugLoc DL, MachineBasicBlock *ThisMBB,
                                    MachineBasicBlock *LoopMBB,
                                    MachineBasicBlock *DoneMBB,
-                                   AtomicRMWInst::BinOp BinOp, int Width) {
+                                   AtomicRMWInst::BinOp BinOp, int Width,
+                                   const RISCVSubtarget *STI) {
   Register DestReg = MI.getOperand(0).getReg();
   Register ScratchReg = MI.getOperand(1).getReg();
   Register AddrReg = MI.getOperand(2).getReg();
@@ -230,7 +272,7 @@ static void doAtomicBinOpExpansion(const RISCVInstrInfo *TII, MachineInstr &MI,
   //   binop scratch, dest, val
   //   sc.[w|d] scratch, scratch, (addr)
   //   bnez scratch, loop
-  BuildMI(LoopMBB, DL, TII->get(getLRForRMW(Ordering, Width)), DestReg)
+  BuildMI(LoopMBB, DL, TII->get(getLRForRMW(Ordering, Width, STI)), DestReg)
       .addReg(AddrReg);
   switch (BinOp) {
   default:
@@ -244,7 +286,7 @@ static void doAtomicBinOpExpansion(const RISCVInstrInfo *TII, MachineInstr &MI,
         .addImm(-1);
     break;
   }
-  BuildMI(LoopMBB, DL, TII->get(getSCForRMW(Ordering, Width)), ScratchReg)
+  BuildMI(LoopMBB, DL, TII->get(getSCForRMW(Ordering, Width, STI)), ScratchReg)
       .addReg(AddrReg)
       .addReg(ScratchReg);
   BuildMI(LoopMBB, DL, TII->get(RISCV::BNE))
@@ -275,10 +317,13 @@ static void insertMaskedMerge(const RISCVInstrInfo *TII, DebugLoc DL,
       .addReg(ScratchReg);
 }
 
-static void doMaskedAtomicBinOpExpansion(
-    const RISCVInstrInfo *TII, MachineInstr &MI, DebugLoc DL,
-    MachineBasicBlock *ThisMBB, MachineBasicBlock *LoopMBB,
-    MachineBasicBlock *DoneMBB, AtomicRMWInst::BinOp BinOp, int Width) {
+static void doMaskedAtomicBinOpExpansion(const RISCVInstrInfo *TII,
+                                         MachineInstr &MI, DebugLoc DL,
+                                         MachineBasicBlock *ThisMBB,
+                                         MachineBasicBlock *LoopMBB,
+                                         MachineBasicBlock *DoneMBB,
+                                         AtomicRMWInst::BinOp BinOp, int Width,
+                                         const RISCVSubtarget *STI) {
   assert(Width == 32 && "Should never need to expand masked 64-bit operations");
   Register DestReg = MI.getOperand(0).getReg();
   Register ScratchReg = MI.getOperand(1).getReg();
@@ -296,7 +341,7 @@ static void doMaskedAtomicBinOpExpansion(
   //   xor scratch, destreg, scratch
   //   sc.w scratch, scratch, (alignedaddr)
   //   bnez scratch, loop
-  BuildMI(LoopMBB, DL, TII->get(getLRForRMW32(Ordering)), DestReg)
+  BuildMI(LoopMBB, DL, TII->get(getLRForRMW32(Ordering, STI)), DestReg)
       .addReg(AddrReg);
   switch (BinOp) {
   default:
@@ -329,7 +374,7 @@ static void doMaskedAtomicBinOpExpansion(
   insertMaskedMerge(TII, DL, LoopMBB, ScratchReg, DestReg, ScratchReg, MaskReg,
                     ScratchReg);
 
-  BuildMI(LoopMBB, DL, TII->get(getSCForRMW32(Ordering)), ScratchReg)
+  BuildMI(LoopMBB, DL, TII->get(getSCForRMW32(Ordering, STI)), ScratchReg)
       .addReg(AddrReg)
       .addReg(ScratchReg);
   BuildMI(LoopMBB, DL, TII->get(RISCV::BNE))
@@ -361,10 +406,11 @@ bool RISCVExpandAtomicPseudo::expandAtomicBinOp(
   MBB.addSuccessor(LoopMBB);
 
   if (!IsMasked)
-    doAtomicBinOpExpansion(TII, MI, DL, &MBB, LoopMBB, DoneMBB, BinOp, Width);
+    doAtomicBinOpExpansion(TII, MI, DL, &MBB, LoopMBB, DoneMBB, BinOp, Width,
+                           STI);
   else
     doMaskedAtomicBinOpExpansion(TII, MI, DL, &MBB, LoopMBB, DoneMBB, BinOp,
-                                 Width);
+                                 Width, STI);
 
   NextMBBI = MBB.end();
   MI.eraseFromParent();
@@ -436,7 +482,7 @@ bool RISCVExpandAtomicPseudo::expandAtomicMinMaxOp(
   //   mv scratch1, destreg
   //   [sext scratch2 if signed min/max]
   //   ifnochangeneeded scratch2, incr, .looptail
-  BuildMI(LoopHeadMBB, DL, TII->get(getLRForRMW32(Ordering)), DestReg)
+  BuildMI(LoopHeadMBB, DL, TII->get(getLRForRMW32(Ordering, STI)), DestReg)
       .addReg(AddrReg);
   BuildMI(LoopHeadMBB, DL, TII->get(RISCV::AND), Scratch2Reg)
       .addReg(DestReg)
@@ -488,7 +534,7 @@ bool RISCVExpandAtomicPseudo::expandAtomicMinMaxOp(
   // .looptail:
   //   sc.w scratch1, scratch1, (addr)
   //   bnez scratch1, loop
-  BuildMI(LoopTailMBB, DL, TII->get(getSCForRMW32(Ordering)), Scratch1Reg)
+  BuildMI(LoopTailMBB, DL, TII->get(getSCForRMW32(Ordering, STI)), Scratch1Reg)
       .addReg(AddrReg)
       .addReg(Scratch1Reg);
   BuildMI(LoopTailMBB, DL, TII->get(RISCV::BNE))
@@ -553,6 +599,15 @@ bool tryToFoldBNEOnCmpXchgResult(MachineBasicBlock &MBB,
   if (!(BNEOp0 == DestReg && BNEOp1 == CmpValReg) &&
       !(BNEOp0 == CmpValReg && BNEOp1 == DestReg))
     return false;
+
+  // Make sure the branch is the only user of the AND.
+  if (MaskReg.isValid()) {
+    if (BNEOp0 == DestReg && !MBBI->getOperand(0).isKill())
+      return false;
+    if (BNEOp1 == DestReg && !MBBI->getOperand(1).isKill())
+      return false;
+  }
+
   ToErase.push_back(&*MBBI);
   LoopHeadBNETarget = MBBI->getOperand(2).getMBB();
   MBBI = skipDebugInstructionsForward(std::next(MBBI), E);
@@ -607,7 +662,8 @@ bool RISCVExpandAtomicPseudo::expandAtomicCmpXchg(
     // .loophead:
     //   lr.[w|d] dest, (addr)
     //   bne dest, cmpval, done
-    BuildMI(LoopHeadMBB, DL, TII->get(getLRForRMW(Ordering, Width)), DestReg)
+    BuildMI(LoopHeadMBB, DL, TII->get(getLRForRMW(Ordering, Width, STI)),
+            DestReg)
         .addReg(AddrReg);
     BuildMI(LoopHeadMBB, DL, TII->get(RISCV::BNE))
         .addReg(DestReg)
@@ -616,7 +672,8 @@ bool RISCVExpandAtomicPseudo::expandAtomicCmpXchg(
     // .looptail:
     //   sc.[w|d] scratch, newval, (addr)
     //   bnez scratch, loophead
-    BuildMI(LoopTailMBB, DL, TII->get(getSCForRMW(Ordering, Width)), ScratchReg)
+    BuildMI(LoopTailMBB, DL, TII->get(getSCForRMW(Ordering, Width, STI)),
+            ScratchReg)
         .addReg(AddrReg)
         .addReg(NewValReg);
     BuildMI(LoopTailMBB, DL, TII->get(RISCV::BNE))
@@ -629,7 +686,8 @@ bool RISCVExpandAtomicPseudo::expandAtomicCmpXchg(
     //   and scratch, dest, mask
     //   bne scratch, cmpval, done
     Register MaskReg = MI.getOperand(5).getReg();
-    BuildMI(LoopHeadMBB, DL, TII->get(getLRForRMW(Ordering, Width)), DestReg)
+    BuildMI(LoopHeadMBB, DL, TII->get(getLRForRMW(Ordering, Width, STI)),
+            DestReg)
         .addReg(AddrReg);
     BuildMI(LoopHeadMBB, DL, TII->get(RISCV::AND), ScratchReg)
         .addReg(DestReg)
@@ -647,7 +705,8 @@ bool RISCVExpandAtomicPseudo::expandAtomicCmpXchg(
     //   bnez scratch, loophead
     insertMaskedMerge(TII, DL, LoopTailMBB, ScratchReg, DestReg, NewValReg,
                       MaskReg, ScratchReg);
-    BuildMI(LoopTailMBB, DL, TII->get(getSCForRMW(Ordering, Width)), ScratchReg)
+    BuildMI(LoopTailMBB, DL, TII->get(getSCForRMW(Ordering, Width, STI)),
+            ScratchReg)
         .addReg(AddrReg)
         .addReg(ScratchReg);
     BuildMI(LoopTailMBB, DL, TII->get(RISCV::BNE))
@@ -672,10 +731,6 @@ bool RISCVExpandAtomicPseudo::expandAtomicCmpXchg(
 INITIALIZE_PASS(RISCVExpandAtomicPseudo, "riscv-expand-atomic-pseudo",
                 RISCV_EXPAND_ATOMIC_PSEUDO_NAME, false, false)
 
-namespace llvm {
-
-FunctionPass *createRISCVExpandAtomicPseudoPass() {
+FunctionPass *llvm::createRISCVExpandAtomicPseudoPass() {
   return new RISCVExpandAtomicPseudo();
 }
-
-} // end of namespace llvm

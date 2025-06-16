@@ -98,14 +98,11 @@
 /* Define if zstd compression is available */
 #cmakedefine01 LLVM_ENABLE_ZSTD
 
-/* Define if LLVM is using tflite instead of libtensorflow */
+/* Define if LLVM is using tflite */
 #cmakedefine LLVM_HAVE_TFLITE
 
 /* Define to 1 if you have the <sysexits.h> header file. */
 #cmakedefine HAVE_SYSEXITS_H ${HAVE_SYSEXITS_H}
-
-/* Define if the xar_open() function is supported on this platform. */
-#cmakedefine LLVM_HAVE_LIBXAR ${LLVM_HAVE_LIBXAR}
 
 /* Define if building libLLVM shared library */
 #cmakedefine LLVM_BUILD_LLVM_DYLIB
@@ -125,5 +122,19 @@
 
 /* Define if plugins enabled */
 #cmakedefine LLVM_ENABLE_PLUGINS
+
+/* Define if logf128 is available */
+#cmakedefine LLVM_HAS_LOGF128
+
+/* Define if building LLVM with LLVM_ENABLE_TELEMETRY */
+#cmakedefine01 LLVM_ENABLE_TELEMETRY
+
+/* Define to 1 to enable expensive checks for debug location coverage checking,
+   and to 0 otherwise. */
+#cmakedefine01 LLVM_ENABLE_DEBUGLOC_COVERAGE_TRACKING
+
+/* Define to 1 to enable expensive tracking of the origin of debug location
+   coverage bugs, and to 0 otherwise. */
+#cmakedefine01 LLVM_ENABLE_DEBUGLOC_ORIGIN_TRACKING
 
 #endif

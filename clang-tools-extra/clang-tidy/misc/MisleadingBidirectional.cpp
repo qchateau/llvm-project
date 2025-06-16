@@ -11,7 +11,6 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/Support/ConvertUTF.h"
-#include <optional>
 
 using namespace clang;
 using namespace clang::tidy::misc;
@@ -51,7 +50,7 @@ static bool containsMisleadingBidi(StringRef Buffer,
         BidiContexts.clear();
       continue;
     }
-    llvm::UTF32 CodePoint;
+    llvm::UTF32 CodePoint = 0;
     llvm::ConversionResult Result = llvm::convertUTF8Sequence(
         (const llvm::UTF8 **)&CurPtr, (const llvm::UTF8 *)Buffer.end(),
         &CodePoint, llvm::strictConversion);
@@ -90,8 +89,7 @@ static bool containsMisleadingBidi(StringRef Buffer,
 class MisleadingBidirectionalCheck::MisleadingBidirectionalHandler
     : public CommentHandler {
 public:
-  MisleadingBidirectionalHandler(MisleadingBidirectionalCheck &Check,
-                                 std::optional<std::string> User)
+  MisleadingBidirectionalHandler(MisleadingBidirectionalCheck &Check)
       : Check(Check) {}
 
   bool HandleComment(Preprocessor &PP, SourceRange Range) override {
@@ -114,8 +112,7 @@ private:
 MisleadingBidirectionalCheck::MisleadingBidirectionalCheck(
     StringRef Name, ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context),
-      Handler(std::make_unique<MisleadingBidirectionalHandler>(
-          *this, Context->getOptions().User)) {}
+      Handler(std::make_unique<MisleadingBidirectionalHandler>(*this)) {}
 
 MisleadingBidirectionalCheck::~MisleadingBidirectionalCheck() = default;
 

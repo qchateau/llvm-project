@@ -9,7 +9,7 @@ declare void @use_vec(<8 x i16>)
 define <4 x i16> @insert_01_poison_v4i16(i32 %x) {
 ; BE-LABEL: @insert_01_poison_v4i16(
 ; BE-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; BE-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; BE-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; BE-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
 ; BE-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> poison, i16 [[LO16]], i64 0
 ; BE-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[INS0]], i16 [[HI16]], i64 1
@@ -36,10 +36,10 @@ define <8 x i16> @insert_10_poison_v8i16(i32 %x) {
 ;
 ; LE-LABEL: @insert_10_poison_v8i16(
 ; LE-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; LE-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; LE-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; LE-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
-; LE-NEXT:    [[INS0:%.*]] = insertelement <8 x i16> poison, i16 [[LO16]], i64 1
-; LE-NEXT:    [[INS1:%.*]] = insertelement <8 x i16> [[INS0]], i16 [[HI16]], i64 0
+; LE-NEXT:    [[TMP1:%.*]] = insertelement <8 x i16> poison, i16 [[HI16]], i64 0
+; LE-NEXT:    [[INS1:%.*]] = insertelement <8 x i16> [[TMP1]], i16 [[LO16]], i64 1
 ; LE-NEXT:    ret <8 x i16> [[INS1]]
 ;
   %hi32 = lshr i32 %x, 16
@@ -55,7 +55,7 @@ define <8 x i16> @insert_10_poison_v8i16(i32 %x) {
 define <4 x i32> @insert_12_poison_v4i32(i64 %x) {
 ; ALL-LABEL: @insert_12_poison_v4i32(
 ; ALL-NEXT:    [[HI64:%.*]] = lshr i64 [[X:%.*]], 32
-; ALL-NEXT:    [[HI32:%.*]] = trunc i64 [[HI64]] to i32
+; ALL-NEXT:    [[HI32:%.*]] = trunc nuw i64 [[HI64]] to i32
 ; ALL-NEXT:    [[LO32:%.*]] = trunc i64 [[X]] to i32
 ; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i32> poison, i32 [[LO32]], i64 1
 ; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i32> [[INS0]], i32 [[HI32]], i64 2
@@ -74,10 +74,10 @@ define <4 x i32> @insert_12_poison_v4i32(i64 %x) {
 define <4 x i16> @insert_21_poison_v4i16(i32 %x) {
 ; ALL-LABEL: @insert_21_poison_v4i16(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
-; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> poison, i16 [[LO16]], i64 2
-; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[INS0]], i16 [[HI16]], i64 1
+; ALL-NEXT:    [[TMP1:%.*]] = insertelement <4 x i16> poison, i16 [[HI16]], i64 1
+; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[TMP1]], i16 [[LO16]], i64 2
 ; ALL-NEXT:    ret <4 x i16> [[INS1]]
 ;
   %hi32 = lshr i32 %x, 16
@@ -91,7 +91,7 @@ define <4 x i16> @insert_21_poison_v4i16(i32 %x) {
 define <4 x i32> @insert_23_poison_v4i32(i64 %x) {
 ; BE-LABEL: @insert_23_poison_v4i32(
 ; BE-NEXT:    [[HI64:%.*]] = lshr i64 [[X:%.*]], 32
-; BE-NEXT:    [[HI32:%.*]] = trunc i64 [[HI64]] to i32
+; BE-NEXT:    [[HI32:%.*]] = trunc nuw i64 [[HI64]] to i32
 ; BE-NEXT:    [[LO32:%.*]] = trunc i64 [[X]] to i32
 ; BE-NEXT:    [[INS0:%.*]] = insertelement <4 x i32> poison, i32 [[LO32]], i64 2
 ; BE-NEXT:    [[INS1:%.*]] = insertelement <4 x i32> [[INS0]], i32 [[HI32]], i64 3
@@ -118,10 +118,10 @@ define <4 x i16> @insert_32_poison_v4i16(i32 %x) {
 ;
 ; LE-LABEL: @insert_32_poison_v4i16(
 ; LE-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; LE-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; LE-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; LE-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
-; LE-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> poison, i16 [[LO16]], i64 3
-; LE-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[INS0]], i16 [[HI16]], i64 2
+; LE-NEXT:    [[TMP1:%.*]] = insertelement <4 x i16> poison, i16 [[HI16]], i64 2
+; LE-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[TMP1]], i16 [[LO16]], i64 3
 ; LE-NEXT:    ret <4 x i16> [[INS1]]
 ;
   %hi32 = lshr i32 %x, 16
@@ -140,7 +140,7 @@ define <4 x i16> @insert_32_poison_v4i16(i32 %x) {
 define <2 x i16> @insert_01_v2i16(i32 %x, <2 x i16> %v) {
 ; BE-LABEL: @insert_01_v2i16(
 ; BE-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; BE-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; BE-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; BE-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
 ; BE-NEXT:    [[INS0:%.*]] = insertelement <2 x i16> poison, i16 [[LO16]], i64 0
 ; BE-NEXT:    [[INS1:%.*]] = insertelement <2 x i16> [[INS0]], i16 [[HI16]], i64 1
@@ -163,10 +163,10 @@ define <2 x i16> @insert_01_v2i16(i32 %x, <2 x i16> %v) {
 define <8 x i16> @insert_10_v8i16(i32 %x, <8 x i16> %v) {
 ; ALL-LABEL: @insert_10_v8i16(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
-; ALL-NEXT:    [[INS0:%.*]] = insertelement <8 x i16> [[V:%.*]], i16 [[LO16]], i64 1
-; ALL-NEXT:    [[INS1:%.*]] = insertelement <8 x i16> [[INS0]], i16 [[HI16]], i64 0
+; ALL-NEXT:    [[TMP1:%.*]] = insertelement <8 x i16> [[V:%.*]], i16 [[HI16]], i64 0
+; ALL-NEXT:    [[INS1:%.*]] = insertelement <8 x i16> [[TMP1]], i16 [[LO16]], i64 1
 ; ALL-NEXT:    ret <8 x i16> [[INS1]]
 ;
   %hi32 = lshr i32 %x, 16
@@ -182,7 +182,7 @@ define <8 x i16> @insert_10_v8i16(i32 %x, <8 x i16> %v) {
 define <4 x i32> @insert_12_v4i32(i64 %x, <4 x i32> %v) {
 ; ALL-LABEL: @insert_12_v4i32(
 ; ALL-NEXT:    [[HI64:%.*]] = lshr i64 [[X:%.*]], 32
-; ALL-NEXT:    [[HI32:%.*]] = trunc i64 [[HI64]] to i32
+; ALL-NEXT:    [[HI32:%.*]] = trunc nuw i64 [[HI64]] to i32
 ; ALL-NEXT:    [[LO32:%.*]] = trunc i64 [[X]] to i32
 ; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i32> [[V:%.*]], i32 [[LO32]], i64 1
 ; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i32> [[INS0]], i32 [[HI32]], i64 2
@@ -201,10 +201,10 @@ define <4 x i32> @insert_12_v4i32(i64 %x, <4 x i32> %v) {
 define <4 x i16> @insert_21_v4i16(i32 %x, <4 x i16> %v) {
 ; ALL-LABEL: @insert_21_v4i16(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
-; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> [[V:%.*]], i16 [[LO16]], i64 2
-; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[INS0]], i16 [[HI16]], i64 1
+; ALL-NEXT:    [[TMP1:%.*]] = insertelement <4 x i16> [[V:%.*]], i16 [[HI16]], i64 1
+; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[TMP1]], i16 [[LO16]], i64 2
 ; ALL-NEXT:    ret <4 x i16> [[INS1]]
 ;
   %hi32 = lshr i32 %x, 16
@@ -220,7 +220,7 @@ define <4 x i16> @insert_21_v4i16(i32 %x, <4 x i16> %v) {
 define <4 x i32> @insert_23_v4i32(i64 %x, <4 x i32> %v) {
 ; ALL-LABEL: @insert_23_v4i32(
 ; ALL-NEXT:    [[HI64:%.*]] = lshr i64 [[X:%.*]], 32
-; ALL-NEXT:    [[HI32:%.*]] = trunc i64 [[HI64]] to i32
+; ALL-NEXT:    [[HI32:%.*]] = trunc nuw i64 [[HI64]] to i32
 ; ALL-NEXT:    [[LO32:%.*]] = trunc i64 [[X]] to i32
 ; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i32> [[V:%.*]], i32 [[LO32]], i64 2
 ; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i32> [[INS0]], i32 [[HI32]], i64 3
@@ -239,10 +239,10 @@ define <4 x i32> @insert_23_v4i32(i64 %x, <4 x i32> %v) {
 define <4 x i16> @insert_32_v4i16(i32 %x, <4 x i16> %v) {
 ; ALL-LABEL: @insert_32_v4i16(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
-; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> [[V:%.*]], i16 [[LO16]], i64 3
-; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[INS0]], i16 [[HI16]], i64 2
+; ALL-NEXT:    [[TMP1:%.*]] = insertelement <4 x i16> [[V:%.*]], i16 [[HI16]], i64 2
+; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[TMP1]], i16 [[LO16]], i64 3
 ; ALL-NEXT:    ret <4 x i16> [[INS1]]
 ;
   %hi32 = lshr i32 %x, 16
@@ -277,7 +277,7 @@ define <4 x i16> @insert_01_v4i16_wrong_shift1(i32 %x) {
 define <4 x i16> @insert_01_v4i16_wrong_op(i32 %x, i32 %y) {
 ; ALL-LABEL: @insert_01_v4i16_wrong_op(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[Y:%.*]] to i16
 ; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> poison, i16 [[LO16]], i64 0
 ; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> [[INS0]], i16 [[HI16]], i64 1
@@ -296,7 +296,7 @@ define <4 x i16> @insert_01_v4i16_wrong_op(i32 %x, i32 %y) {
 define <8 x i16> @insert_67_v4i16_uses1(i32 %x, <8 x i16> %v) {
 ; ALL-LABEL: @insert_67_v4i16_uses1(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    call void @use(i16 [[HI16]])
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
 ; ALL-NEXT:    [[INS0:%.*]] = insertelement <8 x i16> [[V:%.*]], i16 [[LO16]], i64 6
@@ -318,11 +318,11 @@ define <8 x i16> @insert_67_v4i16_uses1(i32 %x, <8 x i16> %v) {
 define <8 x i16> @insert_76_v4i16_uses2(i32 %x, <8 x i16> %v) {
 ; ALL-LABEL: @insert_76_v4i16_uses2(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
 ; ALL-NEXT:    call void @use(i16 [[LO16]])
-; ALL-NEXT:    [[INS0:%.*]] = insertelement <8 x i16> [[V:%.*]], i16 [[LO16]], i64 7
-; ALL-NEXT:    [[INS1:%.*]] = insertelement <8 x i16> [[INS0]], i16 [[HI16]], i64 6
+; ALL-NEXT:    [[TMP1:%.*]] = insertelement <8 x i16> [[V:%.*]], i16 [[HI16]], i64 6
+; ALL-NEXT:    [[INS1:%.*]] = insertelement <8 x i16> [[TMP1]], i16 [[LO16]], i64 7
 ; ALL-NEXT:    ret <8 x i16> [[INS1]]
 ;
   %hi32 = lshr i32 %x, 16
@@ -339,7 +339,7 @@ define <8 x i16> @insert_76_v4i16_uses2(i32 %x, <8 x i16> %v) {
 define <8 x i16> @insert_67_v4i16_uses3(i32 %x, <8 x i16> %v) {
 ; ALL-LABEL: @insert_67_v4i16_uses3(
 ; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
+; ALL-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
 ; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
 ; ALL-NEXT:    [[INS0:%.*]] = insertelement <8 x i16> [[V:%.*]], i16 [[LO16]], i64 6
 ; ALL-NEXT:    call void @use_vec(<8 x i16> [[INS0]])
@@ -358,13 +358,18 @@ define <8 x i16> @insert_67_v4i16_uses3(i32 %x, <8 x i16> %v) {
 ; TODO: This is equivalent to the 1st test.
 
 define <4 x i16> @insert_01_poison_v4i16_high_first(i32 %x) {
-; ALL-LABEL: @insert_01_poison_v4i16_high_first(
-; ALL-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
-; ALL-NEXT:    [[HI16:%.*]] = trunc i32 [[HI32]] to i16
-; ALL-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
-; ALL-NEXT:    [[INS1:%.*]] = insertelement <4 x i16> poison, i16 [[HI16]], i64 1
-; ALL-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> [[INS1]], i16 [[LO16]], i64 0
-; ALL-NEXT:    ret <4 x i16> [[INS0]]
+; BE-LABEL: @insert_01_poison_v4i16_high_first(
+; BE-NEXT:    [[HI32:%.*]] = lshr i32 [[X:%.*]], 16
+; BE-NEXT:    [[HI16:%.*]] = trunc nuw i32 [[HI32]] to i16
+; BE-NEXT:    [[LO16:%.*]] = trunc i32 [[X]] to i16
+; BE-NEXT:    [[TMP1:%.*]] = insertelement <4 x i16> poison, i16 [[LO16]], i64 0
+; BE-NEXT:    [[INS0:%.*]] = insertelement <4 x i16> [[TMP1]], i16 [[HI16]], i64 1
+; BE-NEXT:    ret <4 x i16> [[INS0]]
+;
+; LE-LABEL: @insert_01_poison_v4i16_high_first(
+; LE-NEXT:    [[TMP1:%.*]] = insertelement <2 x i32> poison, i32 [[X:%.*]], i64 0
+; LE-NEXT:    [[INS0:%.*]] = bitcast <2 x i32> [[TMP1]] to <4 x i16>
+; LE-NEXT:    ret <4 x i16> [[INS0]]
 ;
   %hi32 = lshr i32 %x, 16
   %hi16 = trunc i32 %hi32 to i16

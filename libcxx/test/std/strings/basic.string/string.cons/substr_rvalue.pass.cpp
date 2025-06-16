@@ -14,6 +14,7 @@
 // constexpr basic_string(basic_string&& str, size_type pos, size_type n, const Allocator& a = Allocator());
 
 #include <cassert>
+#include <stdexcept>
 #include <string>
 
 #include "constexpr_char_traits.h"
@@ -22,6 +23,8 @@
 #include "min_allocator.h"
 #include "test_allocator.h"
 #include "test_macros.h"
+#include "asan_testing.h"
+#include "operator_hijacker.h"
 
 #define STR(string) MAKE_CSTRING(typename S::value_type, string)
 
@@ -38,6 +41,8 @@ constexpr void test_string_pos(S orig, typename S::size_type pos, S expected) {
   LIBCPP_ASSERT(orig.empty());
   LIBCPP_ASSERT(substr.__invariants());
   assert(substr == expected);
+  LIBCPP_ASSERT(is_string_asan_correct(orig));
+  LIBCPP_ASSERT(is_string_asan_correct(substr));
 }
 
 template <class S>
@@ -64,6 +69,8 @@ test_string_pos_alloc(S orig, typename S::size_type pos, const typename S::alloc
   LIBCPP_ASSERT(substr.__invariants());
   assert(substr == expected);
   assert(substr.get_allocator() == alloc);
+  LIBCPP_ASSERT(is_string_asan_correct(orig));
+  LIBCPP_ASSERT(is_string_asan_correct(substr));
 }
 
 template <class S>
@@ -94,6 +101,8 @@ constexpr void test_string_pos_n(S orig, typename S::size_type pos, typename S::
   LIBCPP_ASSERT(orig.empty());
   LIBCPP_ASSERT(substr.__invariants());
   assert(substr == expected);
+  LIBCPP_ASSERT(is_string_asan_correct(orig));
+  LIBCPP_ASSERT(is_string_asan_correct(substr));
 }
 
 template <class S>
@@ -121,6 +130,8 @@ constexpr void test_string_pos_n_alloc(
   LIBCPP_ASSERT(substr.__invariants());
   assert(substr == expected);
   assert(substr.get_allocator() == alloc);
+  LIBCPP_ASSERT(is_string_asan_correct(orig));
+  LIBCPP_ASSERT(is_string_asan_correct(substr));
 }
 
 template <class S>
@@ -202,6 +213,8 @@ constexpr void test_allocators() {
   test_string<std::basic_string<CharT, CharTraits, std::allocator<CharT>>>(std::allocator<CharT>{});
   test_string<std::basic_string<CharT, CharTraits, min_allocator<CharT>>>(min_allocator<CharT>{});
   test_string<std::basic_string<CharT, CharTraits, test_allocator<CharT>>>(test_allocator<CharT>{42});
+  test_string<std::basic_string<CharT, CharTraits, operator_hijacker_allocator<CharT>>>(
+      operator_hijacker_allocator<CharT>{});
 }
 
 template <class CharT>

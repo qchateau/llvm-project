@@ -11,6 +11,7 @@
 
 #include "ARCTargetMachine.h"
 #include "ARC.h"
+#include "ARCMachineFunctionInfo.h"
 #include "ARCTargetTransformInfo.h"
 #include "TargetInfo/ARCTargetInfo.h"
 #include "llvm/CodeGen/Passes.h"
@@ -31,12 +32,13 @@ ARCTargetMachine::ARCTargetMachine(const Target &T, const Triple &TT,
                                    const TargetOptions &Options,
                                    std::optional<Reloc::Model> RM,
                                    std::optional<CodeModel::Model> CM,
-                                   CodeGenOpt::Level OL, bool JIT)
-    : LLVMTargetMachine(T,
-                        "e-m:e-p:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
-                        "f32:32:32-i64:32-f64:32-a:0:32-n32",
-                        TT, CPU, FS, Options, getRelocModel(RM),
-                        getEffectiveCodeModel(CM, CodeModel::Small), OL),
+                                   CodeGenOptLevel OL, bool JIT)
+    : CodeGenTargetMachineImpl(
+          T,
+          "e-m:e-p:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
+          "f32:32:32-i64:32-f64:32-a:0:32-n32",
+          TT, CPU, FS, Options, getRelocModel(RM),
+          getEffectiveCodeModel(CM, CodeModel::Small), OL),
       TLOF(std::make_unique<TargetLoweringObjectFileELF>()),
       Subtarget(TT, std::string(CPU), std::string(FS), *this) {
   initAsmInfo();
@@ -56,6 +58,7 @@ public:
     return getTM<ARCTargetMachine>();
   }
 
+  void addIRPasses() override;
   bool addInstSelector() override;
   void addPreEmitPass() override;
   void addPreRegAlloc() override;
@@ -65,6 +68,12 @@ public:
 
 TargetPassConfig *ARCTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new ARCPassConfig(*this, PM);
+}
+
+void ARCPassConfig::addIRPasses() {
+  addPass(createAtomicExpandLegacyPass());
+
+  TargetPassConfig::addIRPasses();
 }
 
 bool ARCPassConfig::addInstSelector() {
@@ -79,12 +88,21 @@ void ARCPassConfig::addPreRegAlloc() {
     addPass(createARCOptAddrMode());
 }
 
+MachineFunctionInfo *ARCTargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+    return ARCFunctionInfo::create<ARCFunctionInfo>(Allocator, F, STI);
+}
+
 // Force static initialization.
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeARCTarget() {
   RegisterTargetMachine<ARCTargetMachine> X(getTheARCTarget());
+  PassRegistry &PR = *PassRegistry::getPassRegistry();
+  initializeARCAsmPrinterPass(PR);
+  initializeARCDAGToDAGISelLegacyPass(PR);
 }
 
 TargetTransformInfo
 ARCTargetMachine::getTargetTransformInfo(const Function &F) const {
-  return TargetTransformInfo(ARCTTIImpl(this, F));
+  return TargetTransformInfo(std::make_unique<ARCTTIImpl>(this, F));
 }

@@ -7,20 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "PropertyDeclarationCheck.h"
-#include "../utils/OptionsUtils.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
-#include "clang/Basic/CharInfo.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Regex.h"
-#include <algorithm>
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace objc {
+namespace clang::tidy::objc {
 
 namespace {
 
@@ -54,7 +47,7 @@ FixItHint generateFixItHint(const ObjCPropertyDecl *Decl, NamingStyle Style) {
           llvm::StringRef(NewName));
     }
   }
-  return FixItHint();
+  return {};
 }
 
 std::string validPropertyNameRegex(bool UsedInMatcher) {
@@ -95,7 +88,7 @@ bool prefixedPropertyNameValid(llvm::StringRef PropertyName) {
   auto RegexExp = llvm::Regex(llvm::StringRef(validPropertyNameRegex(false)));
   return RegexExp.match(PropertyName.substr(Start + 1));
 }
-}  // namespace
+} // namespace
 
 void PropertyDeclarationCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(objcPropertyDecl(
@@ -133,6 +126,4 @@ void PropertyDeclarationCheck::check(const MatchFinder::MatchResult &Result) {
       << generateFixItHint(MatchedDecl, StandardProperty);
 }
 
-}  // namespace objc
-}  // namespace tidy
-}  // namespace clang
+} // namespace clang::tidy::objc

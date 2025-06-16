@@ -44,6 +44,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Timer.h"
+#include <optional>
 
 namespace clang {
 
@@ -137,7 +138,7 @@ public:
     /// Enables per-check timers.
     ///
     /// It prints a report after match.
-    llvm::Optional<Profiling> CheckProfiling;
+    std::optional<Profiling> CheckProfiling;
   };
 
   MatchFinder(MatchFinderOptions Options = MatchFinderOptions());
@@ -267,7 +268,7 @@ SmallVector<BoundNodes, 1> match(MatcherT Matcher, ASTContext &Context);
 /// Returns \c NULL if there is no match, or if the matching node cannot be
 /// casted to \c NodeT.
 ///
-/// This is useful in combanation with \c match():
+/// This is useful in combination with \c match():
 /// \code
 ///   const Decl *D = selectFirst<Decl>("id", match(Matcher.bind("id"),
 ///                                                 Node, Context));

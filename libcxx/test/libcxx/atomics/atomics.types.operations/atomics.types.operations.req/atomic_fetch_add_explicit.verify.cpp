@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+// XFAIL: FROZEN-CXX03-HEADERS-FIXME
+
 // <atomic>
 
 // template <class T>
@@ -21,12 +23,12 @@
 void void_pointer() {
   {
     volatile std::atomic<void*> obj;
-    // expected-error@atomic:* {{incomplete type 'void' where a complete type is required}}
+    // expected-error@*:* {{incomplete type 'void' where a complete type is required}}
     std::atomic_fetch_add_explicit(&obj, 0, std::memory_order_relaxed);
   }
   {
     std::atomic<void*> obj;
-    // expected-error@atomic:* {{incomplete type 'void' where a complete type is required}}
+    // expected-error@*:* {{incomplete type 'void' where a complete type is required}}
     std::atomic_fetch_add_explicit(&obj, 0, std::memory_order_relaxed);
   }
 }
@@ -36,12 +38,12 @@ struct Incomplete;
 void pointer_to_incomplete_type() {
   {
     volatile std::atomic<Incomplete*> obj;
-    // expected-error@atomic:* {{incomplete type 'Incomplete' where a complete type is required}}
+    // expected-error@*:* {{incomplete type 'Incomplete' where a complete type is required}}
     std::atomic_fetch_add_explicit(&obj, 0, std::memory_order_relaxed);
   }
   {
     std::atomic<Incomplete*> obj;
-    // expected-error@atomic:* {{incomplete type 'Incomplete' where a complete type is required}}
+    // expected-error@*:* {{incomplete type 'Incomplete' where a complete type is required}}
     std::atomic_fetch_add_explicit(&obj, 0, std::memory_order_relaxed);
   }
 }
@@ -49,12 +51,12 @@ void pointer_to_incomplete_type() {
 void function_pointer() {
   {
     volatile std::atomic<void (*)(int)> fun;
-    // expected-error-re@atomic:* {{{{(static_assert|static assertion)}} failed due to requirement '!is_function<void (int)>::value'{{.*}}Pointer to function isn't allowed}}
+    // expected-error-re@*:* {{static assertion failed due to requirement '!is_function<void (int)>::value'{{.*}}Pointer to function isn't allowed}}
     std::atomic_fetch_add_explicit(&fun, 0, std::memory_order_relaxed);
   }
   {
     std::atomic<void (*)(int)> fun;
-    // expected-error-re@atomic:* {{{{(static_assert|static assertion)}} failed due to requirement '!is_function<void (int)>::value'{{.*}}Pointer to function isn't allowed}}
+    // expected-error-re@*:* {{static assertion failed due to requirement '!is_function<void (int)>::value'{{.*}}Pointer to function isn't allowed}}
     std::atomic_fetch_add_explicit(&fun, 0, std::memory_order_relaxed);
   }
 }
@@ -66,12 +68,12 @@ struct S {
 void member_function_pointer() {
   {
     volatile std::atomic<void (S::*)(int)> fun;
-    // expected-error@atomic:* {{no member named 'fetch_add' in}}
+    // expected-error@*:* {{no matching function for call to 'atomic_fetch_add_explicit'}}
     std::atomic_fetch_add_explicit(&fun, 0, std::memory_order_relaxed);
   }
   {
     std::atomic<void (S::*)(int)> fun;
-    // expected-error@atomic:* {{no member named 'fetch_add' in}}
+    // expected-error@*:* {{no matching function for call to 'atomic_fetch_add_explicit'}}
     std::atomic_fetch_add_explicit(&fun, 0, std::memory_order_relaxed);
   }
 }

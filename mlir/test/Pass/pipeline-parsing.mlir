@@ -1,6 +1,7 @@
 // RUN: mlir-opt %s -mlir-disable-threading -pass-pipeline='builtin.module(builtin.module(test-module-pass,func.func(test-function-pass)),func.func(test-function-pass),func.func(cse,canonicalize))' -verify-each=false -mlir-timing -mlir-timing-display=tree 2>&1 | FileCheck %s
 // RUN: mlir-opt %s -mlir-disable-threading -test-textual-pm-nested-pipeline -verify-each=false -mlir-timing -mlir-timing-display=tree 2>&1 | FileCheck %s --check-prefix=TEXTUAL_CHECK
 // RUN: mlir-opt %s -mlir-disable-threading -pass-pipeline='builtin.module(builtin.module(test-module-pass),any(test-interface-pass),any(test-interface-pass),func.func(test-function-pass),any(canonicalize),func.func(cse))' -verify-each=false -mlir-timing -mlir-timing-display=tree 2>&1 | FileCheck %s --check-prefix=GENERIC_MERGE_CHECK
+// RUN: mlir-opt %s -mlir-disable-threading -pass-pipeline=' builtin.module ( builtin.module( func.func( test-function-pass, print-op-stats{ json=false } ) ) ) ' -verify-each=false -mlir-timing -mlir-timing-display=tree 2>&1 | FileCheck %s --check-prefix=PIPELINE_STR_WITH_SPACES_CHECK
 // RUN: not mlir-opt %s -pass-pipeline='any(builtin.module(test-module-pass)' 2>&1 | FileCheck --check-prefix=CHECK_ERROR_1 %s
 // RUN: not mlir-opt %s -pass-pipeline='builtin.module(test-module-pass))' 2>&1 | FileCheck --check-prefix=CHECK_ERROR_2 %s
 // RUN: not mlir-opt %s -pass-pipeline='any(builtin.module()()' 2>&1 | FileCheck --check-prefix=CHECK_ERROR_3 %s
@@ -20,7 +21,9 @@
 // CHECK_ERROR_7: can't run 'wrong-op' pass manager on 'builtin.module' op
 
 // RUN: mlir-opt %s -pass-pipeline='any(cse)' -dump-pass-pipeline 2>&1 | FileCheck %s -check-prefix=CHECK_ROUNDTRIP
-// CHECK_ROUNDTRIP: any(cse)
+// CHECK_ROUNDTRIP: any(
+// CHECK_ROUNDTRIP-NEXT: cse
+// CHECK_ROUNDTRIP-NEXT: )
 
 func.func @foo() {
   return
@@ -50,6 +53,11 @@ module {
 // TEXTUAL_CHECK-NEXT:     TestModulePass
 // TEXTUAL_CHECK-NEXT:     'func.func' Pipeline
 // TEXTUAL_CHECK-NEXT:       TestFunctionPass
+
+// PIPELINE_STR_WITH_SPACES_CHECK:   'builtin.module' Pipeline
+// PIPELINE_STR_WITH_SPACES_CHECK-NEXT:   'func.func' Pipeline
+// PIPELINE_STR_WITH_SPACES_CHECK-NEXT:     TestFunctionPass
+// PIPELINE_STR_WITH_SPACES_CHECK-NEXT:     PrintOpStats
 
 // Check that generic pass pipelines are only merged when they aren't
 // going to overlap with op-specific pipelines.

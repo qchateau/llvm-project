@@ -12,10 +12,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
@@ -47,9 +49,6 @@ MCAsmInfo::MCAsmInfo() {
   LinkerPrivateGlobalPrefix = "";
   InlineAsmStart = "APP";
   InlineAsmEnd = "NO_APP";
-  Code16Directive = ".code16";
-  Code32Directive = ".code32";
-  Code64Directive = ".code64";
   ZeroDirective = "\t.zero\t";
   AsciiDirective = "\t.ascii\t";
   AscizDirective = "\t.asciz\t";
@@ -63,32 +62,16 @@ MCAsmInfo::MCAsmInfo() {
     SupportsExtendedDwarfLocDirective = DwarfExtendedLoc == Enable;
   if (UseLEB128Directives != cl::BOU_UNSET)
     HasLEB128Directives = UseLEB128Directives == cl::BOU_TRUE;
-
-  // FIXME: Clang's logic should be synced with the logic used to initialize
-  //        this member and the two implementations should be merged.
-  // For reference:
-  // - Solaris always enables the integrated assembler by default
-  //   - SparcELFMCAsmInfo and X86ELFMCAsmInfo are handling this case
-  // - Windows always enables the integrated assembler by default
-  //   - MCAsmInfoCOFF is handling this case, should it be MCAsmInfoMicrosoft?
-  // - MachO targets always enables the integrated assembler by default
-  //   - MCAsmInfoDarwin is handling this case
-  // - Generic_GCC toolchains enable the integrated assembler on a per
-  //   architecture basis.
-  //   - The target subclasses for AArch64, ARM, and X86 handle these cases
   UseIntegratedAssembler = true;
   ParseInlineAsmUsingAsmParser = false;
   PreserveAsmComments = true;
+  PPCUseFullRegisterNames = false;
 }
 
 MCAsmInfo::~MCAsmInfo() = default;
 
 void MCAsmInfo::addInitialFrameState(const MCCFIInstruction &Inst) {
   InitialFrameState.push_back(Inst);
-}
-
-bool MCAsmInfo::isSectionAtomizableBySymbols(const MCSection &Section) const {
-  return false;
 }
 
 const MCExpr *
@@ -138,4 +121,53 @@ bool MCAsmInfo::shouldOmitSectionDirective(StringRef SectionName) const {
   // FIXME: Does .section .bss/.data/.text work everywhere??
   return SectionName == ".text" || SectionName == ".data" ||
         (SectionName == ".bss" && !usesELFSectionDirectiveForBSS());
+}
+
+void MCAsmInfo::initializeVariantKinds(ArrayRef<VariantKindDesc> Descs) {
+  assert(SpecifierToName.empty() && "cannot initialize twice");
+  for (auto Desc : Descs) {
+    [[maybe_unused]] auto It =
+        SpecifierToName.try_emplace(Desc.Kind, Desc.Name);
+    assert(It.second && "duplicate Kind");
+    [[maybe_unused]] auto It2 =
+        NameToSpecifier.try_emplace(Desc.Name.lower(), Desc.Kind);
+    // Workaround for VK_PPC_L/VK_PPC_LO ("l").
+    assert(It2.second || Desc.Name == "l");
+  }
+}
+
+StringRef MCAsmInfo::getSpecifierName(uint32_t S) const {
+  auto It = SpecifierToName.find(S);
+  assert(It != SpecifierToName.end() &&
+         "ensure the specifier is set in initializeVariantKinds");
+  return It->second;
+}
+
+std::optional<uint32_t> MCAsmInfo::getSpecifierForName(StringRef Name) const {
+  auto It = NameToSpecifier.find(Name.lower());
+  if (It != NameToSpecifier.end())
+    return It->second;
+  return {};
+}
+
+void MCAsmInfo::printExpr(raw_ostream &OS, const MCExpr &Expr) const {
+  if (auto *SE = dyn_cast<MCSpecifierExpr>(&Expr))
+    printSpecifierExpr(OS, *SE);
+  else
+    Expr.print(OS, this);
+}
+
+void MCAsmInfo::printSpecifierExpr(raw_ostream &OS,
+                                   const MCSpecifierExpr &Expr) const {
+  // TODO: Switch to unreachable after all targets that use MCSpecifierExpr
+  // migrate to MCAsmInfo::printSpecifierExpr.
+  Expr.printImpl(OS, this);
+}
+
+bool MCAsmInfo::evaluateAsRelocatableImpl(const MCSpecifierExpr &Expr,
+                                          MCValue &Res,
+                                          const MCAssembler *Asm) const {
+  // TODO: Remove after all targets that use MCSpecifierExpr migrate to
+  // MCAsmInfo::evaluateAsRelocatableImpl.
+  return Expr.evaluateAsRelocatableImpl(Res, Asm);
 }

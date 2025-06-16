@@ -669,8 +669,7 @@ public:
   BuildInfoRecord() = default;
   explicit BuildInfoRecord(TypeRecordKind Kind) : TypeRecord(Kind) {}
   BuildInfoRecord(ArrayRef<TypeIndex> ArgIndices)
-      : TypeRecord(TypeRecordKind::BuildInfo),
-        ArgIndices(ArgIndices.begin(), ArgIndices.end()) {}
+      : TypeRecord(TypeRecordKind::BuildInfo), ArgIndices(ArgIndices) {}
 
   ArrayRef<TypeIndex> getArgs() const { return ArgIndices; }
 
@@ -704,10 +703,10 @@ public:
   TypeIndex getCompleteClass() const { return CompleteClass; }
   TypeIndex getOverriddenVTable() const { return OverriddenVFTable; }
   uint32_t getVFPtrOffset() const { return VFPtrOffset; }
-  StringRef getName() const { return makeArrayRef(MethodNames).front(); }
+  StringRef getName() const { return ArrayRef(MethodNames).front(); }
 
   ArrayRef<StringRef> getMethodNames() const {
-    return makeArrayRef(MethodNames).drop_front();
+    return ArrayRef(MethodNames).drop_front();
   }
 
   TypeIndex CompleteClass;

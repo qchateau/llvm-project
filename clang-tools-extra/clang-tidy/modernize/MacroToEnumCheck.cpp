@@ -13,14 +13,11 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/STLExtras.h"
-#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <string>
 
-namespace clang {
-namespace tidy {
-namespace modernize {
+namespace clang::tidy::modernize {
 
 static bool hasOnlyComments(SourceLocation Loc, const LangOptions &Options,
                             StringRef Text) {
@@ -95,12 +92,11 @@ using MacroList = SmallVector<EnumMacro>;
 enum class IncludeGuard { None, FileChanged, IfGuard, DefineGuard };
 
 struct FileState {
-  FileState()
-      : ConditionScopes(0), LastLine(0), GuardScanner(IncludeGuard::None) {}
+  FileState() = default;
 
-  int ConditionScopes;
-  unsigned int LastLine;
-  IncludeGuard GuardScanner;
+  int ConditionScopes = 0;
+  unsigned int LastLine = 0;
+  IncludeGuard GuardScanner = IncludeGuard::None;
   SourceLocation LastMacroLocation;
 };
 
@@ -119,8 +115,9 @@ public:
   void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                           StringRef FileName, bool IsAngled,
                           CharSourceRange FilenameRange,
-                          Optional<FileEntryRef> File, StringRef SearchPath,
-                          StringRef RelativePath, const Module *Imported,
+                          OptionalFileEntryRef File, StringRef SearchPath,
+                          StringRef RelativePath, const Module *SuggestedModule,
+                          bool ModuleImported,
                           SrcMgr::CharacteristicKind FileType) override {
     clearCurrentEnum(HashLoc);
   }
@@ -164,7 +161,7 @@ public:
     checkName(MacroNameTok);
   }
   void Elifdef(SourceLocation Loc, SourceRange ConditionRange,
-      SourceLocation IfLoc) override {
+               SourceLocation IfLoc) override {
     PPCallbacks::Elifdef(Loc, ConditionRange, IfLoc);
   }
   void Elifndef(SourceLocation Loc, const Token &MacroNameTok,
@@ -172,7 +169,7 @@ public:
     checkName(MacroNameTok);
   }
   void Elifndef(SourceLocation Loc, SourceRange ConditionRange,
-      SourceLocation IfLoc) override {
+                SourceLocation IfLoc) override {
     PPCallbacks::Elifndef(Loc, ConditionRange, IfLoc);
   }
   void Endif(SourceLocation Loc, SourceLocation IfLoc) override;
@@ -319,18 +316,16 @@ void MacroToEnumCallbacks::FileChanged(SourceLocation Loc,
   CurrentFile = &Files.back();
 }
 
-bool MacroToEnumCallbacks::isInitializer(ArrayRef<Token> MacroTokens)
-{
+bool MacroToEnumCallbacks::isInitializer(ArrayRef<Token> MacroTokens) {
   IntegralLiteralExpressionMatcher Matcher(MacroTokens, LangOpts.C99 == 0);
   bool Matched = Matcher.match();
-  bool isC = !LangOpts.CPlusPlus;
-  if (isC && (Matcher.largestLiteralSize() != LiteralSize::Int &&
+  bool IsC = !LangOpts.CPlusPlus;
+  if (IsC && (Matcher.largestLiteralSize() != LiteralSize::Int &&
               Matcher.largestLiteralSize() != LiteralSize::UnsignedInt))
     return false;
 
   return Matched;
 }
-
 
 // Any defined but rejected macro is scanned for identifiers that
 // are to be excluded as enums.
@@ -377,7 +372,7 @@ void MacroToEnumCallbacks::MacroUndefined(const Token &MacroNameTok,
     return getTokenName(Macro.Name) == getTokenName(MacroNameTok);
   };
 
-  auto It = llvm::find_if(Enums, [MatchesToken](const MacroList &MacroList) {
+  auto *It = llvm::find_if(Enums, [MatchesToken](const MacroList &MacroList) {
     return llvm::any_of(MacroList, MatchesToken);
   });
   if (It != Enums.end())
@@ -447,8 +442,8 @@ void MacroToEnumCallbacks::invalidateExpressionNames() {
 }
 
 void MacroToEnumCallbacks::EndOfMainFile() {
-    invalidateExpressionNames();
-    issueDiagnostics();
+  invalidateExpressionNames();
+  issueDiagnostics();
 }
 
 void MacroToEnumCallbacks::invalidateRange(SourceRange Range) {
@@ -487,7 +482,7 @@ void MacroToEnumCallbacks::fixEnumMacro(const MacroList &MacroList) const {
       Check->diag(Begin, "replace macro with enum")
       << FixItHint::CreateInsertion(Begin, "enum {\n");
 
-  for (size_t I = 0u; I < MacroList.size(); ++I) {
+  for (size_t I = 0U; I < MacroList.size(); ++I) {
     const EnumMacro &Macro = MacroList[I];
     SourceLocation DefineEnd =
         Macro.Directive->getMacroInfo()->getDefinitionLoc();
@@ -520,7 +515,8 @@ void MacroToEnumCallbacks::fixEnumMacro(const MacroList &MacroList) const {
 void MacroToEnumCheck::registerPPCallbacks(const SourceManager &SM,
                                            Preprocessor *PP,
                                            Preprocessor *ModuleExpanderPP) {
-  auto Callback = std::make_unique<MacroToEnumCallbacks>(this, getLangOpts(), SM);
+  auto Callback =
+      std::make_unique<MacroToEnumCallbacks>(this, getLangOpts(), SM);
   PPCallback = Callback.get();
   PP->addPPCallbacks(std::move(Callback));
 }
@@ -543,7 +539,7 @@ void MacroToEnumCheck::check(
     const ast_matchers::MatchFinder::MatchResult &Result) {
   auto *TLDecl = Result.Nodes.getNodeAs<Decl>("top");
   if (TLDecl == nullptr)
-      return;
+    return;
 
   SourceRange Range = TLDecl->getSourceRange();
   if (auto *TemplateFn = Result.Nodes.getNodeAs<FunctionTemplateDecl>("top")) {
@@ -556,6 +552,4 @@ void MacroToEnumCheck::check(
     PPCallback->invalidateRange(Range);
 }
 
-} // namespace modernize
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::modernize

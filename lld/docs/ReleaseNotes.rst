@@ -25,51 +25,60 @@ Non-comprehensive list of changes in this release
 
 ELF Improvements
 ----------------
+* Added ``-z dynamic-undefined-weak`` to make undefined weak symbols dynamic
+  when the dynamic symbol table is present.
+  (`#143831 <https://github.com/llvm/llvm-project/pull/143831>`_)
 
-* ``ELFCOMPRESS_ZSTD`` compressed input sections are now supported.
-  (`D129406 <https://reviews.llvm.org/D129406>`_)
-* ``--compress-debug-sections=zstd`` is now available to compress debug
-  sections with zstd (``ELFCOMPRESS_ZSTD``).
-  (`D133548 <https://reviews.llvm.org/D133548>`_)
-* ``--no-warnings``/``-w`` is now available to suppress warnings.
-  (`D136569 <https://reviews.llvm.org/D136569>`_)
-* ``DT_RISCV_VARIANT_CC`` is now produced if at least one ``R_RISCV_JUMP_SLOT``
-  relocation references a symbol with the ``STO_RISCV_VARIANT_CC`` bit.
-  (`D107951 <https://reviews.llvm.org/D107951>`_)
-* ``--no-undefined-version`` is now the default; symbols named in version
-  scripts that have no matching symbol in the output will be reported. Use
-  ``--undefined-version`` to revert to the old behavior.
-* The output ``SHT_RISCV_ATTRIBUTES`` section now merges all input components
-  instead of picking the first input component.
-  (`D138550 <https://reviews.llvm.org/D138550>`_)
+* For AArch64, added support for ``-zgcs-report-dynamic``, enabling checks for
+  GNU GCS Attribute Flags in Dynamic Objects when GCS is enabled. Inherits value
+  from ``-zgcs-report`` (capped at ``warning`` level) unless user-defined,
+  ensuring compatibility with GNU ld linker.
+
+* The default Hexagon architecture version in ELF object files produced by
+  lld is changed to v68. This change is only effective when the version is
+  not provided in the command line by the user and cannot be inferred from
+  inputs.
+
+* ``--why-live=<glob>`` prints for each symbol matching ``<glob>`` a chain of
+  items that kept it live during garbage collection. This is inspired by the
+  Mach-O LLD feature of the same name.
+
+* Linker script ``OVERLAY`` descriptions now support virtual memory regions
+  (e.g. ``>region``) and ``NOCROSSREFS``.
+
+* Added ``--xosegment`` and ``--no-xosegment`` flags to control whether to place
+  executable-only and readable-executable sections in the same segment. The
+  default value is ``--no-xosegment``.
+  (`#132412 <https://github.com/llvm/llvm-project/pull/132412>`_)
+
+* For AArch64, added support for the ``SHF_AARCH64_PURECODE`` section flag,
+  which indicates that the section only contains program code and no data.
+  An output section will only have this flag set if all input sections also
+  have it set. (`#125689 <https://github.com/llvm/llvm-project/pull/125689>`_,
+  `#134798 <https://github.com/llvm/llvm-project/pull/134798>`_)
+
+* For AArch64 and ARM, added ``-zexecute-only-report``, which checks for
+  missing ``SHF_AARCH64_PURECODE`` and ``SHF_ARM_PURECODE`` section flags
+  on executable sections.
+  (`#128883 <https://github.com/llvm/llvm-project/pull/128883>`_)
 
 Breaking changes
 ----------------
+* Executable-only and readable-executable sections are now allowed to be placed
+  in the same segment by default. Pass ``--xosegment`` to lld in order to get
+  the old behavior back.
+
+* When using ``--no-pie`` without a ``SECTIONS`` command, the linker uses the
+  target's default image base. If ``-Ttext=`` or ``--section-start`` specifies
+  an output section address below this base, there will now be an error.
+  ``--image-base`` can be set at a lower address to fix the error.
+  (`#140187 <https://github.com/llvm/llvm-project/pull/140187>`_)
 
 COFF Improvements
 -----------------
 
-* The linker command line entry in ``S_ENVBLOCK`` of the PDB is now stripped
-  from input files, to align with MSVC behavior.
-  (`D137723 <https://reviews.llvm.org/D137723>`_)
-* Switched from SHA1 to BLAKE3 for PDB type hashing / ``-gcodeview-ghash``
-  (`D137101 <https://reviews.llvm.org/D137101>`_)
-* Improvements to the PCH.OBJ files handling. Now LLD behaves the same as MSVC
-  link.exe when merging PCH.OBJ files that don't have the same signature.
-  (`D136762 <https://reviews.llvm.org/D136762>`_)
-
 MinGW Improvements
 ------------------
-
-* The lld-specific options ``--guard-cf``, ``--no-guard-cf``,
-  ``--guard-longjmp`` and ``--no-guard-longjmp`` has been added to allow
-  enabling Control Flow Guard and long jump hardening. These options are
-  disabled by default, but enabling ``--guard-cf`` will also enable
-  ``--guard-longjmp`` unless ``--no-guard-longjmp`` is also specified.
-  ``--guard-longjmp`` depends on ``--guard-cf`` and cannot be used by itself.
-  Note that these features require the ``_load_config_used`` symbol to contain
-  the load config directory and be filled with the required symbols.
-  (`D132808 <https://reviews.llvm.org/D132808>`_)
 
 MachO Improvements
 ------------------
@@ -77,3 +86,5 @@ MachO Improvements
 WebAssembly Improvements
 ------------------------
 
+Fixes
+#####

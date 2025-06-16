@@ -1,4 +1,4 @@
-; RUN: llc -march=hexagon < %s | FileCheck %s
+; RUN: llc -mtriple=hexagon < %s | FileCheck %s
 
 ; This used to crash because of calling isSafeToMoveBeforeInBB with source
 ; and target in different blocks.
@@ -8,7 +8,7 @@
 target datalayout = "e-m:e-p:32:32:32-a:0-n16:32-i64:64:64-i32:32:32-i16:16:16-i1:8:8-f32:32:32-f64:64:64-v32:32:32-v64:64:64-v512:512:512-v1124:1024:1024-v2048:2048:2048"
 target triple = "hexagon"
 
-define dso_local <32 x i32> @f0(i32 %a0, i32 %a1) local_unnamed_addr #0 {
+define dso_local <32 x i32> @f0(i32 %a0, i32 %a1, ptr %p) local_unnamed_addr #0 {
 ; CHECK-LABEL: f0:
 ; CHECK:     = vmem({{.*}})
 ; CHECK:     = vmem({{.*}})
@@ -17,13 +17,11 @@ b0:
 
 b1:                                               ; preds = %b0
   %v0 = mul nsw i32 -4, %a0
-  %v1 = getelementptr inbounds i8, i8* null, i32 %v0
-  %v2 = getelementptr inbounds i8, i8* %v1, i32 -64
-  %v3 = bitcast i8* %v2 to <16 x i32>*
-  %v4 = load <16 x i32>, <16 x i32>* %v3, align 64
-  %v5 = getelementptr inbounds i8, i8* %v1, i32 64
-  %v6 = bitcast i8* %v5 to <16 x i32>*
-  %v7 = load <16 x i32>, <16 x i32>* %v6, align 64
+  %v1 = getelementptr inbounds i8, ptr %p, i32 %v0
+  %v2 = getelementptr inbounds i8, ptr %v1, i32 -64
+  %v4 = load <16 x i32>, ptr %v2, align 64
+  %v5 = getelementptr inbounds i8, ptr %v1, i32 64
+  %v7 = load <16 x i32>, ptr %v5, align 64
   br label %b2
 
 b2:                                               ; preds = %b2, %b1

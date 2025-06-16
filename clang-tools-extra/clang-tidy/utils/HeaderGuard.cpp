@@ -10,18 +10,15 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
-#include "clang/Tooling/Tooling.h"
 #include "llvm/Support/Path.h"
 
-namespace clang {
-namespace tidy {
-namespace utils {
+namespace clang::tidy::utils {
 
 /// canonicalize a path by removing ./ and ../ components.
 static std::string cleanPath(StringRef Path) {
   SmallString<256> Result = Path;
   llvm::sys::path::remove_dots(Result, true);
-  return std::string(Result.str());
+  return std::string(Result);
 }
 
 namespace {
@@ -37,9 +34,10 @@ public:
     // guards.
     SourceManager &SM = PP->getSourceManager();
     if (Reason == EnterFile && FileType == SrcMgr::C_User) {
-      if (const FileEntry *FE = SM.getFileEntryForID(SM.getFileID(Loc))) {
+      if (OptionalFileEntryRef FE =
+              SM.getFileEntryRefForID(SM.getFileID(Loc))) {
         std::string FileName = cleanPath(FE->getName());
-        Files[FileName] = FE;
+        Files[FileName] = *FE;
       }
     }
   }
@@ -79,8 +77,8 @@ public:
       if (!MI->isUsedForHeaderGuard())
         continue;
 
-      const FileEntry *FE =
-          SM.getFileEntryForID(SM.getFileID(MI->getDefinitionLoc()));
+      OptionalFileEntryRef FE =
+          SM.getFileEntryRefForID(SM.getFileID(MI->getDefinitionLoc()));
       std::string FileName = cleanPath(FE->getName());
       Files.erase(FileName);
 
@@ -89,11 +87,10 @@ public:
         continue;
 
       // Look up Locations for this guard.
-      SourceLocation Ifndef =
-          Ifndefs[MacroEntry.first.getIdentifierInfo()].second;
+      const auto &Locs = Ifndefs[MacroEntry.first.getIdentifierInfo()];
+      SourceLocation Ifndef = Locs.second;
       SourceLocation Define = MacroEntry.first.getLocation();
-      SourceLocation EndIf =
-          EndIfs[Ifndefs[MacroEntry.first.getIdentifierInfo()].first];
+      SourceLocation EndIf = EndIfs[Locs.first];
 
       // If the macro Name is not equal to what we can compute, correct it in
       // the #ifndef and #define.
@@ -190,7 +187,7 @@ public:
   void checkEndifComment(StringRef FileName, SourceLocation EndIf,
                          StringRef HeaderGuard,
                          std::vector<FixItHint> &FixIts) {
-    size_t EndIfLen;
+    size_t EndIfLen = 0;
     if (wouldFixEndifComment(FileName, EndIf, HeaderGuard, &EndIfLen)) {
       FixIts.push_back(FixItHint::CreateReplacement(
           CharSourceRange::getCharRange(EndIf,
@@ -270,10 +267,6 @@ private:
 };
 } // namespace
 
-void HeaderGuardCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
-  Options.store(Opts, "HeaderFileExtensions", RawStringHeaderFileExtensions);
-}
-
 void HeaderGuardCheck::registerPPCallbacks(const SourceManager &SM,
                                            Preprocessor *PP,
                                            Preprocessor *ModuleExpanderPP) {
@@ -282,7 +275,7 @@ void HeaderGuardCheck::registerPPCallbacks(const SourceManager &SM,
 
 std::string HeaderGuardCheck::sanitizeHeaderGuard(StringRef Guard) {
   // Only reserved identifiers are allowed to start with an '_'.
-  return Guard.drop_while([](char C) { return C == '_'; }).str();
+  return Guard.ltrim('_').str();
 }
 
 bool HeaderGuardCheck::shouldSuggestEndifComment(StringRef FileName) {
@@ -298,6 +291,4 @@ bool HeaderGuardCheck::shouldSuggestToAddHeaderGuard(StringRef FileName) {
 std::string HeaderGuardCheck::formatEndIf(StringRef HeaderGuard) {
   return "endif // " + HeaderGuard.str();
 }
-} // namespace utils
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::utils

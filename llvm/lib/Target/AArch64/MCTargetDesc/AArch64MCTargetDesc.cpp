@@ -29,6 +29,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/TargetParser/AArch64TargetParser.h"
 
 using namespace llvm;
 
@@ -51,6 +52,8 @@ static MCInstrInfo *createAArch64MCInstrInfo() {
 
 static MCSubtargetInfo *
 createAArch64MCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
+  CPU = AArch64::resolveCPUAlias(CPU);
+
   if (CPU.empty()) {
     CPU = "generic";
     if (FS.empty())
@@ -300,6 +303,13 @@ void AArch64_MC::initLLVMToCVRegMapping(MCRegisterInfo *MRI) {
     MRI->mapLLVMRegToCVReg(I.Reg, static_cast<int>(I.CVReg));
 }
 
+bool AArch64_MC::isHForm(const MCInst &MI, const MCInstrInfo *MCII) {
+  const auto &FPR16 = AArch64MCRegisterClasses[AArch64::FPR16RegClassID];
+  return llvm::any_of(MI, [&](const MCOperand &Op) {
+    return Op.isReg() && FPR16.contains(Op.getReg());
+  });
+}
+
 bool AArch64_MC::isQForm(const MCInst &MI, const MCInstrInfo *MCII) {
   const auto &FPR128 = AArch64MCRegisterClasses[AArch64::FPR128RegClassID];
   return llvm::any_of(MI, [&](const MCOperand &Op) {
@@ -368,34 +378,13 @@ static MCInstPrinter *createAArch64MCInstPrinter(const Triple &T,
   return nullptr;
 }
 
-static MCStreamer *createELFStreamer(const Triple &T, MCContext &Ctx,
-                                     std::unique_ptr<MCAsmBackend> &&TAB,
-                                     std::unique_ptr<MCObjectWriter> &&OW,
-                                     std::unique_ptr<MCCodeEmitter> &&Emitter,
-                                     bool RelaxAll) {
-  return createAArch64ELFStreamer(Ctx, std::move(TAB), std::move(OW),
-                                  std::move(Emitter), RelaxAll);
-}
-
-static MCStreamer *createMachOStreamer(MCContext &Ctx,
-                                       std::unique_ptr<MCAsmBackend> &&TAB,
-                                       std::unique_ptr<MCObjectWriter> &&OW,
-                                       std::unique_ptr<MCCodeEmitter> &&Emitter,
-                                       bool RelaxAll,
-                                       bool DWARFMustBeAtTheEnd) {
-  return createMachOStreamer(Ctx, std::move(TAB), std::move(OW),
-                             std::move(Emitter), RelaxAll, DWARFMustBeAtTheEnd,
-                             /*LabelSections*/ true);
-}
-
 static MCStreamer *
-createWinCOFFStreamer(MCContext &Ctx, std::unique_ptr<MCAsmBackend> &&TAB,
-                      std::unique_ptr<MCObjectWriter> &&OW,
-                      std::unique_ptr<MCCodeEmitter> &&Emitter, bool RelaxAll,
-                      bool IncrementalLinkerCompatible) {
-  return createAArch64WinCOFFStreamer(Ctx, std::move(TAB), std::move(OW),
-                                      std::move(Emitter), RelaxAll,
-                                      IncrementalLinkerCompatible);
+createMachOStreamer(MCContext &Ctx, std::unique_ptr<MCAsmBackend> &&TAB,
+                    std::unique_ptr<MCObjectWriter> &&OW,
+                    std::unique_ptr<MCCodeEmitter> &&Emitter) {
+  return createMachOStreamer(Ctx, std::move(TAB), std::move(OW),
+                             std::move(Emitter), /*ignore=*/false,
+                             /*LabelSections*/ true);
 }
 
 namespace {
@@ -411,19 +400,72 @@ public:
     // condition code) and cbz (where it is a register).
     const auto &Desc = Info->get(Inst.getOpcode());
     for (unsigned i = 0, e = Inst.getNumOperands(); i != e; i++) {
-      if (Desc.OpInfo[i].OperandType == MCOI::OPERAND_PCREL) {
-        int64_t Imm = Inst.getOperand(i).getImm() * 4;
-        Target = Addr + Imm;
+      if (Desc.operands()[i].OperandType == MCOI::OPERAND_PCREL) {
+        int64_t Imm = Inst.getOperand(i).getImm();
+        if (Inst.getOpcode() == AArch64::ADR)
+          Target = Addr + Imm;
+        else if (Inst.getOpcode() == AArch64::ADRP)
+          Target = (Addr & -4096) + Imm * 4096;
+        else
+          Target = Addr + Imm * 4;
         return true;
       }
     }
     return false;
   }
 
+  bool clearsSuperRegisters(const MCRegisterInfo &MRI, const MCInst &Inst,
+                            APInt &Mask) const override {
+    const MCInstrDesc &Desc = Info->get(Inst.getOpcode());
+    unsigned NumDefs = Desc.getNumDefs();
+    unsigned NumImplicitDefs = Desc.implicit_defs().size();
+    assert(Mask.getBitWidth() == NumDefs + NumImplicitDefs &&
+           "Unexpected number of bits in the mask!");
+    // 32-bit General Purpose Register class.
+    const MCRegisterClass &GPR32RC = MRI.getRegClass(AArch64::GPR32RegClassID);
+    // Floating Point Register classes.
+    const MCRegisterClass &FPR8RC = MRI.getRegClass(AArch64::FPR8RegClassID);
+    const MCRegisterClass &FPR16RC = MRI.getRegClass(AArch64::FPR16RegClassID);
+    const MCRegisterClass &FPR32RC = MRI.getRegClass(AArch64::FPR32RegClassID);
+    const MCRegisterClass &FPR64RC = MRI.getRegClass(AArch64::FPR64RegClassID);
+    const MCRegisterClass &FPR128RC =
+        MRI.getRegClass(AArch64::FPR128RegClassID);
+
+    auto ClearsSuperReg = [=](MCRegister Reg) {
+      // An update to the lower 32 bits of a 64 bit integer register is
+      // architecturally defined to zero extend the upper 32 bits on a write.
+      if (GPR32RC.contains(Reg))
+        return true;
+      // SIMD&FP instructions operating on scalar data only access the lower
+      // bits of a register, the upper bits are zero extended on a write. For
+      // SIMD vector registers smaller than 128-bits, the upper 64-bits of the
+      // register are zero extended on a write.
+      // When VL is higher than 128 bits, any write to a SIMD&FP register sets
+      // bits higher than 128 to zero.
+      return FPR8RC.contains(Reg) || FPR16RC.contains(Reg) ||
+             FPR32RC.contains(Reg) || FPR64RC.contains(Reg) ||
+             FPR128RC.contains(Reg);
+    };
+
+    Mask.clearAllBits();
+    for (unsigned I = 0, E = NumDefs; I < E; ++I) {
+      const MCOperand &Op = Inst.getOperand(I);
+      if (ClearsSuperReg(Op.getReg()))
+        Mask.setBit(I);
+    }
+
+    for (unsigned I = 0, E = NumImplicitDefs; I < E; ++I) {
+      const MCPhysReg Reg = Desc.implicit_defs()[I];
+      if (ClearsSuperReg(Reg))
+        Mask.setBit(NumDefs + I);
+    }
+
+    return Mask.getBoolValue();
+  }
+
   std::vector<std::pair<uint64_t, uint64_t>>
   findPltEntries(uint64_t PltSectionVA, ArrayRef<uint8_t> PltContents,
-                 uint64_t GotPltSectionVA,
-                 const Triple &TargetTriple) const override {
+                 const MCSubtargetInfo &STI) const override {
     // Do a lightweight parsing of PLT entries.
     std::vector<std::pair<uint64_t, uint64_t>> Result;
     for (uint64_t Byte = 0, End = PltContents.size(); Byte + 7 < End;
@@ -484,9 +526,9 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAArch64TargetMC() {
     TargetRegistry::RegisterMCCodeEmitter(*T, createAArch64MCCodeEmitter);
 
     // Register the obj streamers.
-    TargetRegistry::RegisterELFStreamer(*T, createELFStreamer);
+    TargetRegistry::RegisterELFStreamer(*T, createAArch64ELFStreamer);
     TargetRegistry::RegisterMachOStreamer(*T, createMachOStreamer);
-    TargetRegistry::RegisterCOFFStreamer(*T, createWinCOFFStreamer);
+    TargetRegistry::RegisterCOFFStreamer(*T, createAArch64WinCOFFStreamer);
 
     // Register the obj target streamer.
     TargetRegistry::RegisterObjectTargetStreamer(

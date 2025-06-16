@@ -14,7 +14,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/SCF/Transforms/Transforms.h"
+#include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
@@ -36,12 +36,11 @@ struct TestSCFForUtilsPass
   Option<bool> testReplaceWithNewYields{
       *this, "test-replace-with-new-yields",
       llvm::cl::desc("Test replacing a loop with a new loop that returns new "
-                     "additional yeild values"),
+                     "additional yield values"),
       llvm::cl::init(false)};
 
   void runOnOperation() override {
     func::FuncOp func = getOperation();
-    SmallVector<scf::ForOp, 4> toErase;
 
     if (testReplaceWithNewYields) {
       func.walk([&](scf::ForOp forOp) {
@@ -50,19 +49,22 @@ struct TestSCFForUtilsPass
         auto newInitValues = forOp.getInitArgs();
         if (newInitValues.empty())
           return;
-        NewYieldValueFn fn = [&](OpBuilder &b, Location loc,
-                                 ArrayRef<BlockArgument> newBBArgs) {
-          Block *block = newBBArgs.front().getOwner();
+        SmallVector<Value> oldYieldValues =
+            llvm::to_vector(forOp.getYieldedValues());
+        NewYieldValuesFn fn = [&](OpBuilder &b, Location loc,
+                                  ArrayRef<BlockArgument> newBBArgs) {
           SmallVector<Value> newYieldValues;
-          for (auto yieldVal :
-               cast<scf::YieldOp>(block->getTerminator()).getResults()) {
+          for (auto yieldVal : oldYieldValues) {
             newYieldValues.push_back(
                 b.create<arith::AddFOp>(loc, yieldVal, yieldVal));
           }
           return newYieldValues;
         };
-        OpBuilder b(forOp);
-        replaceLoopWithNewYields(b, forOp, newInitValues, fn);
+        IRRewriter rewriter(forOp.getContext());
+        if (failed(forOp.replaceWithAdditionalYields(
+                rewriter, newInitValues, /*replaceInitOperandUsesInLoop=*/true,
+                fn)))
+          signalPassFailure();
       });
     }
   }
@@ -75,6 +77,10 @@ struct TestSCFIfUtilsPass
   StringRef getArgument() const final { return "test-scf-if-utils"; }
   StringRef getDescription() const final { return "test scf.if utils"; }
   explicit TestSCFIfUtilsPass() = default;
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<func::FuncDialect>();
+  }
 
   void runOnOperation() override {
     int count = 0;
@@ -140,6 +146,8 @@ struct TestSCFPipeliningPass
       auto attrCycle =
           op->getAttrOfType<IntegerAttr>(kTestPipeliningOpOrderMarker);
       if (attrCycle && attrStage) {
+        // TODO: Index can be out-of-bounds if ops of the loop body disappear
+        // due to folding.
         schedule[attrCycle.getInt()] =
             std::make_pair(op, unsigned(attrStage.getInt()));
       }
@@ -148,14 +156,14 @@ struct TestSCFPipeliningPass
 
   /// Helper to generate "predicated" version of `op`. For simplicity we just
   /// wrap the operation in a scf.ifOp operation.
-  static Operation *predicateOp(Operation *op, Value pred,
-                                PatternRewriter &rewriter) {
+  static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
+                                Value pred) {
     Location loc = op->getLoc();
     auto ifOp =
         rewriter.create<scf::IfOp>(loc, op->getResultTypes(), pred, true);
     // True branch.
-    op->moveBefore(&ifOp.getThenRegion().front(),
-                   ifOp.getThenRegion().front().begin());
+    rewriter.moveOpBefore(op, &ifOp.getThenRegion().front(),
+                          ifOp.getThenRegion().front().begin());
     rewriter.setInsertionPointAfter(op);
     if (op->getNumResults() > 0)
       rewriter.create<scf::YieldOp>(loc, op->getResults());
@@ -209,14 +217,15 @@ struct TestSCFPipeliningPass
     RewritePatternSet patterns(&getContext());
     mlir::scf::PipeliningOption options;
     options.getScheduleFn = getSchedule;
+    options.supportDynamicLoops = true;
+    options.predicateFn = predicateOp;
     if (annotatePipeline)
       options.annotateFn = annotate;
     if (noEpiloguePeeling) {
       options.peelEpilogue = false;
-      options.predicateFn = predicateOp;
     }
     scf::populateSCFLoopPipeliningPatterns(patterns, options);
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    (void)applyPatternsGreedily(getOperation(), std::move(patterns));
     getOperation().walk([](Operation *op) {
       // Clean up the markers.
       op->removeAttr(kTestPipeliningStageMarker);

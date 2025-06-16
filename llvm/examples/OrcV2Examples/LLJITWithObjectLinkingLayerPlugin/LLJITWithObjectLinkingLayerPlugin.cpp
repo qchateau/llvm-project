@@ -83,11 +83,11 @@ public:
     return Error::success();
   }
 
-  Error notifyRemovingResources(ResourceKey K) override {
+  Error notifyRemovingResources(JITDylib &JD, ResourceKey K) override {
     return Error::success();
   }
 
-  void notifyTransferringResources(ResourceKey DstKey,
+  void notifyTransferringResources(JITDylib &JD, ResourceKey DstKey,
                                    ResourceKey SrcKey) override {}
 
 private:
@@ -207,7 +207,7 @@ int main(int argc, char *argv[]) {
       LLJITBuilder()
           .setJITTargetMachineBuilder(std::move(JTMB))
           .setObjectLinkingLayerCreator(
-              [&](ExecutionSession &ES, const Triple &TT) {
+              [&](ExecutionSession &ES) {
                 // Create ObjectLinkingLayer.
                 auto ObjLinkingLayer = std::make_unique<ObjectLinkingLayer>(
                     ES, ExitOnErr(jitlink::InProcessMemoryManager::Create()));
@@ -218,13 +218,6 @@ int main(int argc, char *argv[]) {
           .create());
 
   if (!InputObjects.empty()) {
-
-    // If we have input objects then reflect process symbols so the input
-    // objects can do interesting things, like call printf.
-    J->getMainJITDylib().addGenerator(
-        ExitOnErr(DynamicLibrarySearchGenerator::GetForCurrentProcess(
-            J->getDataLayout().getGlobalPrefix())));
-
     // Load the input objects.
     for (auto InputObject : InputObjects) {
       auto ObjBuffer =

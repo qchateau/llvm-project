@@ -23,21 +23,12 @@ using namespace llvm;
 
 namespace {
 
-class AMDGPUInsertDelayAlu : public MachineFunctionPass {
+class AMDGPUInsertDelayAlu {
 public:
-  static char ID;
-
   const SIInstrInfo *SII;
   const TargetRegisterInfo *TRI;
 
-  TargetSchedModel SchedModel;
-
-  AMDGPUInsertDelayAlu() : MachineFunctionPass(ID) {}
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.setPreservesCFG();
-    MachineFunctionPass::getAnalysisUsage(AU);
-  }
+  const TargetSchedModel *SchedModel;
 
   // Return true if MI waits for all outstanding VALU instructions to complete.
   static bool instructionWaitsForVALU(const MachineInstr &MI) {
@@ -51,9 +42,16 @@ public:
         MI.getOpcode() == AMDGPU::S_SENDMSG_RTN_B64)
       return true;
     if (MI.getOpcode() == AMDGPU::S_WAITCNT_DEPCTR &&
-        (MI.getOperand(0).getImm() & 0xf000) == 0)
+        AMDGPU::DepCtr::decodeFieldVaVdst(MI.getOperand(0).getImm()) == 0)
       return true;
     return false;
+  }
+
+  static bool instructionWaitsForSGPRWrites(const MachineInstr &MI) {
+    // These instruction types wait for VA_SDST==0 before issuing.
+    const uint64_t VA_SDST_0 = SIInstrFlags::SALU | SIInstrFlags::SMRD;
+
+    return MI.getDesc().TSFlags & VA_SDST_0;
   }
 
   // Types of delay that can be encoded in an s_delay_alu instruction.
@@ -77,11 +75,15 @@ public:
   struct DelayInfo {
     // One larger than the maximum number of (non-TRANS) VALU instructions we
     // can encode in an s_delay_alu instruction.
-    static const unsigned VALU_MAX = 5;
+    static constexpr unsigned VALU_MAX = 5;
 
     // One larger than the maximum number of TRANS instructions we can encode in
     // an s_delay_alu instruction.
-    static const unsigned TRANS_MAX = 4;
+    static constexpr unsigned TRANS_MAX = 4;
+
+    // One larger than the maximum number of SALU cycles we can encode in an
+    // s_delay_alu instruction.
+    static constexpr unsigned SALU_CYCLES_MAX = 4;
 
     // If it was written by a (non-TRANS) VALU, remember how many clock cycles
     // are left until it completes, and how many other (non-TRANS) VALU we have
@@ -120,7 +122,9 @@ public:
         TRANSNumVALU = 0;
         break;
       case SALU:
-        SALUCycles = Cycles;
+        // Guard against pseudo-instructions like SI_CALL which are marked as
+        // SALU but with a very high latency.
+        SALUCycles = std::min(Cycles, SALU_CYCLES_MAX);
         break;
       }
     }
@@ -230,6 +234,16 @@ public:
       }
     }
 
+    void advanceByVALUNum(unsigned VALUNum) {
+      iterator Next;
+      for (auto I = begin(), E = end(); I != E; I = Next) {
+        Next = std::next(I);
+        if (I->second.VALUNum >= VALUNum && I->second.VALUCycles > 0) {
+          erase(I);
+        }
+      }
+    }
+
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
     void dump(const TargetRegisterInfo *TRI) const {
       if (empty()) {
@@ -278,6 +292,7 @@ public:
 
     // Wait for an SALU instruction.
     if (Delay.SALUCycles) {
+      assert(Delay.SALUCycles < DelayInfo::SALU_CYCLES_MAX);
       if (Imm & 0x780) {
         // We have already encoded a VALU and a TRANS delay. There's no room in
         // the encoding for an SALU delay as well, so just drop it.
@@ -333,6 +348,7 @@ public:
     bool Changed = false;
     MachineInstr *LastDelayAlu = nullptr;
 
+    MCRegUnit LastSGPRFromVALU = 0;
     // Iterate over the contents of bundles, but don't emit any instructions
     // inside a bundle.
     for (auto &MI : MBB.instrs()) {
@@ -347,8 +363,18 @@ public:
 
       DelayType Type = getDelayType(MI.getDesc().TSFlags);
 
+      if (instructionWaitsForSGPRWrites(MI)) {
+        auto It = State.find(LastSGPRFromVALU);
+        if (It != State.end()) {
+          DelayInfo Info = It->getSecond();
+          State.advanceByVALUNum(Info.VALUNum);
+          LastSGPRFromVALU = 0;
+        }
+      }
+
       if (instructionWaitsForVALU(MI)) {
         // Forget about all outstanding VALU delays.
+        // TODO: This is overkill since it also forgets about SALU delays.
         State = DelayState();
       } else if (Type != OTHER) {
         DelayInfo Delay;
@@ -360,15 +386,26 @@ public:
             // ignore this operand.
             if (MI.getOpcode() == AMDGPU::V_WRITELANE_B32 && Op.isTied())
               continue;
-            for (MCRegUnitIterator UI(Op.getReg(), TRI); UI.isValid(); ++UI) {
-              auto It = State.find(*UI);
+            for (MCRegUnit Unit : TRI->regunits(Op.getReg())) {
+              auto It = State.find(Unit);
               if (It != State.end()) {
                 Delay.merge(It->second);
-                State.erase(*UI);
+                State.erase(Unit);
               }
             }
           }
         }
+
+        if (SII->isVALU(MI.getOpcode())) {
+          for (const auto &Op : MI.defs()) {
+            Register Reg = Op.getReg();
+            if (AMDGPU::isSGPR(Reg, TRI)) {
+              LastSGPRFromVALU = *TRI->regunits(Reg).begin();
+              break;
+            }
+          }
+        }
+
         if (Emit && !MI.isBundledWithPred()) {
           // TODO: For VALU->SALU delays should we use s_delay_alu or s_nop or
           // just ignore them?
@@ -379,10 +416,10 @@ public:
       if (Type != OTHER) {
         // TODO: Scan implicit defs too?
         for (const auto &Op : MI.defs()) {
-          unsigned Latency = SchedModel.computeOperandLatency(
-              &MI, MI.getOperandNo(&Op), nullptr, 0);
-          for (MCRegUnitIterator UI(Op.getReg(), TRI); UI.isValid(); ++UI)
-            State[*UI] = DelayInfo(Type, Latency);
+          unsigned Latency = SchedModel->computeOperandLatency(
+              &MI, Op.getOperandNo(), nullptr, 0);
+          for (MCRegUnit Unit : TRI->regunits(Op.getReg()))
+            State[Unit] = DelayInfo(Type, Latency);
         }
       }
 
@@ -401,17 +438,14 @@ public:
     if (Emit) {
       assert(State == BlockState[&MBB] &&
              "Basic block state should not have changed on final pass!");
-    } else if (State != BlockState[&MBB]) {
-      BlockState[&MBB] = std::move(State);
+    } else if (DelayState &BS = BlockState[&MBB]; State != BS) {
+      BS = std::move(State);
       Changed = true;
     }
     return Changed;
   }
 
-  bool runOnMachineFunction(MachineFunction &MF) override {
-    if (skipFunction(MF.getFunction()))
-      return false;
-
+  bool run(MachineFunction &MF) {
     LLVM_DEBUG(dbgs() << "AMDGPUInsertDelayAlu running on " << MF.getName()
                       << "\n");
 
@@ -421,8 +455,7 @@ public:
 
     SII = ST.getInstrInfo();
     TRI = ST.getRegisterInfo();
-
-    SchedModel.init(&ST);
+    SchedModel = &SII->getSchedModel();
 
     // Calculate the delay state for each basic block, iterating until we reach
     // a fixed point.
@@ -433,7 +466,7 @@ public:
       auto &MBB = *WorkList.pop_back_val();
       bool Changed = runOnMachineBasicBlock(MBB, false);
       if (Changed)
-        WorkList.insert(MBB.succ_begin(), MBB.succ_end());
+        WorkList.insert_range(MBB.successors());
     }
 
     LLVM_DEBUG(dbgs() << "Final pass over all BBs\n");
@@ -447,11 +480,39 @@ public:
   }
 };
 
+class AMDGPUInsertDelayAluLegacy : public MachineFunctionPass {
+public:
+  static char ID;
+
+  AMDGPUInsertDelayAluLegacy() : MachineFunctionPass(ID) {}
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesCFG();
+    MachineFunctionPass::getAnalysisUsage(AU);
+  }
+
+  bool runOnMachineFunction(MachineFunction &MF) override {
+    if (skipFunction(MF.getFunction()))
+      return false;
+    AMDGPUInsertDelayAlu Impl;
+    return Impl.run(MF);
+  }
+};
 } // namespace
 
-char AMDGPUInsertDelayAlu::ID = 0;
+PreservedAnalyses
+AMDGPUInsertDelayAluPass::run(MachineFunction &MF,
+                              MachineFunctionAnalysisManager &MFAM) {
+  if (!AMDGPUInsertDelayAlu().run(MF))
+    return PreservedAnalyses::all();
+  auto PA = getMachineFunctionPassPreservedAnalyses();
+  PA.preserveSet<CFGAnalyses>();
+  return PA;
+} // end namespace llvm
 
-char &llvm::AMDGPUInsertDelayAluID = AMDGPUInsertDelayAlu::ID;
+char AMDGPUInsertDelayAluLegacy::ID = 0;
 
-INITIALIZE_PASS(AMDGPUInsertDelayAlu, DEBUG_TYPE, "AMDGPU Insert Delay ALU",
-                false, false)
+char &llvm::AMDGPUInsertDelayAluID = AMDGPUInsertDelayAluLegacy::ID;
+
+INITIALIZE_PASS(AMDGPUInsertDelayAluLegacy, DEBUG_TYPE,
+                "AMDGPU Insert Delay ALU", false, false)

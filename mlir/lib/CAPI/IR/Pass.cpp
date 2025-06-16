@@ -13,6 +13,7 @@
 #include "mlir/CAPI/Support.h"
 #include "mlir/CAPI/Utils.h"
 #include "mlir/Pass/PassManager.h"
+#include <optional>
 
 using namespace mlir;
 
@@ -38,13 +39,36 @@ mlirPassManagerGetAsOpPassManager(MlirPassManager passManager) {
   return wrap(static_cast<OpPassManager *>(unwrap(passManager)));
 }
 
-MlirLogicalResult mlirPassManagerRun(MlirPassManager passManager,
-                                     MlirModule module) {
-  return wrap(unwrap(passManager)->run(unwrap(module)));
+MlirLogicalResult mlirPassManagerRunOnOp(MlirPassManager passManager,
+                                         MlirOperation op) {
+  return wrap(unwrap(passManager)->run(unwrap(op)));
 }
 
-void mlirPassManagerEnableIRPrinting(MlirPassManager passManager) {
-  return unwrap(passManager)->enableIRPrinting();
+void mlirPassManagerEnableIRPrinting(MlirPassManager passManager,
+                                     bool printBeforeAll, bool printAfterAll,
+                                     bool printModuleScope,
+                                     bool printAfterOnlyOnChange,
+                                     bool printAfterOnlyOnFailure,
+                                     MlirOpPrintingFlags flags,
+                                     MlirStringRef treePrintingPath) {
+  auto shouldPrintBeforePass = [printBeforeAll](Pass *, Operation *) {
+    return printBeforeAll;
+  };
+  auto shouldPrintAfterPass = [printAfterAll](Pass *, Operation *) {
+    return printAfterAll;
+  };
+  if (unwrap(treePrintingPath).empty())
+    return unwrap(passManager)
+        ->enableIRPrinting(shouldPrintBeforePass, shouldPrintAfterPass,
+                           printModuleScope, printAfterOnlyOnChange,
+                           printAfterOnlyOnFailure, /*out=*/llvm::errs(),
+                           *unwrap(flags));
+
+  unwrap(passManager)
+      ->enableIRPrintingToFileTree(shouldPrintBeforePass, shouldPrintAfterPass,
+                                   printModuleScope, printAfterOnlyOnChange,
+                                   printAfterOnlyOnFailure,
+                                   unwrap(treePrintingPath), *unwrap(flags));
 }
 
 void mlirPassManagerEnableVerifier(MlirPassManager passManager, bool enable) {
@@ -111,7 +135,7 @@ namespace mlir {
 class ExternalPass : public Pass {
 public:
   ExternalPass(TypeID passID, StringRef name, StringRef argument,
-               StringRef description, Optional<StringRef> opName,
+               StringRef description, std::optional<StringRef> opName,
                ArrayRef<MlirDialectHandle> dependentDialects,
                MlirExternalPassCallbacks callbacks, void *userData)
       : Pass(passID, opName), id(passID), name(name), argument(argument),
@@ -142,7 +166,7 @@ protected:
   }
 
   bool canScheduleOn(RegisteredOperationName opName) const override {
-    if (Optional<StringRef> specifiedOpName = getOpName())
+    if (std::optional<StringRef> specifiedOpName = getOpName())
       return opName.getStringRef() == specifiedOpName;
     return true;
   }
@@ -178,7 +202,8 @@ MlirPass mlirCreateExternalPass(MlirTypeID passID, MlirStringRef name,
                                 void *userData) {
   return wrap(static_cast<mlir::Pass *>(new mlir::ExternalPass(
       unwrap(passID), unwrap(name), unwrap(argument), unwrap(description),
-      opName.length > 0 ? Optional<StringRef>(unwrap(opName)) : std::nullopt,
+      opName.length > 0 ? std::optional<StringRef>(unwrap(opName))
+                        : std::nullopt,
       {dependentDialects, static_cast<size_t>(nDependentDialects)}, callbacks,
       userData)));
 }

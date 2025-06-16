@@ -8,15 +8,10 @@
 
 #include "MoveForwardingReferenceCheck.h"
 #include "clang/Lex/Lexer.h"
-#include "llvm/Support/raw_ostream.h"
-
-#include <algorithm>
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 static void replaceMoveWithForward(const UnresolvedLookupExpr *Callee,
                                    const ParmVarDecl *ParmVar,
@@ -124,6 +119,4 @@ void MoveForwardingReferenceCheck::check(
                          *Result.Context);
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

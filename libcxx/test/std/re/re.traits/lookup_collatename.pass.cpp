@@ -8,7 +8,9 @@
 //
 // NetBSD does not support LC_COLLATE at the moment
 // XFAIL: netbsd
+
 // XFAIL: LIBCXX-AIX-FIXME
+// XFAIL: LIBCXX-FREEBSD-FIXME
 
 // REQUIRES: locale.cs_CZ.ISO8859-2
 
@@ -22,6 +24,7 @@
 
 // TODO: investigation needed
 // XFAIL: target={{.*}}-linux-gnu{{.*}}
+// XFAIL: target={{.*}}-amazon-linux{{.*}}
 
 #include <regex>
 #include <iterator>

@@ -16,6 +16,7 @@
 #include "llvm/Testing/Support/SupportHelpers.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -30,7 +31,7 @@ TEST(HeaderSourceSwitchTest, FileHeuristic) {
   FS.Files[FooCpp];
   FS.Files[FooH];
   FS.Files[Invalid];
-  Optional<Path> PathResult =
+  std::optional<Path> PathResult =
       getCorrespondingHeaderOrSource(FooCpp, FS.view(std::nullopt));
   EXPECT_TRUE(PathResult.has_value());
   ASSERT_EQ(*PathResult, FooH);
@@ -73,6 +74,44 @@ TEST(HeaderSourceSwitchTest, FileHeuristic) {
   // string.
   PathResult = getCorrespondingHeaderOrSource(Invalid, FS.view(std::nullopt));
   EXPECT_FALSE(PathResult.has_value());
+}
+
+TEST(HeaderSourceSwitchTest, ModuleInterfaces) {
+  MockFS FS;
+
+  auto FooCC = testPath("foo.cc");
+  auto FooCPPM = testPath("foo.cppm");
+  FS.Files[FooCC];
+  FS.Files[FooCPPM];
+  std::optional<Path> PathResult =
+      getCorrespondingHeaderOrSource(FooCC, FS.view(std::nullopt));
+  EXPECT_TRUE(PathResult.has_value());
+  ASSERT_EQ(*PathResult, FooCPPM);
+
+  auto Foo2CPP = testPath("foo2.cpp");
+  auto Foo2CCM = testPath("foo2.ccm");
+  FS.Files[Foo2CPP];
+  FS.Files[Foo2CCM];
+  PathResult = getCorrespondingHeaderOrSource(Foo2CPP, FS.view(std::nullopt));
+  EXPECT_TRUE(PathResult.has_value());
+  ASSERT_EQ(*PathResult, Foo2CCM);
+
+  auto Foo3CXX = testPath("foo3.cxx");
+  auto Foo3CXXM = testPath("foo3.cxxm");
+  FS.Files[Foo3CXX];
+  FS.Files[Foo3CXXM];
+  PathResult = getCorrespondingHeaderOrSource(Foo3CXX, FS.view(std::nullopt));
+  EXPECT_TRUE(PathResult.has_value());
+  ASSERT_EQ(*PathResult, Foo3CXXM);
+
+  auto Foo4CPLUSPLUS = testPath("foo4.c++");
+  auto Foo4CPLUSPLUSM = testPath("foo4.c++m");
+  FS.Files[Foo4CPLUSPLUS];
+  FS.Files[Foo4CPLUSPLUSM];
+  PathResult =
+      getCorrespondingHeaderOrSource(Foo4CPLUSPLUS, FS.view(std::nullopt));
+  EXPECT_TRUE(PathResult.has_value());
+  ASSERT_EQ(*PathResult, Foo4CPLUSPLUSM);
 }
 
 MATCHER_P(declNamed, Name, "") {
@@ -141,7 +180,7 @@ TEST(HeaderSourceSwitchTest, FromHeaderToSource) {
   // Test for switch from .h header to .cc source
   struct {
     llvm::StringRef HeaderCode;
-    llvm::Optional<std::string> ExpectedSource;
+    std::optional<std::string> ExpectedSource;
   } TestCases[] = {
       {"// empty, no header found", std::nullopt},
       {R"cpp(
@@ -210,7 +249,7 @@ TEST(HeaderSourceSwitchTest, FromSourceToHeader) {
   // Test for switching from .cc source file to .h header.
   struct {
     llvm::StringRef SourceCode;
-    llvm::Optional<std::string> ExpectedResult;
+    std::optional<std::string> ExpectedResult;
   } TestCases[] = {
       {"// empty, no header found", std::nullopt},
       {R"cpp(

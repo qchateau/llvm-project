@@ -11,12 +11,10 @@
 
 #include "../ClangTidyCheck.h"
 
-namespace clang {
-namespace tidy {
-namespace fuchsia {
+namespace clang::tidy::fuchsia {
 
 /// Constructing global, non-trivial objects with static storage is
-/// disallowed, unless the object is statically initialized with a constexpr 
+/// disallowed, unless the object is statically initialized with a constexpr
 /// constructor or has no explicit constructor.
 ///
 /// For the user-facing documentation see:
@@ -32,8 +30,6 @@ public:
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
 };
 
-} // namespace fuchsia
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::fuchsia
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_FUCHSIA_STATICALLY_CONSTRUCTED_OBJECTS_H

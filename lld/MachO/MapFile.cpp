@@ -63,10 +63,11 @@ struct MapInfo {
 
 static MapInfo gatherMapInfo() {
   MapInfo info;
-  for (InputFile *file : inputFiles)
+  for (InputFile *file : inputFiles) {
+    bool isReferencedFile = false;
+
     if (isa<ObjFile>(file) || isa<BitcodeFile>(file)) {
       uint32_t fileIndex = info.files.size() + 1;
-      bool isReferencedFile = false;
 
       // Gather the dead symbols. We don't have to bother with the live ones
       // because we will pick them up as we iterate over the OutputSections
@@ -76,8 +77,8 @@ static MapInfo gatherMapInfo() {
           // Only emit the prevailing definition of a symbol. Also, don't emit
           // the symbol if it is part of a cstring section (we use the literal
           // value instead, similar to ld64)
-          if (d->isec && d->getFile() == file &&
-              !isa<CStringInputSection>(d->isec)) {
+          if (d->isec() && d->getFile() == file &&
+              !isa<CStringInputSection>(d->isec())) {
             isReferencedFile = true;
             if (!d->isLive())
               info.deadSymbols.push_back(d);
@@ -104,18 +105,58 @@ static MapInfo gatherMapInfo() {
           }
         }
       }
-
-      if (isReferencedFile)
-        info.files.push_back(file);
+    } else if (const auto *dylibFile = dyn_cast<DylibFile>(file)) {
+      isReferencedFile = dylibFile->isReferenced();
     }
+
+    if (isReferencedFile)
+      info.files.push_back(file);
+  }
 
   // cstrings are not stored in sorted order in their OutputSections, so we sort
   // them here.
   for (auto &liveCStrings : info.liveCStringsForSection)
-    parallelSort(liveCStrings.second, [](const auto &p1, const auto &p2) {
-      return p1.first < p2.first;
-    });
+    parallelSort(liveCStrings.second, llvm::less_first());
   return info;
+}
+
+// We use this instead of `toString(const InputFile *)` as we don't want to
+// include the dylib install name in our output.
+static void printFileName(raw_fd_ostream &os, const InputFile *f) {
+  if (f->archiveName.empty())
+    os << f->getName();
+  else
+    os << f->archiveName << "(" << path::filename(f->getName()) + ")";
+}
+
+// For printing the contents of the __stubs and __la_symbol_ptr sections.
+static void printStubsEntries(
+    raw_fd_ostream &os,
+    const DenseMap<lld::macho::InputFile *, uint32_t> &readerToFileOrdinal,
+    const OutputSection *osec, size_t entrySize) {
+  for (const Symbol *sym : in.stubs->getEntries())
+    os << format("0x%08llX\t0x%08zX\t[%3u] %s\n",
+                 osec->addr + sym->stubsIndex * entrySize, entrySize,
+                 readerToFileOrdinal.lookup(sym->getFile()),
+                 sym->getName().str().data());
+}
+
+static void printNonLazyPointerSection(raw_fd_ostream &os,
+                                       NonLazyPointerSectionBase *osec) {
+  // ld64 considers stubs to belong to particular files, but considers GOT
+  // entries to be linker-synthesized. Not sure why they made that decision, but
+  // I think we can follow suit unless there's demand for better symbol-to-file
+  // associations.
+  for (const Symbol *sym : osec->getEntries())
+    os << format("0x%08llX\t0x%08zX\t[  0] non-lazy-pointer-to-local: %s\n",
+                 osec->addr + sym->gotIndex * target->wordSize,
+                 target->wordSize, sym->getName().str().data());
+}
+
+static uint64_t getSymSizeForMap(Defined *sym) {
+  if (sym->identicalCodeFoldingKind == Symbol::ICFFoldKind::Body)
+    return 0;
+  return sym->size;
 }
 
 void macho::writeMapFile() {
@@ -143,7 +184,9 @@ void macho::writeMapFile() {
   uint32_t fileIndex = 1;
   DenseMap<lld::macho::InputFile *, uint32_t> readerToFileOrdinal;
   for (InputFile *file : info.files) {
-    os << format("[%3u] %s\n", fileIndex, file->getName().str().c_str());
+    os << format("[%3u] ", fileIndex);
+    printFileName(os, file);
+    os << "\n";
     readerToFileOrdinal[file] = fileIndex++;
   }
 
@@ -158,17 +201,44 @@ void macho::writeMapFile() {
                    seg->name.str().c_str(), osec->name.str().c_str());
     }
 
+  // Helper lambda that prints all symbols from one ConcatInputSection.
+  auto printOne = [&](const ConcatInputSection *isec) {
+    for (Defined *sym : isec->symbols) {
+      if (!(isPrivateLabel(sym->getName()) && getSymSizeForMap(sym) == 0)) {
+        os << format("0x%08llX\t0x%08llX\t[%3u] %s\n", sym->getVA(),
+                     getSymSizeForMap(sym),
+                     readerToFileOrdinal.lookup(sym->getFile()),
+                     sym->getName().str().data());
+      }
+    }
+  };
+  // Shared function to print one or two arrays of ConcatInputSection in
+  // ascending outSecOff order. The second array is optional; if provided, we
+  // interleave the printing in sorted order without allocating a merged temp
+  // array.
+  auto printIsecArrSyms = [&](ArrayRef<ConcatInputSection *> arr1,
+                              ArrayRef<ConcatInputSection *> arr2 = {}) {
+    // Print both arrays in sorted order, interleaving as necessary.
+    while (!arr1.empty() || !arr2.empty()) {
+      if (!arr1.empty() && (arr2.empty() || arr1.front()->outSecOff <=
+                                                arr2.front()->outSecOff)) {
+        printOne(arr1.front());
+        arr1 = arr1.drop_front();
+      } else if (!arr2.empty()) {
+        printOne(arr2.front());
+        arr2 = arr2.drop_front();
+      }
+    }
+  };
+
   os << "# Symbols:\n";
   os << "# Address\tSize    \tFile  Name\n";
   for (const OutputSegment *seg : outputSegments) {
     for (const OutputSection *osec : seg->getSections()) {
-      if (auto *concatOsec = dyn_cast<ConcatOutputSection>(osec)) {
-        for (const InputSection *isec : concatOsec->inputs) {
-          for (Defined *sym : isec->symbols)
-            os << format("0x%08llX\t0x%08llX\t[%3u] %s\n", sym->getVA(),
-                         sym->size, readerToFileOrdinal[sym->getFile()],
-                         sym->getName().str().data());
-        }
+      if (auto *textOsec = dyn_cast<TextOutputSection>(osec)) {
+        printIsecArrSyms(textOsec->inputs, textOsec->getThunks());
+      } else if (auto *concatOsec = dyn_cast<ConcatOutputSection>(osec)) {
+        printIsecArrSyms(concatOsec->inputs);
       } else if (osec == in.cStringSection || osec == in.objcMethnameSection) {
         const auto &liveCStrings = info.liveCStringsForSection.lookup(osec);
         uint64_t lastAddr = 0; // strings will never start at address 0, so this
@@ -185,6 +255,20 @@ void macho::writeMapFile() {
       } else if (osec == (void *)in.unwindInfo) {
         os << format("0x%08llX\t0x%08llX\t[  0] compact unwind info\n",
                      osec->addr, osec->getSize());
+      } else if (osec == in.stubs) {
+        printStubsEntries(os, readerToFileOrdinal, osec, target->stubSize);
+      } else if (osec == in.lazyPointers) {
+        printStubsEntries(os, readerToFileOrdinal, osec, target->wordSize);
+      } else if (osec == in.stubHelper) {
+        // yes, ld64 calls it "helper helper"...
+        os << format("0x%08llX\t0x%08llX\t[  0] helper helper\n", osec->addr,
+                     osec->getSize());
+      } else if (osec == in.got) {
+        printNonLazyPointerSection(os, in.got);
+      } else if (osec == in.tlvPointers) {
+        printNonLazyPointerSection(os, in.tlvPointers);
+      } else if (osec == in.objcMethList) {
+        printIsecArrSyms(in.objcMethList->getInputs());
       }
       // TODO print other synthetic sections
     }
@@ -195,7 +279,7 @@ void macho::writeMapFile() {
     os << "#        \tSize    \tFile  Name\n";
     for (Defined *sym : info.deadSymbols) {
       assert(!sym->isLive());
-      os << format("<<dead>>\t0x%08llX\t[%3u] %s\n", sym->size,
+      os << format("<<dead>>\t0x%08llX\t[%3u] %s\n", getSymSizeForMap(sym),
                    readerToFileOrdinal[sym->getFile()],
                    sym->getName().str().data());
     }

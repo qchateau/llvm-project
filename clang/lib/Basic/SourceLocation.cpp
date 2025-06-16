@@ -16,9 +16,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/FoldingSet.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <string>
@@ -225,6 +223,11 @@ unsigned FullSourceLoc::getColumnNumber(bool *Invalid) const {
 const FileEntry *FullSourceLoc::getFileEntry() const {
   assert(isValid());
   return SrcMgr->getFileEntryForID(getFileID());
+}
+
+OptionalFileEntryRef FullSourceLoc::getFileEntryRef() const {
+  assert(isValid());
+  return SrcMgr->getFileEntryRefForID(getFileID());
 }
 
 unsigned FullSourceLoc::getExpansionLineNumber(bool *Invalid) const {

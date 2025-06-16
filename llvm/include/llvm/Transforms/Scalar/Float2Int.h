@@ -25,7 +25,6 @@ class DominatorTree;
 class Function;
 class Instruction;
 class LLVMContext;
-template <typename T> class Optional;
 class Type;
 class Value;
 
@@ -45,7 +44,7 @@ private:
   std::optional<ConstantRange> calcRange(Instruction *I);
   void walkBackwards();
   void walkForwards();
-  bool validateAndTransform();
+  bool validateAndTransform(const DataLayout &DL);
   Value *convert(Instruction *I, Type *ToTy);
   void cleanup();
 

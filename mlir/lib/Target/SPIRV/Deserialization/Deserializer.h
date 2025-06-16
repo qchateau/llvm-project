@@ -16,11 +16,13 @@
 #include "mlir/Dialect/SPIRV/IR/SPIRVEnums.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/Target/SPIRV/Deserialization.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include <cstdint>
+#include <optional>
 
 namespace mlir {
 namespace spirv {
@@ -120,7 +122,8 @@ class Deserializer {
 public:
   /// Creates a deserializer for the given SPIR-V `binary` module.
   /// The SPIR-V ModuleOp will be created into `context.
-  explicit Deserializer(ArrayRef<uint32_t> binary, MLIRContext *context);
+  explicit Deserializer(ArrayRef<uint32_t> binary, MLIRContext *context,
+                        const DeserializationOptions &options);
 
   /// Deserializes the remembered SPIR-V binary module.
   LogicalResult deserialize();
@@ -185,11 +188,11 @@ private:
   LogicalResult processFunctionEnd(ArrayRef<uint32_t> operands);
 
   /// Gets the constant's attribute and type associated with the given <id>.
-  Optional<std::pair<Attribute, Type>> getConstant(uint32_t id);
+  std::optional<std::pair<Attribute, Type>> getConstant(uint32_t id);
 
   /// Gets the info needed to materialize the spec constant operation op
   /// associated with the given <id>.
-  Optional<SpecConstOperationMaterializationInfo>
+  std::optional<SpecConstOperationMaterializationInfo>
   getSpecConstantOperation(uint32_t id);
 
   /// Gets the constant's integer attribute with the given <id>. Returns a
@@ -219,7 +222,7 @@ private:
 
   /// Creates a spirv::SpecConstantOp.
   spirv::SpecConstantOp createSpecConstant(Location loc, uint32_t resultID,
-                                           Attribute defaultValue);
+                                           TypedAttr defaultValue);
 
   /// Processes the OpVariable instructions at current `offset` into `binary`.
   /// It is expected that this method is used for variables that are to be
@@ -232,6 +235,25 @@ private:
     return globalVariableMap.lookup(id);
   }
 
+  /// Sets the function argument's attributes. |argID| is the function
+  /// argument's result <id>, and |argIndex| is its index in the function's
+  /// argument list.
+  LogicalResult setFunctionArgAttrs(uint32_t argID,
+                                    SmallVectorImpl<Attribute> &argAttrs,
+                                    size_t argIndex);
+
+  /// Gets the symbol name from the name of decoration.
+  StringAttr getSymbolDecoration(StringRef decorationName) {
+    auto attrName = llvm::convertToSnakeFromCamelCase(decorationName);
+    return opBuilder.getStringAttr(attrName);
+  }
+
+  /// Move a conditional branch into a separate basic block to avoid unnecessary
+  /// sinking of defs that may be required outside a selection region. This
+  /// function also ensures that a single block cannot be a header block of one
+  /// selection construct and the merge block of another.
+  LogicalResult splitConditionalBlocks();
+
   //===--------------------------------------------------------------------===//
   // Type
   //===--------------------------------------------------------------------===//
@@ -243,7 +265,7 @@ private:
   Type getUndefType(uint32_t id) { return undefMap.lookup(id); }
 
   /// Returns true if the given `type` is for SPIR-V void type.
-  bool isVoidType(Type type) const { return type.isa<NoneType>(); }
+  bool isVoidType(Type type) const { return isa<NoneType>(type); }
 
   /// Processes a SPIR-V type instruction with given `opcode` and `operands` and
   /// registers the type into `module`.
@@ -253,11 +275,11 @@ private:
 
   LogicalResult processArrayType(ArrayRef<uint32_t> operands);
 
-  LogicalResult processCooperativeMatrixType(ArrayRef<uint32_t> operands);
+  LogicalResult processCooperativeMatrixTypeKHR(ArrayRef<uint32_t> operands);
+
+  LogicalResult processCooperativeMatrixTypeNV(ArrayRef<uint32_t> operands);
 
   LogicalResult processFunctionType(ArrayRef<uint32_t> operands);
-
-  LogicalResult processJointMatrixType(ArrayRef<uint32_t> operands);
 
   LogicalResult processImageType(ArrayRef<uint32_t> operands);
 
@@ -421,7 +443,7 @@ private:
   /// compose the error message) or the next instruction is malformed.
   LogicalResult
   sliceInstruction(spirv::Opcode &opcode, ArrayRef<uint32_t> &operands,
-                   Optional<spirv::Opcode> expectedOpcode = std::nullopt);
+                   std::optional<spirv::Opcode> expectedOpcode = std::nullopt);
 
   /// Processes a SPIR-V instruction with the given `opcode` and `operands`.
   /// This method is the main entrance for handling SPIR-V instruction; it
@@ -482,7 +504,7 @@ private:
 
   /// Contains the data of the OpLine instruction which precedes the current
   /// processing instruction.
-  llvm::Optional<DebugLine> debugLine;
+  std::optional<DebugLine> debugLine;
 
   /// The current word offset into the binary module.
   unsigned curOffset = 0;
@@ -497,7 +519,7 @@ private:
   OwningOpRef<spirv::ModuleOp> module;
 
   /// The current function under construction.
-  Optional<spirv::FuncOp> curFunction;
+  std::optional<spirv::FuncOp> curFunction;
 
   /// The current block under construction.
   Block *curBlock = nullptr;
@@ -601,6 +623,9 @@ private:
 
   /// A list of all structs which have unresolved member types.
   SmallVector<DeferredStructTypeInfo, 0> deferredStructTypesInfos;
+
+  /// Deserialization options.
+  DeserializationOptions options;
 
 #ifndef NDEBUG
   /// A logger used to emit information during the deserialzation process.

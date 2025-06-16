@@ -7,15 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "StaticObjectExceptionCheck.h"
-#include "../utils/Matchers.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace cert {
+namespace clang::tidy::cert {
 
 void StaticObjectExceptionCheck::registerMatchers(MatchFinder *Finder) {
   // Match any static or thread_local variable declaration that has an
@@ -55,6 +52,4 @@ void StaticObjectExceptionCheck::check(const MatchFinder::MatchResult &Result) {
   }
 }
 
-} // namespace cert
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::cert

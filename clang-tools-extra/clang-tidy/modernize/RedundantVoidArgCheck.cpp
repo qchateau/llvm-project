@@ -12,9 +12,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace modernize {
+namespace clang::tidy::modernize {
 
 namespace {
 
@@ -114,7 +112,8 @@ void RedundantVoidArgCheck::processFunctionDecl(
                              "function declaration");
 }
 
-bool isMacroIdentifier(const IdentifierTable &Idents, const Token &ProtoToken) {
+static bool isMacroIdentifier(const IdentifierTable &Idents,
+                              const Token &ProtoToken) {
   if (!ProtoToken.is(tok::TokenKind::raw_identifier))
     return false;
 
@@ -287,6 +286,4 @@ void RedundantVoidArgCheck::processLambdaExpr(
   }
 }
 
-} // namespace modernize
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::modernize

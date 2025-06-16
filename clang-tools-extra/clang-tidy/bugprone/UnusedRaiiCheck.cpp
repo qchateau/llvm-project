@@ -12,9 +12,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 namespace {
 AST_MATCHER(CXXRecordDecl, hasNonTrivialDestructor) {
@@ -39,8 +37,8 @@ void UnusedRaiiCheck::registerMatchers(MatchFinder *Finder) {
 }
 
 template <typename T>
-void reportDiagnostic(DiagnosticBuilder D, const T *Node, SourceRange SR,
-                      bool DefaultConstruction) {
+static void reportDiagnostic(DiagnosticBuilder D, const T *Node, SourceRange SR,
+                             bool DefaultConstruction) {
   const char *Replacement = " give_me_a_name";
 
   // If this is a default ctor we have to remove the parens or we'll introduce a
@@ -96,6 +94,4 @@ void UnusedRaiiCheck::check(const MatchFinder::MatchResult &Result) {
   }
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

@@ -18,7 +18,7 @@
 #include "mlir/Dialect/Async/Transforms.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -28,7 +28,7 @@
 #include <utility>
 
 namespace mlir {
-#define GEN_PASS_DEF_ASYNCPARALLELFOR
+#define GEN_PASS_DEF_ASYNCPARALLELFORPASS
 #include "mlir/Dialect/Async/Passes.h.inc"
 } // namespace mlir
 
@@ -99,15 +99,8 @@ namespace {
 //   }
 //
 struct AsyncParallelForPass
-    : public impl::AsyncParallelForBase<AsyncParallelForPass> {
-  AsyncParallelForPass() = default;
-
-  AsyncParallelForPass(bool asyncDispatch, int32_t numWorkerThreads,
-                       int32_t minTaskSize) {
-    this->asyncDispatch = asyncDispatch;
-    this->numWorkerThreads = numWorkerThreads;
-    this->minTaskSize = minTaskSize;
-  }
+    : public impl::AsyncParallelForPassBase<AsyncParallelForPass> {
+  using Base::Base;
 
   void runOnOperation() override;
 };
@@ -141,7 +134,6 @@ struct ParallelComputeFunctionArgs {
   BlockArgument blockSize();
   ArrayRef<BlockArgument> tripCounts();
   ArrayRef<BlockArgument> lowerBounds();
-  ArrayRef<BlockArgument> upperBounds();
   ArrayRef<BlockArgument> steps();
   ArrayRef<BlockArgument> captures();
 
@@ -173,10 +165,6 @@ ArrayRef<BlockArgument> ParallelComputeFunctionArgs::tripCounts() {
 
 ArrayRef<BlockArgument> ParallelComputeFunctionArgs::lowerBounds() {
   return args.drop_front(2 + 1 * numLoops).take_front(numLoops);
-}
-
-ArrayRef<BlockArgument> ParallelComputeFunctionArgs::upperBounds() {
-  return args.drop_front(2 + 2 * numLoops).take_front(numLoops);
 }
 
 ArrayRef<BlockArgument> ParallelComputeFunctionArgs::steps() {
@@ -273,7 +261,7 @@ static ParallelComputeFunction createParallelComputeFunction(
   // Insert function into the module symbol table and assign it unique name.
   SymbolTable symbolTable(module);
   symbolTable.insert(func);
-  rewriter.getListener()->notifyOperationInserted(func);
+  rewriter.getListener()->notifyOperationInserted(func, /*previous=*/{});
 
   // Create function entry block.
   Block *block =
@@ -425,12 +413,13 @@ static ParallelComputeFunction createParallelComputeFunction(
       }
 
       // Copy the body of the parallel op into the inner-most loop.
-      BlockAndValueMapping mapping;
+      IRMapping mapping;
       mapping.map(op.getInductionVars(), computeBlockInductionVars);
       mapping.map(computeFuncType.captures, captures);
 
-      for (auto &bodyOp : op.getLoopBody().getOps())
+      for (auto &bodyOp : op.getRegion().front().without_terminator())
         b.clone(bodyOp, mapping);
+      b.create<scf::YieldOp>(loc);
     };
   };
 
@@ -488,7 +477,7 @@ createAsyncDispatchFunction(ParallelComputeFunction &computeFunc,
   // Insert function into the module symbol table and assign it unique name.
   SymbolTable symbolTable(module);
   symbolTable.insert(func);
-  rewriter.getListener()->notifyOperationInserted(func);
+  rewriter.getListener()->notifyOperationInserted(func, /*previous=*/{});
 
   // Create function entry block.
   Block *block = b.createBlock(&func.getBody(), func.begin(), type.getInputs(),
@@ -548,7 +537,7 @@ createAsyncDispatchFunction(ParallelComputeFunction &computeFunc,
       operands[2] = end;
 
       executeBuilder.create<func::CallOp>(executeLoc, func.getSymName(),
-                                          func.getCallableResults(), operands);
+                                          func.getResultTypes(), operands);
       executeBuilder.create<async::YieldOp>(executeLoc, ValueRange());
     };
 
@@ -569,7 +558,7 @@ createAsyncDispatchFunction(ParallelComputeFunction &computeFunc,
   computeFuncOperands.append(forwardedInputs.begin(), forwardedInputs.end());
 
   b.create<func::CallOp>(computeFunc.func.getSymName(),
-                         computeFunc.func.getCallableResults(),
+                         computeFunc.func.getResultTypes(),
                          computeFuncOperands);
   b.create<func::ReturnOp>(ValueRange());
 
@@ -616,7 +605,7 @@ static void doAsyncDispatch(ImplicitLocOpBuilder &b, PatternRewriter &rewriter,
     appendBlockComputeOperands(operands);
 
     b.create<func::CallOp>(parallelComputeFunction.func.getSymName(),
-                           parallelComputeFunction.func.getCallableResults(),
+                           parallelComputeFunction.func.getResultTypes(),
                            operands);
     b.create<scf::YieldOp>();
   };
@@ -635,8 +624,7 @@ static void doAsyncDispatch(ImplicitLocOpBuilder &b, PatternRewriter &rewriter,
     appendBlockComputeOperands(operands);
 
     b.create<func::CallOp>(asyncDispatchFunction.getSymName(),
-                           asyncDispatchFunction.getCallableResults(),
-                           operands);
+                           asyncDispatchFunction.getResultTypes(), operands);
 
     // Wait for the completion of all parallel compute operations.
     b.create<AwaitAllOp>(group);
@@ -645,7 +633,7 @@ static void doAsyncDispatch(ImplicitLocOpBuilder &b, PatternRewriter &rewriter,
   };
 
   // Dispatch either single block compute function, or launch async dispatch.
-  b.create<scf::IfOp>(TypeRange(), isSingleBlock, syncDispatch, asyncDispatch);
+  b.create<scf::IfOp>(isSingleBlock, syncDispatch, asyncDispatch);
 }
 
 // Dispatch parallel compute functions by submitting all async compute tasks
@@ -694,7 +682,7 @@ doSequentialDispatch(ImplicitLocOpBuilder &b, PatternRewriter &rewriter,
     auto executeBodyBuilder = [&](OpBuilder &executeBuilder,
                                   Location executeLoc, ValueRange executeArgs) {
       executeBuilder.create<func::CallOp>(executeLoc, compute.getSymName(),
-                                          compute.getCallableResults(),
+                                          compute.getResultTypes(),
                                           computeFuncOperands(iv));
       executeBuilder.create<async::YieldOp>(executeLoc, ValueRange());
     };
@@ -710,7 +698,7 @@ doSequentialDispatch(ImplicitLocOpBuilder &b, PatternRewriter &rewriter,
   b.create<scf::ForOp>(c1, blockCount, c1, ValueRange(), loopBuilder);
 
   // Call parallel compute function for the first block in the caller thread.
-  b.create<func::CallOp>(compute.getSymName(), compute.getCallableResults(),
+  b.create<func::CallOp>(compute.getSymName(), compute.getResultTypes(),
                          computeFuncOperands(c0));
 
   // Wait for the completion of all async compute operations.
@@ -733,7 +721,7 @@ AsyncParallelForRewrite::matchAndRewrite(scf::ParallelOp op,
 
   // Make sure that all constants will be inside the parallel operation body to
   // reduce the number of parallel compute function arguments.
-  cloneConstantsIntoTheRegion(op.getLoopBody(), rewriter);
+  cloneConstantsIntoTheRegion(op.getRegion(), rewriter);
 
   // Compute trip count for each loop induction variable:
   //   tripCount = ceil_div(upperBound - lowerBound, step);
@@ -910,8 +898,8 @@ AsyncParallelForRewrite::matchAndRewrite(scf::ParallelOp op,
       Value useBlockAlignedComputeFn = b.create<arith::CmpIOp>(
           arith::CmpIPredicate::sge, blockSize, numIters);
 
-      b.create<scf::IfOp>(TypeRange(), useBlockAlignedComputeFn,
-                          dispatchBlockAligned, dispatchDefault);
+      b.create<scf::IfOp>(useBlockAlignedComputeFn, dispatchBlockAligned,
+                          dispatchDefault);
       b.create<scf::YieldOp>();
     } else {
       dispatchDefault(b, loc);
@@ -919,7 +907,7 @@ AsyncParallelForRewrite::matchAndRewrite(scf::ParallelOp op,
   };
 
   // Replace the `scf.parallel` operation with the parallel compute function.
-  b.create<scf::IfOp>(TypeRange(), isZeroIterations, noOp, dispatch);
+  b.create<scf::IfOp>(isZeroIterations, noOp, dispatch);
 
   // Parallel operation was replaced with a block iteration loop.
   rewriter.eraseOp(op);
@@ -936,19 +924,8 @@ void AsyncParallelForPass::runOnOperation() {
       [&](ImplicitLocOpBuilder builder, scf::ParallelOp op) {
         return builder.create<arith::ConstantIndexOp>(minTaskSize);
       });
-  if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
     signalPassFailure();
-}
-
-std::unique_ptr<Pass> mlir::createAsyncParallelForPass() {
-  return std::make_unique<AsyncParallelForPass>();
-}
-
-std::unique_ptr<Pass> mlir::createAsyncParallelForPass(bool asyncDispatch,
-                                                       int32_t numWorkerThreads,
-                                                       int32_t minTaskSize) {
-  return std::make_unique<AsyncParallelForPass>(asyncDispatch, numWorkerThreads,
-                                                minTaskSize);
 }
 
 void mlir::async::populateAsyncParallelForPatterns(

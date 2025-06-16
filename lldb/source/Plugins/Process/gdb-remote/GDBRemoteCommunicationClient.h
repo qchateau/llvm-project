@@ -14,10 +14,12 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "lldb/Host/File.h"
+#include "lldb/Utility/AddressableBits.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/GDBRemote.h"
 #include "lldb/Utility/ProcessInfo.h"
@@ -28,7 +30,6 @@
 #include "lldb/Host/windows/PosixApi.h"
 #endif
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/Support/VersionTuple.h"
 
 namespace lldb_private {
@@ -194,13 +195,11 @@ public:
 
   Status GetMemoryRegionInfo(lldb::addr_t addr, MemoryRegionInfo &range_info);
 
-  Status GetWatchpointSupportInfo(uint32_t &num);
+  std::optional<uint32_t> GetWatchpointSlotCount();
 
-  Status GetWatchpointSupportInfo(uint32_t &num, bool &after,
-                                  const ArchSpec &arch);
+  std::optional<bool> GetWatchpointReportedAfter();
 
-  Status GetWatchpointsTriggerAfterInstruction(bool &after,
-                                               const ArchSpec &arch);
+  WatchpointHardwareFeature GetSupportedWatchpointTypes();
 
   const ArchSpec &GetHostArchitecture();
 
@@ -219,7 +218,14 @@ public:
 
   bool GetpPacketSupported(lldb::tid_t tid);
 
-  bool GetxPacketSupported();
+  enum class xPacketState {
+    Unimplemented,
+    Prefixed, // Successful responses start with a 'b' character. This is the
+              // style used by GDB.
+    Bare,     // No prefix, packets starts with the memory being read. This is
+              // LLDB's original style.
+  };
+  xPacketState GetxPacketState();
 
   bool GetVAttachOrWaitSupported();
 
@@ -235,13 +241,13 @@ public:
 
   llvm::VersionTuple GetMacCatalystVersion();
 
-  llvm::Optional<std::string> GetOSBuildString();
+  std::optional<std::string> GetOSBuildString();
 
-  llvm::Optional<std::string> GetOSKernelDescription();
+  std::optional<std::string> GetOSKernelDescription();
 
   ArchSpec GetSystemArchitecture();
 
-  uint32_t GetAddressingBits();
+  lldb_private::AddressableBits GetAddressableBits();
 
   bool GetHostname(std::string &s);
 
@@ -299,8 +305,8 @@ public:
   // and response times.
   bool SendSpeedTestPacket(uint32_t send_size, uint32_t recv_size);
 
-  llvm::Optional<PidTid>
-  SendSetCurrentThreadPacket(uint64_t tid, uint64_t pid, char op);
+  std::optional<PidTid> SendSetCurrentThreadPacket(uint64_t tid, uint64_t pid,
+                                                   char op);
 
   bool SetCurrentThread(uint64_t tid,
                         lldb::pid_t pid = LLDB_INVALID_PROCESS_ID);
@@ -332,6 +338,10 @@ public:
 
   bool GetMultiprocessSupported();
 
+  bool GetReverseContinueSupported();
+
+  bool GetReverseStepSupported();
+
   LazyBool SupportsAllocDeallocMemory() // const
   {
     // Uncomment this to have lldb pretend the debug server doesn't respond to
@@ -351,11 +361,11 @@ public:
 
   bool CloseFile(lldb::user_id_t fd, Status &error);
 
-  llvm::Optional<GDBRemoteFStatData> FStat(lldb::user_id_t fd);
+  std::optional<GDBRemoteFStatData> FStat(lldb::user_id_t fd);
 
   // NB: this is just a convenience wrapper over open() + fstat().  It does not
   // work if the file cannot be opened.
-  llvm::Optional<GDBRemoteFStatData> Stat(const FileSpec &file_spec);
+  std::optional<GDBRemoteFStatData> Stat(const FileSpec &file_spec);
 
   lldb::user_id_t GetFileSize(const FileSpec &file_spec);
 
@@ -393,7 +403,7 @@ public:
           *command_output, // Pass nullptr if you don't want the command output
       const Timeout<std::micro> &timeout);
 
-  bool CalculateMD5(const FileSpec &file_spec, uint64_t &high, uint64_t &low);
+  llvm::ErrorOr<llvm::MD5::MD5Result> CalculateMD5(const FileSpec &file_spec);
 
   lldb::DataBufferSP ReadRegister(
       lldb::tid_t tid,
@@ -444,12 +454,12 @@ public:
   /// Use qOffsets to query the offset used when relocating the target
   /// executable. If successful, the returned structure will contain at least
   /// one value in the offsets field.
-  llvm::Optional<QOffsets> GetQOffsets();
+  std::optional<QOffsets> GetQOffsets();
 
   bool GetModuleInfo(const FileSpec &module_file_spec,
                      const ArchSpec &arch_spec, ModuleSpec &module_spec);
 
-  llvm::Optional<std::vector<ModuleSpec>>
+  std::optional<std::vector<ModuleSpec>>
   GetModulesInfo(llvm::ArrayRef<FileSpec> module_file_specs,
                  const llvm::Triple &triple);
 
@@ -496,7 +506,7 @@ public:
   ///
   /// \see \b Process::ConfigureStructuredData(...) for details.
   Status
-  ConfigureRemoteStructuredData(ConstString type_name,
+  ConfigureRemoteStructuredData(llvm::StringRef type_name,
                                 const StructuredData::ObjectSP &config_sp);
 
   llvm::Expected<TraceSupportedResponse>
@@ -542,7 +552,6 @@ protected:
   LazyBool m_attach_or_wait_reply = eLazyBoolCalculate;
   LazyBool m_prepare_for_reg_writing_reply = eLazyBoolCalculate;
   LazyBool m_supports_p = eLazyBoolCalculate;
-  LazyBool m_supports_x = eLazyBoolCalculate;
   LazyBool m_avoid_g_packets = eLazyBoolCalculate;
   LazyBool m_supports_QSaveRegisterState = eLazyBoolCalculate;
   LazyBool m_supports_qXfer_auxv_read = eLazyBoolCalculate;
@@ -562,6 +571,9 @@ protected:
   LazyBool m_supports_memory_tagging = eLazyBoolCalculate;
   LazyBool m_supports_qSaveCore = eLazyBoolCalculate;
   LazyBool m_uses_native_signals = eLazyBoolCalculate;
+  std::optional<xPacketState> m_x_packet_state;
+  LazyBool m_supports_reverse_continue = eLazyBoolCalculate;
+  LazyBool m_supports_reverse_step = eLazyBoolCalculate;
 
   bool m_supports_qProcessInfoPID : 1, m_supports_qfProcessInfo : 1,
       m_supports_qUserName : 1, m_supports_qGroupName : 1,
@@ -584,9 +596,13 @@ protected:
   lldb::tid_t m_curr_tid_run = LLDB_INVALID_THREAD_ID;
 
   uint32_t m_num_supported_hardware_watchpoints = 0;
-  uint32_t m_addressing_bits = 0;
+  WatchpointHardwareFeature m_watchpoint_types =
+      eWatchpointHardwareFeatureUnknown;
+  uint32_t m_low_mem_addressing_bits = 0;
+  uint32_t m_high_mem_addressing_bits = 0;
 
   ArchSpec m_host_arch;
+  std::string m_host_distribution_id;
   ArchSpec m_process_arch;
   UUID m_process_standalone_uuid;
   lldb::addr_t m_process_standalone_value = LLDB_INVALID_ADDRESS;

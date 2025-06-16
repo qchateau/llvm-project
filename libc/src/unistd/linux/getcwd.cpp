@@ -10,24 +10,24 @@
 
 #include "src/__support/OSUtil/syscall.h" // For internal syscall function.
 #include "src/__support/common.h"
+#include "src/__support/macros/config.h"
 #include "src/string/allocating_string_utils.h" // For strdup.
 
-#include <errno.h>
+#include "src/__support/libc_errno.h"
 #include <linux/limits.h> // This is safe to include without any name pollution.
-#include <stdlib.h>
 #include <sys/syscall.h> // For syscall numbers.
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE_DECL {
 
 namespace {
 
 bool getcwd_syscall(char *buf, size_t size) {
-  int ret = __llvm_libc::syscall_impl(SYS_getcwd, buf, size);
+  int ret = LIBC_NAMESPACE::syscall_impl<int>(SYS_getcwd, buf, size);
   if (ret < 0) {
-    errno = -ret;
+    libc_errno = -ret;
     return false;
   } else if (ret == 0 || buf[0] != '/') {
-    errno = ENOENT;
+    libc_errno = ENOENT;
     return false;
   }
   return true;
@@ -46,12 +46,12 @@ LLVM_LIBC_FUNCTION(char *, getcwd, (char *buf, size_t size)) {
       return nullptr;
     auto cwd = internal::strdup(pathbuf);
     if (!cwd) {
-      errno = ENOMEM;
+      libc_errno = ENOMEM;
       return nullptr;
     }
     return *cwd;
   } else if (size == 0) {
-    errno = EINVAL;
+    libc_errno = EINVAL;
     return nullptr;
   }
 
@@ -63,4 +63,4 @@ LLVM_LIBC_FUNCTION(char *, getcwd, (char *buf, size_t size)) {
   return buf;
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE_DECL

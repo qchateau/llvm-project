@@ -2,6 +2,10 @@
 // RUN: mlir-opt %s -convert-index-to-llvm=index-bitwidth=32 | FileCheck %s --check-prefix=INDEX32
 // RUN: mlir-opt %s -convert-index-to-llvm=index-bitwidth=64 | FileCheck %s --check-prefix=INDEX64
 
+// Same below, but using the `ConvertToLLVMPatternInterface` entry point
+// and the generic `convert-to-llvm` pass.
+// RUN: mlir-opt --convert-to-llvm="filter-dialects=index" --split-input-file %s | FileCheck %s
+
 // CHECK-LABEL: @trivial_ops
 func.func @trivial_ops(%a: index, %b: index) {
   // CHECK: llvm.add
@@ -22,28 +26,32 @@ func.func @trivial_ops(%a: index, %b: index) {
   %7 = index.maxs %a, %b
   // CHECK: llvm.intr.umax
   %8 = index.maxu %a, %b
+  // CHECK: llvm.intr.smin
+  %9 = index.mins %a, %b
+  // CHECK: llvm.intr.umin
+  %10 = index.minu %a, %b
   // CHECK: llvm.shl
-  %9 = index.shl %a, %b
+  %11 = index.shl %a, %b
   // CHECK: llvm.ashr
-  %10 = index.shrs %a, %b
+  %12 = index.shrs %a, %b
   // CHECK: llvm.lshr
-  %11 = index.shru %a, %b
+  %13 = index.shru %a, %b
   // CHECK: llvm.add
-  %12 = index.add %a, %b
+  %14 = index.add %a, %b
   // CHECK: llvm.or
-  %13 = index.or %a, %b
+  %15 = index.or %a, %b
   // CHECK: llvm.xor
-  %14 = index.xor %a, %b
+  %16 = index.xor %a, %b
   // CHECK: llvm.mlir.constant(true
-  %15 = index.bool.constant true
+  %17 = index.bool.constant true
   return
 }
 
 // CHECK-LABEL: @ceildivs
 // CHECK-SAME: %[[NI:.*]]: index, %[[MI:.*]]: index
 func.func @ceildivs(%n: index, %m: index) -> index {
-  // CHECK: %[[N:.*]] = builtin.unrealized_conversion_cast %[[NI]]
-  // CHECK: %[[M:.*]] = builtin.unrealized_conversion_cast %[[MI]]
+  // CHECK-DAG: %[[N:.*]] = builtin.unrealized_conversion_cast %[[NI]]
+  // CHECK-DAG: %[[M:.*]] = builtin.unrealized_conversion_cast %[[MI]]
   // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 :
   // CHECK: %[[POS_ONE:.*]] = llvm.mlir.constant(1 :
   // CHECK: %[[NEG_ONE:.*]] = llvm.mlir.constant(-1 :
@@ -74,8 +82,8 @@ func.func @ceildivs(%n: index, %m: index) -> index {
 // CHECK-LABEL: @ceildivu
 // CHECK-SAME: %[[NI:.*]]: index, %[[MI:.*]]: index
 func.func @ceildivu(%n: index, %m: index) -> index {
-  // CHECK: %[[N:.*]] = builtin.unrealized_conversion_cast %[[NI]]
-  // CHECK: %[[M:.*]] = builtin.unrealized_conversion_cast %[[MI]]
+  // CHECK-DAG: %[[N:.*]] = builtin.unrealized_conversion_cast %[[NI]]
+  // CHECK-DAG: %[[M:.*]] = builtin.unrealized_conversion_cast %[[MI]]
   // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 :
   // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 :
 
@@ -95,11 +103,11 @@ func.func @ceildivu(%n: index, %m: index) -> index {
 // CHECK-LABEL: @floordivs
 // CHECK-SAME: %[[NI:.*]]: index, %[[MI:.*]]: index
 func.func @floordivs(%n: index, %m: index) -> index {
-  // CHECK: %[[N:.*]] = builtin.unrealized_conversion_cast %[[NI]]
-  // CHECK: %[[M:.*]] = builtin.unrealized_conversion_cast %[[MI]]
-  // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 :
-  // CHECK: %[[POS_ONE:.*]] = llvm.mlir.constant(1 :
-  // CHECK: %[[NEG_ONE:.*]] = llvm.mlir.constant(-1 :
+  // CHECK-DAG: %[[N:.*]] = builtin.unrealized_conversion_cast %[[NI]]
+  // CHECK-DAG: %[[M:.*]] = builtin.unrealized_conversion_cast %[[MI]]
+  // CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 :
+  // CHECK-DAG: %[[POS_ONE:.*]] = llvm.mlir.constant(1 :
+  // CHECK-DAG: %[[NEG_ONE:.*]] = llvm.mlir.constant(-1 :
 
   // CHECK: %[[M_NEG:.*]] = llvm.icmp "slt" %[[M]], %[[ZERO]]
   // CHECK: %[[X:.*]] = llvm.select %[[M_NEG]], %[[POS_ONE]], %[[NEG_ONE]]

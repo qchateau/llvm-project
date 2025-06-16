@@ -9,6 +9,7 @@
 #include "SymbolVendorWasm.h"
 
 #include <cstring>
+#include <optional>
 
 #include "Plugins/ObjectFile/wasm/ObjectFileWasm.h"
 #include "lldb/Core/Module.h"
@@ -16,7 +17,6 @@
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Section.h"
 #include "lldb/Host/Host.h"
-#include "lldb/Symbol/LocateSymbolFile.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/StreamString.h"
@@ -78,15 +78,15 @@ SymbolVendorWasm::CreateInstance(const lldb::ModuleSP &module_sp,
   // A Wasm module may have a custom section named "external_debug_info" whose
   // content is the absolute or relative path of the Wasm module that contains
   // debug symbols for this module.
-  llvm::Optional<FileSpec> symbol_file_spec =
+  std::optional<FileSpec> symbol_file_spec =
       obj_file->GetExternalDebugInfoFileSpec();
   if (!symbol_file_spec)
     return nullptr;
   module_spec.GetSymbolFileSpec() = *symbol_file_spec;
 
   FileSpecList search_paths = Target::GetDefaultDebugFileSearchPaths();
-  FileSpec sym_fspec =
-      Symbols::LocateExecutableSymbolFile(module_spec, search_paths);
+  FileSpec sym_fspec = PluginManager::LocateExecutableSymbolFile(
+      module_spec, search_paths, module_sp->GetSymbolLocatorStatistics());
   if (!sym_fspec)
     return nullptr;
 
@@ -107,6 +107,9 @@ SymbolVendorWasm::CreateInstance(const lldb::ModuleSP &module_sp,
   // that.
   SectionList *module_section_list = module_sp->GetSectionList();
   SectionList *objfile_section_list = sym_objfile_sp->GetSectionList();
+
+  if (!module_section_list || !objfile_section_list)
+    return nullptr;
 
   static const SectionType g_sections[] = {
       eSectionTypeDWARFDebugAbbrev,   eSectionTypeDWARFDebugAddr,

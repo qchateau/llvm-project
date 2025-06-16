@@ -28,7 +28,7 @@
 ;   } while (j < 8193);
 ; }
 
-@flags2 = internal global [8193 x i8] zeroinitializer, align 32		; <[8193 x i8]*> [#uses=1]
+@flags2 = internal global [8193 x i8] zeroinitializer, align 32		; <ptr> [#uses=1]
 
 define void @test(i32 signext %i) nounwind {
 ; RV32-LABEL: test:
@@ -57,7 +57,7 @@ define void @test(i32 signext %i) nounwind {
 ; RV64-NEXT:  # %bb.1: # %bb.preheader
 ; RV64-NEXT:    lui a2, %hi(flags2)
 ; RV64-NEXT:    addi a2, a2, %lo(flags2)
-; RV64-NEXT:    addiw a3, a3, 1
+; RV64-NEXT:    addi a3, a3, 1
 ; RV64-NEXT:  .LBB0_2: # %bb
 ; RV64-NEXT:    # =>This Inner Loop Header: Depth=1
 ; RV64-NEXT:    slli a4, a1, 32
@@ -78,8 +78,8 @@ bb:
 	%tmp.15 = mul i32 %indvar, %i
 	%tmp.16 = add i32 %tmp.15, %k_addr.012
 	%gep.upgrd.1 = zext i32 %tmp.16 to i64
-	%tmp = getelementptr [8193 x i8], [8193 x i8]* @flags2, i32 0, i64 %gep.upgrd.1
-	store i8 0, i8* %tmp
+	%tmp = getelementptr [8193 x i8], ptr @flags2, i32 0, i64 %gep.upgrd.1
+	store i8 0, ptr %tmp
 	%tmp.17 = add i32 %tmp.16, %i
 	%tmp.upgrd.2 = icmp sgt i32 %tmp.17, 8192
 	%indvar.next = add i32 %indvar, 1

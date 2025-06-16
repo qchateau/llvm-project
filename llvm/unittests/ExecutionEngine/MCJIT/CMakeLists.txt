@@ -9,6 +9,7 @@ set(LLVM_LINK_COMPONENTS
   ScalarOpts
   Support
   Target
+  TargetParser
   nativecodegen
   )
 
@@ -31,5 +32,3 @@ add_llvm_unittest(MCJITTests
 if(MINGW OR CYGWIN)
   set_property(TARGET MCJITTests PROPERTY LINK_FLAGS -Wl,--export-all-symbols)
 endif()
-
-set_property(TARGET MCJITTests PROPERTY FOLDER "Tests/UnitTests/ExecutionTests")

@@ -47,23 +47,23 @@ func.func @scalar_real(%arg0: !fir.ref<f16>, %arg1: !fir.ref<f16>) {
 // CHECK-SAME:    %[[VAL_1:.*]]: !fir.ref<f16>) {
 // CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] : !fir.ref<f16>, !fir.ref<f16>
 
-func.func @scalar_complex(%arg0: !fir.ref<!fir.complex<8>>, %arg1: !fir.ref<!fir.complex<8>>) {
-  hlfir.assign %arg1 to %arg0 : !fir.ref<!fir.complex<8>>, !fir.ref<!fir.complex<8>>
+func.func @scalar_complex(%arg0: !fir.ref<complex<f64>>, %arg1: !fir.ref<complex<f64>>) {
+  hlfir.assign %arg1 to %arg0 : !fir.ref<complex<f64>>, !fir.ref<complex<f64>>
   return
 }
 // CHECK-LABEL:   func.func @scalar_complex(
-// CHECK-SAME:    %[[VAL_0:.*]]: !fir.ref<!fir.complex<8>>,
-// CHECK-SAME:    %[[VAL_1:.*]]: !fir.ref<!fir.complex<8>>) {
-// CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] : !fir.ref<!fir.complex<8>>, !fir.ref<!fir.complex<8>>
+// CHECK-SAME:    %[[VAL_0:.*]]: !fir.ref<complex<f64>>,
+// CHECK-SAME:    %[[VAL_1:.*]]: !fir.ref<complex<f64>>) {
+// CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] : !fir.ref<complex<f64>>, !fir.ref<complex<f64>>
 
-func.func @scalar_complex_2(%arg0: !fir.ref<!fir.complex<8>>, %arg1: !fir.complex<8>) {
-  hlfir.assign %arg1 to %arg0 : !fir.complex<8>, !fir.ref<!fir.complex<8>>
+func.func @scalar_complex_2(%arg0: !fir.ref<complex<f64>>, %arg1: complex<f64>) {
+  hlfir.assign %arg1 to %arg0 : complex<f64>, !fir.ref<complex<f64>>
   return
 }
 // CHECK-LABEL:   func.func @scalar_complex_2(
-// CHECK-SAME:    %[[VAL_0:.*]]: !fir.ref<!fir.complex<8>>,
-// CHECK-SAME:    %[[VAL_1:.*]]: !fir.complex<8>) {
-// CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] : !fir.complex<8>, !fir.ref<!fir.complex<8>>
+// CHECK-SAME:    %[[VAL_0:.*]]: !fir.ref<complex<f64>>,
+// CHECK-SAME:    %[[VAL_1:.*]]: complex<f64>) {
+// CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] : complex<f64>, !fir.ref<complex<f64>>
 
 
 func.func @scalar_character(%arg0: !fir.boxchar<1>, %arg1: !fir.boxchar<1>) {
@@ -128,3 +128,21 @@ func.func @array_4(%arg0: !fir.box<!fir.array<?xi32>>, %arg1: !fir.box<!fir.arra
 // CHECK-SAME:    %[[VAL_0:.*]]: !fir.box<!fir.array<?xi32>>,
 // CHECK-SAME:    %[[VAL_1:.*]]: !fir.box<!fir.array<?xi32>>) {
 // CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] : !fir.box<!fir.array<?xi32>>, !fir.box<!fir.array<?xi32>>
+
+func.func @alloc_assign(%arg0: !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>, %arg1: !fir.box<!fir.array<?xi32>>) {
+  hlfir.assign %arg1 to %arg0 realloc : !fir.box<!fir.array<?xi32>>, !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>
+  return
+}
+// CHECK-LABEL:   func.func @alloc_assign(
+// CHECK-SAME:    %[[VAL_0:.*]]: !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>,
+// CHECK-SAME:    %[[VAL_1:.*]]: !fir.box<!fir.array<?xi32>>) {
+// CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] realloc : !fir.box<!fir.array<?xi32>>, !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>
+
+func.func @alloc_assign_keep_lhs_len(%arg0: !fir.ref<!fir.box<!fir.heap<!fir.array<?x!fir.char<1,?>>>>>, %arg1: !fir.box<!fir.array<?x!fir.char<1,?>>>) {
+  hlfir.assign %arg1 to %arg0 realloc keep_lhs_len : !fir.box<!fir.array<?x!fir.char<1,?>>>, !fir.ref<!fir.box<!fir.heap<!fir.array<?x!fir.char<1,?>>>>>
+  return
+}
+// CHECK-LABEL:   func.func @alloc_assign_keep_lhs_len(
+// CHECK-SAME:    %[[VAL_0:.*]]: !fir.ref<!fir.box<!fir.heap<!fir.array<?x!fir.char<1,?>>>>>,
+// CHECK-SAME:    %[[VAL_1:.*]]: !fir.box<!fir.array<?x!fir.char<1,?>>>) {
+// CHECK:  hlfir.assign %[[VAL_1]] to %[[VAL_0]] realloc keep_lhs_len : !fir.box<!fir.array<?x!fir.char<1,?>>>, !fir.ref<!fir.box<!fir.heap<!fir.array<?x!fir.char<1,?>>>>>

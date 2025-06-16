@@ -8,7 +8,7 @@
 
 #include "Plugins/SymbolFile/DWARF/DIERef.h"
 #include "Plugins/SymbolFile/DWARF/DWARFDIE.h"
-#include "Plugins/SymbolFile/DWARF/ManualDWARFIndex.h"
+#include "Plugins/SymbolFile/DWARF/ManualDWARFIndexSet.h"
 #include "Plugins/SymbolFile/DWARF/NameToDIE.h"
 #include "TestingSupport/Symbol/YAMLModuleTester.h"
 #include "lldb/Core/DataFileCache.h"
@@ -21,6 +21,7 @@
 
 using namespace lldb;
 using namespace lldb_private;
+using namespace lldb_private::plugin::dwarf;
 
 static void EncodeDecode(const DIERef &object, ByteOrder byte_order) {
   const uint8_t addr_size = 8;
@@ -43,6 +44,26 @@ TEST(DWARFIndexCachingTest, DIERefEncodeDecode) {
   EncodeDecode(DIERef(std::nullopt, DIERef::Section::DebugTypes, 0x11223344));
   EncodeDecode(DIERef(100, DIERef::Section::DebugInfo, 0x11223344));
   EncodeDecode(DIERef(200, DIERef::Section::DebugTypes, 0x11223344));
+}
+
+TEST(DWARFIndexCachingTest, DIERefEncodeDecodeMax) {
+  // Tests DIERef::Encode(...) and DIERef::Decode(...)
+  EncodeDecode(DIERef(std::nullopt, DIERef::Section::DebugInfo,
+                      DIERef::k_die_offset_mask - 1));
+  EncodeDecode(DIERef(std::nullopt, DIERef::Section::DebugTypes,
+                      DIERef::k_die_offset_mask - 1));
+  EncodeDecode(
+      DIERef(100, DIERef::Section::DebugInfo, DIERef::k_die_offset_mask - 1));
+  EncodeDecode(
+      DIERef(200, DIERef::Section::DebugTypes, DIERef::k_die_offset_mask - 1));
+  EncodeDecode(DIERef(DIERef::k_file_index_mask, DIERef::Section::DebugInfo,
+                      DIERef::k_file_index_mask));
+  EncodeDecode(DIERef(DIERef::k_file_index_mask, DIERef::Section::DebugTypes,
+                      DIERef::k_file_index_mask));
+  EncodeDecode(DIERef(DIERef::k_file_index_mask, DIERef::Section::DebugInfo,
+                      0x11223344));
+  EncodeDecode(DIERef(DIERef::k_file_index_mask, DIERef::Section::DebugTypes,
+                      0x11223344));
 }
 
 static void EncodeDecode(const NameToDIE &object, ByteOrder byte_order) {
@@ -88,27 +109,25 @@ TEST(DWARFIndexCachingTest, NameToDIEEncodeDecode) {
   EncodeDecode(map);
 }
 
-static void EncodeDecode(const ManualDWARFIndex::IndexSet &object,
+static void EncodeDecode(const IndexSet<NameToDIE> &object,
                          ByteOrder byte_order) {
   const uint8_t addr_size = 8;
   DataEncoder encoder(byte_order, addr_size);
   DataEncoder strtab_encoder(byte_order, addr_size);
-  object.Encode(encoder);
+  EncodeIndexSet(object, encoder);
   llvm::ArrayRef<uint8_t> bytes = encoder.GetData();
   DataExtractor data(bytes.data(), bytes.size(), byte_order, addr_size);
-  ManualDWARFIndex::IndexSet decoded_object;
   offset_t data_offset = 0;
-  decoded_object.Decode(data, &data_offset);
-  EXPECT_TRUE(object == decoded_object);
+  EXPECT_EQ(DecodeIndexSet(data, &data_offset), object);
 }
 
-static void EncodeDecode(const ManualDWARFIndex::IndexSet &object) {
+static void EncodeDecode(const IndexSet<NameToDIE> &object) {
   EncodeDecode(object, eByteOrderLittle);
   EncodeDecode(object, eByteOrderBig);
 }
 
 TEST(DWARFIndexCachingTest, ManualDWARFIndexIndexSetEncodeDecode) {
-  ManualDWARFIndex::IndexSet set;
+  IndexSet<NameToDIE> set;
   // Make sure empty IndexSet can be encoded and decoded correctly
   EncodeDecode(set);
 

@@ -250,7 +250,9 @@ static bool NextSegmentLoad(MemoryMappedSegment *segment,
                             MemoryMappedSegmentData *seg_data,
                             MemoryMappingLayoutData *layout_data) {
   const char *lc = layout_data->current_load_cmd_addr;
+
   layout_data->current_load_cmd_addr += ((const load_command *)lc)->cmdsize;
+  layout_data->current_load_cmd_count--;
   if (((const load_command *)lc)->cmd == kLCSegment) {
     const SegmentCommand* sc = (const SegmentCommand *)lc;
     uptr base_virt_addr, addr_mask;
@@ -332,9 +334,22 @@ static const load_command *NextCommand(const load_command *lc) {
   return (const load_command *)((const char *)lc + lc->cmdsize);
 }
 
-static void FindUUID(const load_command *first_lc, u8 *uuid_output) {
-  for (const load_command *lc = first_lc; lc->cmd != 0; lc = NextCommand(lc)) {
-    if (lc->cmd != LC_UUID) continue;
+#  ifdef MH_MAGIC_64
+static constexpr size_t header_size = sizeof(mach_header_64);
+#  else
+static constexpr size_t header_size = sizeof(mach_header);
+#  endif
+
+static void FindUUID(const load_command *first_lc, const mach_header *hdr,
+                     u8 *uuid_output) {
+  uint32_t curcmd = 0;
+  for (const load_command *lc = first_lc; curcmd < hdr->ncmds;
+       curcmd++, lc = NextCommand(lc)) {
+    CHECK_LT((const char *)lc,
+             (const char *)hdr + header_size + hdr->sizeofcmds);
+
+    if (lc->cmd != LC_UUID)
+      continue;
 
     const uuid_command *uuid_lc = (const uuid_command *)lc;
     const uint8_t *uuid = &uuid_lc->uuid[0];
@@ -343,9 +358,16 @@ static void FindUUID(const load_command *first_lc, u8 *uuid_output) {
   }
 }
 
-static bool IsModuleInstrumented(const load_command *first_lc) {
-  for (const load_command *lc = first_lc; lc->cmd != 0; lc = NextCommand(lc)) {
-    if (lc->cmd != LC_LOAD_DYLIB) continue;
+static bool IsModuleInstrumented(const load_command *first_lc,
+                                 const mach_header *hdr) {
+  uint32_t curcmd = 0;
+  for (const load_command *lc = first_lc; curcmd < hdr->ncmds;
+       curcmd++, lc = NextCommand(lc)) {
+    CHECK_LT((const char *)lc,
+             (const char *)hdr + header_size + hdr->sizeofcmds);
+
+    if (lc->cmd != LC_LOAD_DYLIB)
+      continue;
 
     const dylib_command *dylib_lc = (const dylib_command *)lc;
     uint32_t dylib_name_offset = dylib_lc->dylib.name.offset;
@@ -358,11 +380,16 @@ static bool IsModuleInstrumented(const load_command *first_lc) {
   return false;
 }
 
+const ImageHeader *MemoryMappingLayout::CurrentImageHeader() {
+  const mach_header *hdr = (data_.current_image == kDyldImageIdx)
+                                ? get_dyld_hdr()
+                                : _dyld_get_image_header(data_.current_image);
+  return (const ImageHeader *)hdr;
+}
+
 bool MemoryMappingLayout::Next(MemoryMappedSegment *segment) {
   for (; data_.current_image >= kDyldImageIdx; data_.current_image--) {
-    const mach_header *hdr = (data_.current_image == kDyldImageIdx)
-                                 ? get_dyld_hdr()
-                                 : _dyld_get_image_header(data_.current_image);
+    const mach_header *hdr = (const mach_header *)CurrentImageHeader();
     if (!hdr) continue;
     if (data_.current_load_cmd_count < 0) {
       // Set up for this image;
@@ -386,13 +413,13 @@ bool MemoryMappingLayout::Next(MemoryMappedSegment *segment) {
           continue;
         }
       }
-      FindUUID((const load_command *)data_.current_load_cmd_addr,
+      FindUUID((const load_command *)data_.current_load_cmd_addr, hdr,
                data_.current_uuid);
       data_.current_instrumented = IsModuleInstrumented(
-          (const load_command *)data_.current_load_cmd_addr);
+          (const load_command *)data_.current_load_cmd_addr, hdr);
     }
 
-    for (; data_.current_load_cmd_count >= 0; data_.current_load_cmd_count--) {
+    while (data_.current_load_cmd_count > 0) {
       switch (data_.current_magic) {
         // data_.current_magic may be only one of MH_MAGIC, MH_MAGIC_64.
 #ifdef MH_MAGIC_64
@@ -413,6 +440,7 @@ bool MemoryMappingLayout::Next(MemoryMappedSegment *segment) {
     }
     // If we get here, no more load_cmd's in this image talk about
     // segments.  Go on to the next image.
+    data_.current_load_cmd_count = -1; // This will trigger loading next image
   }
   return false;
 }
@@ -425,7 +453,9 @@ void MemoryMappingLayout::DumpListOfModules(
   MemoryMappedSegmentData data;
   segment.data_ = &data;
   while (Next(&segment)) {
-    if (segment.filename[0] == '\0') continue;
+    // skip the __PAGEZERO segment, its vmsize is 0
+    if (segment.filename[0] == '\0' || (segment.start == segment.end))
+      continue;
     LoadedModule *cur_module = nullptr;
     if (!modules->empty() &&
         0 == internal_strcmp(segment.filename, modules->back().full_name())) {

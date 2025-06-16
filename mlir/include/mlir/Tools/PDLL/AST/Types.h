@@ -11,6 +11,7 @@
 
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/StorageUniquer.h"
+#include <optional>
 
 namespace mlir {
 namespace pdll {
@@ -60,30 +61,6 @@ public:
   bool operator==(const Type &other) const { return impl == other.impl; }
   bool operator!=(const Type &other) const { return !(*this == other); }
   explicit operator bool() const { return impl; }
-
-  /// Provide type casting support.
-  template <typename U>
-  bool isa() const {
-    assert(impl && "isa<> used on a null type.");
-    return U::classof(*this);
-  }
-  template <typename U, typename V, typename... Others>
-  bool isa() const {
-    return isa<U>() || isa<V, Others...>();
-  }
-  template <typename U>
-  U dyn_cast() const {
-    return isa<U>() ? U(impl) : U(nullptr);
-  }
-  template <typename U>
-  U dyn_cast_or_null() const {
-    return (impl && isa<U>()) ? U(impl) : U(nullptr);
-  }
-  template <typename U>
-  U cast() const {
-    assert(isa<U>());
-    return U(impl);
-  }
 
   /// Return the internal storage instance of this type.
   Storage *getImpl() const { return impl; }
@@ -161,12 +138,12 @@ public:
   /// Return an instance of the Operation type with an optional operation name.
   /// If no name is provided, this type may refer to any operation.
   static OperationType get(Context &context,
-                           Optional<StringRef> name = std::nullopt,
+                           std::optional<StringRef> name = std::nullopt,
                            const ods::Operation *odsOp = nullptr);
 
   /// Return the name of this operation type, or std::nullopt if it doesn't have
   /// on.
-  Optional<StringRef> getName() const;
+  std::optional<StringRef> getName() const;
 
   /// Return the ODS operation that this type refers to, or nullptr if the ODS
   /// operation is unknown.
@@ -192,6 +169,7 @@ public:
 
 //===----------------------------------------------------------------------===//
 // TypeRangeType
+//===----------------------------------------------------------------------===//
 
 /// This class represents a PDLL type that corresponds to an mlir::TypeRange.
 class TypeRangeType : public RangeType {
@@ -207,6 +185,7 @@ public:
 
 //===----------------------------------------------------------------------===//
 // ValueRangeType
+//===----------------------------------------------------------------------===//
 
 /// This class represents a PDLL type that corresponds to an mlir::ValueRange.
 class ValueRangeType : public RangeType {
@@ -321,6 +300,29 @@ struct DenseMapInfo<mlir::pdll::ast::Type> {
   static bool isEqual(mlir::pdll::ast::Type lhs, mlir::pdll::ast::Type rhs) {
     return lhs == rhs;
   }
+};
+
+/// Add support for llvm style casts.
+/// We provide a cast between To and From if From is mlir::pdll::ast::Type or
+/// derives from it
+template <typename To, typename From>
+struct CastInfo<
+    To, From,
+    std::enable_if_t<
+        std::is_same_v<mlir::pdll::ast::Type, std::remove_const_t<From>> ||
+        std::is_base_of_v<mlir::pdll::ast::Type, From>>>
+    : NullableValueCastFailed<To>,
+      DefaultDoCastIfPossible<To, From, CastInfo<To, From>> {
+  static inline bool isPossible(mlir::pdll::ast::Type ty) {
+    /// Return a constant true instead of a dynamic true when casting to self or
+    /// up the hierarchy.
+    if constexpr (std::is_base_of_v<To, From>) {
+      return true;
+    } else {
+      return To::classof(ty);
+    };
+  }
+  static inline To doCast(mlir::pdll::ast::Type ty) { return To(ty.getImpl()); }
 };
 } // namespace llvm
 

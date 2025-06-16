@@ -17,14 +17,14 @@
 #include "MipsSubtarget.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Target/TargetMachine.h"
 #include <memory>
 #include <optional>
 
 namespace llvm {
 
-class MipsTargetMachine : public LLVMTargetMachine {
+class MipsTargetMachine : public CodeGenTargetMachineImpl {
   bool isLittle;
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   // Selected ABI
@@ -40,7 +40,7 @@ public:
   MipsTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                     StringRef FS, const TargetOptions &Options,
                     std::optional<Reloc::Model> RM,
-                    std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL,
+                    std::optional<CodeModel::Model> CM, CodeGenOptLevel OL,
                     bool JIT, bool isLittle);
   ~MipsTargetMachine() override;
 
@@ -64,6 +64,10 @@ public:
     return TLOF.get();
   }
 
+  MachineFunctionInfo *
+  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
+                            const TargetSubtargetInfo *STI) const override;
+
   /// Returns true if a cast between SrcAS and DestAS is a noop.
   bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override {
     // Mips doesn't have any special address spaces so we just reserve
@@ -85,7 +89,7 @@ public:
   MipsebTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                       StringRef FS, const TargetOptions &Options,
                       std::optional<Reloc::Model> RM,
-                      std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL,
+                      std::optional<CodeModel::Model> CM, CodeGenOptLevel OL,
                       bool JIT);
 };
 
@@ -98,7 +102,7 @@ public:
   MipselTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                       StringRef FS, const TargetOptions &Options,
                       std::optional<Reloc::Model> RM,
-                      std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL,
+                      std::optional<CodeModel::Model> CM, CodeGenOptLevel OL,
                       bool JIT);
 };
 

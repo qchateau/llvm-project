@@ -6,11 +6,9 @@ define i8 @test() {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    br label [[FOR_BODY:%.*]]
 ; CHECK:       for.body:
-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ [[TMP1:%.*]], [[FOR_BODY]] ], [ 0, [[ENTRY:%.*]] ]
+; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ [[TMP0:%.*]], [[FOR_BODY]] ], [ 0, [[ENTRY:%.*]] ]
 ; CHECK-NEXT:    [[CALL278:%.*]] = call i32 @fn(i32 [[SUM]])
-; CHECK-NEXT:    [[TMP0:%.*]] = insertelement <8 x i32> poison, i32 [[CALL278]], i32 0
-; CHECK-NEXT:    [[SHUFFLE:%.*]] = shufflevector <8 x i32> [[TMP0]], <8 x i32> poison, <8 x i32> zeroinitializer
-; CHECK-NEXT:    [[TMP1]] = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> [[SHUFFLE]])
+; CHECK-NEXT:    [[TMP0]] = mul i32 [[CALL278]], 8
 ; CHECK-NEXT:    br label [[FOR_BODY]]
 ;
 entry:

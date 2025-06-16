@@ -69,13 +69,9 @@ Triplet &Triplet::set_stride(Expr<SubscriptInteger> &&expr) {
   return *this;
 }
 
-CoarrayRef::CoarrayRef(SymbolVector &&base, std::vector<Subscript> &&ss,
-    std::vector<Expr<SubscriptInteger>> &&css)
-    : base_{std::move(base)}, subscript_(std::move(ss)),
-      cosubscript_(std::move(css)) {
-  CHECK(!base_.empty());
-  CHECK(!cosubscript_.empty());
-}
+CoarrayRef::CoarrayRef(
+    DataRef &&base, std::vector<Expr<SubscriptInteger>> &&css)
+    : base_{std::move(base)}, cosubscript_(std::move(css)) {}
 
 std::optional<Expr<SomeInteger>> CoarrayRef::stat() const {
   if (stat_) {
@@ -85,7 +81,7 @@ std::optional<Expr<SomeInteger>> CoarrayRef::stat() const {
   }
 }
 
-std::optional<Expr<SomeInteger>> CoarrayRef::team() const {
+std::optional<Expr<SomeType>> CoarrayRef::team() const {
   if (team_) {
     return team_.value().value();
   } else {
@@ -99,16 +95,18 @@ CoarrayRef &CoarrayRef::set_stat(Expr<SomeInteger> &&v) {
   return *this;
 }
 
-CoarrayRef &CoarrayRef::set_team(Expr<SomeInteger> &&v, bool isTeamNumber) {
-  CHECK(IsVariable(v));
+CoarrayRef &CoarrayRef::set_team(Expr<SomeType> &&v) {
   team_.emplace(std::move(v));
-  teamIsTeamNumber_ = isTeamNumber;
   return *this;
 }
 
-const Symbol &CoarrayRef::GetFirstSymbol() const { return base_.front(); }
+const Symbol &CoarrayRef::GetFirstSymbol() const {
+  return base().GetFirstSymbol();
+}
 
-const Symbol &CoarrayRef::GetLastSymbol() const { return base_.back(); }
+const Symbol &CoarrayRef::GetLastSymbol() const {
+  return base().GetLastSymbol();
+}
 
 void Substring::SetBounds(std::optional<Expr<SubscriptInteger>> &lower,
     std::optional<Expr<SubscriptInteger>> &upper) {
@@ -214,17 +212,21 @@ std::optional<Expr<SomeCharacter>> Substring::Fold(FoldingContext &context) {
   }
   if (!result) { // error cases
     if (*lbi < 1) {
-      context.messages().Say(
-          "Lower bound (%jd) on substring is less than one"_warn_en_US,
-          static_cast<std::intmax_t>(*lbi));
+      if (context.languageFeatures().ShouldWarn(common::UsageWarning::Bounds)) {
+        context.messages().Say(common::UsageWarning::Bounds,
+            "Lower bound (%jd) on substring is less than one"_warn_en_US,
+            static_cast<std::intmax_t>(*lbi));
+      }
       *lbi = 1;
       lower_ = AsExpr(Constant<SubscriptInteger>{1});
     }
     if (length && *ubi > *length) {
-      context.messages().Say(
-          "Upper bound (%jd) on substring is greater than character length (%jd)"_warn_en_US,
-          static_cast<std::intmax_t>(*ubi),
-          static_cast<std::intmax_t>(*length));
+      if (context.languageFeatures().ShouldWarn(common::UsageWarning::Bounds)) {
+        context.messages().Say(common::UsageWarning::Bounds,
+            "Upper bound (%jd) on substring is greater than character length (%jd)"_warn_en_US,
+            static_cast<std::intmax_t>(*ubi),
+            static_cast<std::intmax_t>(*length));
+      }
       *ubi = *length;
       upper_ = AsExpr(Constant<SubscriptInteger>{*ubi});
     }
@@ -246,7 +248,8 @@ DescriptorInquiry::DescriptorInquiry(NamedEntity &&base, Field field, int dim)
   const Symbol &last{base_.GetLastSymbol()};
   CHECK(IsDescriptor(last));
   CHECK((field == Field::Len && dim == 0) ||
-      (field != Field::Len && dim >= 0 && dim < last.Rank()));
+      (field != Field::Len && dim >= 0 &&
+          (dim < last.Rank() || IsAssumedRank(last))));
 }
 
 // LEN()
@@ -258,7 +261,20 @@ static std::optional<Expr<SubscriptInteger>> SymbolLEN(const Symbol &symbol) {
     }
   }
   if (auto dyType{DynamicType::From(ultimate)}) {
-    if (auto len{dyType->GetCharLength()}) {
+    auto len{dyType->GetCharLength()};
+    if (!len && ultimate.attrs().test(semantics::Attr::PARAMETER)) {
+      // Its initializer determines the length of an implied-length named
+      // constant.
+      if (const auto *object{
+              ultimate.detailsIf<semantics::ObjectEntityDetails>()}) {
+        if (object->init()) {
+          if (auto dyType2{DynamicType::From(*object->init())}) {
+            len = dyType2->GetCharLength();
+          }
+        }
+      }
+    }
+    if (len) {
       if (auto constLen{ToInt64(*len)}) {
         return Expr<SubscriptInteger>{std::max<std::int64_t>(*constLen, 0)};
       } else if (ultimate.owner().IsDerivedType() ||
@@ -408,17 +424,7 @@ int ArrayRef::Rank() const {
   }
 }
 
-int CoarrayRef::Rank() const {
-  if (!subscript_.empty()) {
-    int rank{0};
-    for (const auto &expr : subscript_) {
-      rank += expr.Rank();
-    }
-    return rank;
-  } else {
-    return base_.back()->Rank();
-  }
-}
+int CoarrayRef::Rank() const { return base().Rank(); }
 
 int DataRef::Rank() const {
   return common::visit(common::visitors{
@@ -443,6 +449,69 @@ template <typename T> int Designator<T>::Rank() const {
   return common::visit(common::visitors{
                            [](SymbolRef symbol) { return symbol->Rank(); },
                            [](const auto &x) { return x.Rank(); },
+                       },
+      u);
+}
+
+// Corank()
+int BaseObject::Corank() const {
+  return common::visit(common::visitors{
+                           [](SymbolRef symbol) { return symbol->Corank(); },
+                           [](const StaticDataObject::Pointer &) { return 0; },
+                       },
+      u);
+}
+
+int Component::Corank() const {
+  if (int corank{symbol_->Corank()}; corank > 0) {
+    return corank;
+  } else if (semantics::IsAllocatableOrObjectPointer(&*symbol_)) {
+    return 0; // coarray subobjects ca%a or ca%p are not coarrays
+  } else {
+    return base().Corank();
+  }
+}
+
+int NamedEntity::Corank() const {
+  return common::visit(common::visitors{
+                           [](const SymbolRef s) { return s->Corank(); },
+                           [](const Component &c) { return c.Corank(); },
+                       },
+      u_);
+}
+
+int ArrayRef::Corank() const {
+  for (const Subscript &subs : subscript_) {
+    if (!std::holds_alternative<Triplet>(subs.u) && subs.Rank() > 0) {
+      return 0; // vector-valued subscript - subobject is not a coarray
+    }
+  }
+  return base().Corank();
+}
+
+int DataRef::Corank() const {
+  return common::visit(common::visitors{
+                           [](SymbolRef symbol) { return symbol->Corank(); },
+                           [](const auto &x) { return x.Corank(); },
+                       },
+      u);
+}
+
+int Substring::Corank() const {
+  return common::visit(
+      common::visitors{
+          [](const DataRef &dataRef) { return dataRef.Corank(); },
+          [](const StaticDataObject::Pointer &) { return 0; },
+      },
+      parent_);
+}
+
+int ComplexPart::Corank() const { return complex_.Corank(); }
+
+template <typename T> int Designator<T>::Corank() const {
+  return common::visit(common::visitors{
+                           [](SymbolRef symbol) { return symbol->Corank(); },
+                           [](const auto &x) { return x.Corank(); },
                        },
       u);
 }
@@ -554,15 +623,7 @@ template <typename T> BaseObject Designator<T>::GetBaseObject() const {
       common::visitors{
           [](SymbolRef symbol) { return BaseObject{symbol}; },
           [](const Substring &sstring) { return sstring.GetBaseObject(); },
-          [](const auto &x) {
-#if !__clang__ && __GNUC__ == 7 && __GNUC_MINOR__ == 2
-            if constexpr (std::is_same_v<std::decay_t<decltype(x)>,
-                              Substring>) {
-              return x.GetBaseObject();
-            } else
-#endif
-              return BaseObject{x.GetFirstSymbol()};
-          },
+          [](const auto &x) { return BaseObject{x.GetFirstSymbol()}; },
       },
       u);
 }
@@ -572,15 +633,7 @@ template <typename T> const Symbol *Designator<T>::GetLastSymbol() const {
       common::visitors{
           [](SymbolRef symbol) { return &*symbol; },
           [](const Substring &sstring) { return sstring.GetLastSymbol(); },
-          [](const auto &x) {
-#if !__clang__ && __GNUC__ == 7 && __GNUC_MINOR__ == 2
-            if constexpr (std::is_same_v<std::decay_t<decltype(x)>,
-                              Substring>) {
-              return x.GetLastSymbol();
-            } else
-#endif
-              return &x.GetLastSymbol();
-          },
+          [](const auto &x) { return &x.GetLastSymbol(); },
       },
       u);
 }
@@ -589,48 +642,53 @@ template <typename T>
 std::optional<DynamicType> Designator<T>::GetType() const {
   if constexpr (IsLengthlessIntrinsicType<Result>) {
     return Result::GetType();
-  } else if (const Symbol * symbol{GetLastSymbol()}) {
-    return DynamicType::From(*symbol);
-  } else if constexpr (Result::category == TypeCategory::Character) {
-    if (const Substring * substring{std::get_if<Substring>(&u)}) {
-      const auto *parent{substring->GetParentIf<StaticDataObject::Pointer>()};
-      CHECK(parent);
-      return DynamicType{TypeCategory::Character, (*parent)->itemBytes()};
+  }
+  if constexpr (Result::category == TypeCategory::Character) {
+    if (std::holds_alternative<Substring>(u)) {
+      if (auto len{LEN()}) {
+        if (auto n{ToInt64(*len)}) {
+          return DynamicType{T::kind, *n};
+        }
+      }
+      return DynamicType{TypeCategory::Character, T::kind};
     }
+  }
+  if (const Symbol * symbol{GetLastSymbol()}) {
+    return DynamicType::From(*symbol);
   }
   return std::nullopt;
 }
-
-static NamedEntity AsNamedEntity(const SymbolVector &x) {
-  CHECK(!x.empty());
-  NamedEntity result{x.front()};
-  int j{0};
-  for (const Symbol &symbol : x) {
-    if (j++ != 0) {
-      DataRef base{result.IsSymbol() ? DataRef{result.GetLastSymbol()}
-                                     : DataRef{result.GetComponent()}};
-      result = NamedEntity{Component{std::move(base), symbol}};
-    }
-  }
-  return result;
-}
-
-NamedEntity CoarrayRef::GetBase() const { return AsNamedEntity(base_); }
 
 // Equality testing
 
 // For the purposes of comparing type parameter expressions while
 // testing the compatibility of procedure characteristics, two
-// object dummy arguments with the same name are considered equal.
+// dummy arguments with the same position are considered equal.
+static std::optional<int> GetDummyArgPosition(const Symbol &original) {
+  const Symbol &symbol(original.GetUltimate());
+  if (IsDummy(symbol)) {
+    if (const Symbol * proc{symbol.owner().symbol()}) {
+      if (const auto *subp{proc->detailsIf<semantics::SubprogramDetails>()}) {
+        int j{0};
+        for (const Symbol *arg : subp->dummyArgs()) {
+          if (arg == &symbol) {
+            return j;
+          }
+          ++j;
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 static bool AreSameSymbol(const Symbol &x, const Symbol &y) {
   if (&x == &y) {
     return true;
   }
-  if (x.name() == y.name()) {
-    if (const auto *xObject{x.detailsIf<semantics::ObjectEntityDetails>()}) {
-      if (const auto *yObject{y.detailsIf<semantics::ObjectEntityDetails>()}) {
-        return xObject->isDummy() && yObject->isDummy();
-      }
+  if (auto xPos{GetDummyArgPosition(x)}) {
+    if (auto yPos{GetDummyArgPosition(y)}) {
+      return *xPos == *yPos;
     }
   }
   return false;
@@ -673,9 +731,8 @@ bool ArrayRef::operator==(const ArrayRef &that) const {
   return base_ == that.base_ && subscript_ == that.subscript_;
 }
 bool CoarrayRef::operator==(const CoarrayRef &that) const {
-  return base_ == that.base_ && subscript_ == that.subscript_ &&
-      cosubscript_ == that.cosubscript_ && stat_ == that.stat_ &&
-      team_ == that.team_ && teamIsTeamNumber_ == that.teamIsTeamNumber_;
+  return base_ == that.base_ && cosubscript_ == that.cosubscript_ &&
+      stat_ == that.stat_ && team_ == that.team_;
 }
 bool DataRef::operator==(const DataRef &that) const {
   return TestVariableEquality(*this, that);

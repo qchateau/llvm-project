@@ -80,6 +80,7 @@ namespace generic_lambda {
     [](auto x) {
       if constexpr (sizeof(T) == 1 && sizeof(x) == 1)
         T::error(); // expected-error 2{{'::'}}
+                    // expected-note@-3 2{{while substituting into a lambda expression here}}
     } (0);
   }
 
@@ -88,6 +89,7 @@ namespace generic_lambda {
       if constexpr (sizeof(T) == 1)
         if constexpr (sizeof(x) == 1)
           T::error(); // expected-error {{'::'}}
+                      // expected-note@-4 {{while substituting into a lambda expression here}}
     } (0);
   }
 
@@ -151,7 +153,8 @@ a:  if constexpr(sizeof(n) == 4) // expected-error {{redefinition}} expected-not
 
   void evil_things() {
     goto evil_label; // expected-error {{cannot jump}}
-    if constexpr (true || ({evil_label: false;})) {} // expected-note {{constexpr if}}
+    if constexpr (true || ({evil_label: false;})) {} // expected-note {{constexpr if}} \
+                                                     // expected-note {{jump enters a statement expression}}
 
     if constexpr (true) // expected-note {{constexpr if}}
       goto surprise; // expected-error {{cannot jump}}
@@ -173,5 +176,46 @@ void f() {
   }
 }
 } // namespace deduced_return_type_in_discareded_statement
+
+namespace GH140449 {
+
+template <typename T>
+int f() {
+    T *ptr;
+    return 0;
+}
+
+template <typename T>
+constexpr int g() {
+    T *ptr; // expected-error{{'ptr' declared as a pointer to a reference of type 'int &'}}
+    return 0;
+}
+
+template <typename T>
+auto h() {
+    T *ptr; // expected-error{{'ptr' declared as a pointer to a reference of type 'int &'}}
+    return 0;
+}
+
+void test() {
+    if constexpr (false) {
+        int x = f<int &>();
+        constexpr int y = g<int &>();
+        // expected-error@-1 {{constexpr variable 'y' must be initialized by a constant expression}} \
+        // expected-note@-1{{in instantiation of function template specialization}}
+        int z = h<int &>();
+        // expected-note@-1{{in instantiation of function template specialization}}
+
+    }
+}
+
+void regression() {
+  if constexpr (false) {
+    auto lam = []() { return 0; };
+    1 | lam(); // expected-warning {{unused}}
+  }
+}
+
+}
 
 #endif

@@ -12,9 +12,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace readability {
+namespace clang::tidy::readability {
 
 void NonConstParameterCheck::registerMatchers(MatchFinder *Finder) {
   // Add parameters to Parameters.
@@ -105,7 +103,7 @@ void NonConstParameterCheck::check(const MatchFinder::MatchResult &Result) {
   } else if (const auto *VD = Result.Nodes.getNodeAs<VarDecl>("Mark")) {
     const QualType T = VD->getType();
     if ((T->isPointerType() && !T->getPointeeType().isConstQualified()) ||
-        T->isArrayType())
+        T->isArrayType() || T->isRecordType())
       markCanNotBeConst(VD->getInit(), true);
     else if (T->isLValueReferenceType() &&
              !T->getPointeeType().isConstQualified())
@@ -121,13 +119,12 @@ void NonConstParameterCheck::addParm(const ParmVarDecl *Parm) {
         T->getPointeeType()->isFloatingType()))
     return;
 
-  if (Parameters.find(Parm) != Parameters.end())
+  auto [It, Inserted] = Parameters.try_emplace(Parm);
+  if (!Inserted)
     return;
 
-  ParmInfo PI;
-  PI.IsReferenced = false;
-  PI.CanBeConst = true;
-  Parameters[Parm] = PI;
+  It->second.IsReferenced = false;
+  It->second.CanBeConst = true;
 }
 
 void NonConstParameterCheck::setReferenced(const DeclRefExpr *Ref) {
@@ -159,9 +156,12 @@ void NonConstParameterCheck::diagnoseNonConstParameters() {
     if (!Function)
       continue;
     unsigned Index = Par->getFunctionScopeIndex();
-    for (FunctionDecl *FnDecl : Function->redecls())
+    for (FunctionDecl *FnDecl : Function->redecls()) {
+      if (FnDecl->getNumParams() <= Index)
+        continue;
       Fixes.push_back(FixItHint::CreateInsertion(
           FnDecl->getParamDecl(Index)->getBeginLoc(), "const "));
+    }
 
     diag(Par->getLocation(), "pointer parameter '%0' can be pointer to const")
         << Par->getName() << Fixes;
@@ -233,6 +233,4 @@ void NonConstParameterCheck::markCanNotBeConst(const Expr *E,
   }
 }
 
-} // namespace readability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::readability

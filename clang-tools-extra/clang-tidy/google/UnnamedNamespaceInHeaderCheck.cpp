@@ -7,39 +7,22 @@
 //===----------------------------------------------------------------------===//
 
 #include "UnnamedNamespaceInHeaderCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace google {
-namespace build {
+namespace clang::tidy::google::build {
 
 UnnamedNamespaceInHeaderCheck::UnnamedNamespaceInHeaderCheck(
     StringRef Name, ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context),
-      RawStringHeaderFileExtensions(Options.getLocalOrGlobal(
-          "HeaderFileExtensions", utils::defaultHeaderFileExtensions())) {
-  if (!utils::parseFileExtensions(RawStringHeaderFileExtensions,
-                                  HeaderFileExtensions,
-                                  utils::defaultFileExtensionDelimiters())) {
-    this->configurationDiag("Invalid header file extension: '%0'")
-        << RawStringHeaderFileExtensions;
-  }
-}
-
-void UnnamedNamespaceInHeaderCheck::storeOptions(
-    ClangTidyOptions::OptionMap &Opts) {
-  Options.store(Opts, "HeaderFileExtensions", RawStringHeaderFileExtensions);
-}
+      HeaderFileExtensions(Context->getHeaderFileExtensions()) {}
 
 void UnnamedNamespaceInHeaderCheck::registerMatchers(
     ast_matchers::MatchFinder *Finder) {
-    Finder->addMatcher(namespaceDecl(isAnonymous()).bind("anonymousNamespace"),
-                       this);
+  Finder->addMatcher(namespaceDecl(isAnonymous()).bind("anonymousNamespace"),
+                     this);
 }
 
 void UnnamedNamespaceInHeaderCheck::check(
@@ -54,7 +37,4 @@ void UnnamedNamespaceInHeaderCheck::check(
     diag(Loc, "do not use unnamed namespaces in header files");
 }
 
-} // namespace build
-} // namespace google
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::google::build

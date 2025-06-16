@@ -167,10 +167,9 @@ static bool shouldGenerateNote(llvm::raw_string_ostream &os,
 /// Finds argument index of the out paramter in the call @c S
 /// corresponding to the symbol @c Sym.
 /// If none found, returns std::nullopt.
-static std::optional<unsigned> findArgIdxOfSymbol(ProgramStateRef CurrSt,
-                                                  const LocationContext *LCtx,
-                                                  SymbolRef &Sym,
-                                                  Optional<CallEventRef<>> CE) {
+static std::optional<unsigned>
+findArgIdxOfSymbol(ProgramStateRef CurrSt, const LocationContext *LCtx,
+                   SymbolRef &Sym, std::optional<CallEventRef<>> CE) {
   if (!CE)
     return std::nullopt;
 
@@ -235,8 +234,8 @@ static void generateDiagnosticsForCallLike(ProgramStateRef CurrSt,
     os << "Operator 'new'";
   } else {
     assert(isa<ObjCMessageExpr>(S));
-    CallEventRef<ObjCMethodCall> Call =
-        Mgr.getObjCMethodCall(cast<ObjCMessageExpr>(S), CurrSt, LCtx);
+    CallEventRef<ObjCMethodCall> Call = Mgr.getObjCMethodCall(
+        cast<ObjCMessageExpr>(S), CurrSt, LCtx, {nullptr, 0});
 
     switch (Call->getMessageKind()) {
     case OCM_Message:
@@ -251,7 +250,7 @@ static void generateDiagnosticsForCallLike(ProgramStateRef CurrSt,
     }
   }
 
-  Optional<CallEventRef<>> CE = Mgr.getCall(S, CurrSt, LCtx);
+  std::optional<CallEventRef<>> CE = Mgr.getCall(S, CurrSt, LCtx, {nullptr, 0});
   auto Idx = findArgIdxOfSymbol(CurrSt, LCtx, Sym, CE);
 
   // If index is not found, we assume that the symbol was returned.
@@ -412,11 +411,11 @@ annotateConsumedSummaryMismatch(const ExplodedNode *N,
     }
   }
 
-  if (os.str().empty())
+  if (sbuf.empty())
     return nullptr;
 
   PathDiagnosticLocation L = PathDiagnosticLocation::create(CallExitLoc, SM);
-  return std::make_shared<PathDiagnosticEventPiece>(L, os.str());
+  return std::make_shared<PathDiagnosticEventPiece>(L, sbuf);
 }
 
 /// Annotate the parameter at the analysis entry point.
@@ -447,7 +446,7 @@ annotateStartParameter(const ExplodedNode *N, SymbolRef Sym,
     assert(CurrT->getCount() == 0);
     os << "0";
   }
-  return std::make_shared<PathDiagnosticEventPiece>(L, os.str());
+  return std::make_shared<PathDiagnosticEventPiece>(L, s);
 }
 
 PathDiagnosticPieceRef
@@ -494,7 +493,7 @@ RefCountReportVisitor::VisitNode(const ExplodedNode *N, BugReporterContext &BRC,
   if (PrevT && IsFreeUnowned && CurrV.isNotOwned() && PrevT->isOwned()) {
     os << "Object is now not exclusively owned";
     auto Pos = PathDiagnosticLocation::create(N->getLocation(), SM);
-    return std::make_shared<PathDiagnosticEventPiece>(Pos, os.str());
+    return std::make_shared<PathDiagnosticEventPiece>(Pos, sbuf);
   }
 
   // This is the allocation site since the previous node had no bindings
@@ -536,7 +535,7 @@ RefCountReportVisitor::VisitNode(const ExplodedNode *N, BugReporterContext &BRC,
     }
 
     PathDiagnosticLocation Pos(S, SM, N->getLocationContext());
-    return std::make_shared<PathDiagnosticEventPiece>(Pos, os.str());
+    return std::make_shared<PathDiagnosticEventPiece>(Pos, sbuf);
   }
 
   // Gather up the effects that were performed on the object at this
@@ -583,13 +582,13 @@ RefCountReportVisitor::VisitNode(const ExplodedNode *N, BugReporterContext &BRC,
   if (!shouldGenerateNote(os, PrevT, CurrV, DeallocSent))
     return nullptr;
 
-  if (os.str().empty())
+  if (sbuf.empty())
     return nullptr; // We have nothing to say!
 
   const Stmt *S = N->getLocation().castAs<StmtPoint>().getStmt();
   PathDiagnosticLocation Pos(S, BRC.getSourceManager(),
                                 N->getLocationContext());
-  auto P = std::make_shared<PathDiagnosticEventPiece>(Pos, os.str());
+  auto P = std::make_shared<PathDiagnosticEventPiece>(Pos, sbuf);
 
   // Add the range by scanning the children of the statement for any bindings
   // to Sym.
@@ -613,6 +612,7 @@ static std::optional<std::string> describeRegion(const MemRegion *MR) {
 
 using Bindings = llvm::SmallVector<std::pair<const MemRegion *, SVal>, 4>;
 
+namespace {
 class VarBindingsCollector : public StoreManager::BindingsHandler {
   SymbolRef Sym;
   Bindings &Result;
@@ -633,9 +633,11 @@ public:
     return true;
   }
 };
+} // namespace
 
-Bindings getAllVarBindingsForSymbol(ProgramStateManager &Manager,
-                                    const ExplodedNode *Node, SymbolRef Sym) {
+static Bindings getAllVarBindingsForSymbol(ProgramStateManager &Manager,
+                                           const ExplodedNode *Node,
+                                           SymbolRef Sym) {
   Bindings Result;
   VarBindingsCollector Collector{Sym, Result};
   while (Result.empty() && Node) {
@@ -688,7 +690,7 @@ static AllocationInfo GetAllocationSite(ProgramStateManager &StateMgr,
       const MemRegion *R = FB.getRegion();
       // Do not show local variables belonging to a function other than
       // where the error is reported.
-      if (auto MR = dyn_cast<StackSpaceRegion>(R->getMemorySpace()))
+      if (const auto *MR = R->getMemorySpaceAs<StackSpaceRegion>(St))
         if (MR->getStackFrame() == LeakContext->getStackFrame())
           FirstBinding = R;
     }
@@ -729,7 +731,7 @@ static AllocationInfo GetAllocationSite(ProgramStateManager &StateMgr,
   const LocationContext *InterestingMethodContext = nullptr;
   if (InitMethodContext) {
     const ProgramPoint AllocPP = AllocationNode->getLocation();
-    if (Optional<StmtPoint> SP = AllocPP.getAs<StmtPoint>())
+    if (std::optional<StmtPoint> SP = AllocPP.getAs<StmtPoint>())
       if (const ObjCMessageExpr *ME = SP->getStmtAs<ObjCMessageExpr>())
         if (ME->getMethodFamily() == OMF_alloc)
           InterestingMethodContext = InitMethodContext;
@@ -785,9 +787,6 @@ RefLeakReportVisitor::getEndPath(BugReporterContext &BRC,
   assert(RV);
 
   if (RV->getKind() == RefVal::ErrorLeakReturned) {
-    // FIXME: Per comments in rdar://6320065, "create" only applies to CF
-    // objects.  Only "copy", "alloc", "retain" and "new" transfer ownership
-    // to the caller for NS objects.
     const Decl *D = &EndN->getCodeDecl();
 
     os << (isa<ObjCMethodDecl>(D) ? " is returned from a method "
@@ -833,7 +832,7 @@ RefLeakReportVisitor::getEndPath(BugReporterContext &BRC,
        << RV->getCount();
   }
 
-  return std::make_shared<PathDiagnosticEventPiece>(L, os.str());
+  return std::make_shared<PathDiagnosticEventPiece>(L, sbuf);
 }
 
 RefCountReport::RefCountReport(const RefCountBug &D, const LangOptions &LOpts,
@@ -963,10 +962,8 @@ void RefLeakReport::findBindingToReport(CheckerContext &Ctx,
   // `AllocFirstBinding` to be one of them.  In situations like this,
   // it would still be the easiest case to explain to our users.
   if (!AllVarBindings.empty() &&
-      llvm::count_if(AllVarBindings,
-                     [this](const std::pair<const MemRegion *, SVal> Binding) {
-                       return Binding.first == AllocFirstBinding;
-                     }) == 0) {
+      !llvm::is_contained(llvm::make_first_range(AllVarBindings),
+                          AllocFirstBinding)) {
     // Let's pick one of them at random (if there is something to pick from).
     AllocBindingToReport = AllVarBindings[0].first;
 
@@ -979,7 +976,7 @@ void RefLeakReport::findBindingToReport(CheckerContext &Ctx,
     //       something like derived regions if we want to construct SVal from
     //       Sym. Instead, we take the value that is definitely stored in that
     //       region, thus guaranteeing that trackStoredValue will work.
-    bugreporter::trackStoredValue(AllVarBindings[0].second.castAs<KnownSVal>(),
+    bugreporter::trackStoredValue(AllVarBindings[0].second,
                                   AllocBindingToReport, *this);
   } else {
     AllocBindingToReport = AllocFirstBinding;

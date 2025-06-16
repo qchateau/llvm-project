@@ -19,6 +19,7 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <unordered_set>
 
 using namespace llvm;
@@ -370,7 +371,7 @@ SyntaxTree::Impl::getRelativeName(const NamedDecl *ND,
   // Strip the qualifier, if Val refers to something in the current scope.
   // But leave one leading ':' in place, so that we know that this is a
   // relative path.
-  if (!ContextPrefix.empty() && StringRef(Val).startswith(ContextPrefix))
+  if (!ContextPrefix.empty() && StringRef(Val).starts_with(ContextPrefix))
     Val = Val.substr(ContextPrefix.size() + 1);
   return Val;
 }
@@ -452,12 +453,12 @@ std::string SyntaxTree::Impl::getStmtValue(const Stmt *S) const {
   if (auto *I = dyn_cast<IntegerLiteral>(S)) {
     SmallString<256> Str;
     I->getValue().toString(Str, /*Radix=*/10, /*Signed=*/false);
-    return std::string(Str.str());
+    return std::string(Str);
   }
   if (auto *F = dyn_cast<FloatingLiteral>(S)) {
     SmallString<256> Str;
     F->getValue().toString(Str);
-    return std::string(Str.str());
+    return std::string(Str);
   }
   if (auto *D = dyn_cast<DeclRefExpr>(S))
     return getRelativeName(D->getDecl(), getEnclosingDeclContext(AST, S));
@@ -686,7 +687,7 @@ ASTNodeKind Node::getType() const { return ASTNode.getNodeKind(); }
 
 StringRef Node::getTypeLabel() const { return getType().asStringRef(); }
 
-llvm::Optional<std::string> Node::getQualifiedIdentifier() const {
+std::optional<std::string> Node::getQualifiedIdentifier() const {
   if (auto *ND = ASTNode.get<NamedDecl>()) {
     if (ND->getDeclName().isIdentifier())
       return ND->getQualifiedNameAsString();
@@ -694,7 +695,7 @@ llvm::Optional<std::string> Node::getQualifiedIdentifier() const {
   return std::nullopt;
 }
 
-llvm::Optional<StringRef> Node::getIdentifier() const {
+std::optional<StringRef> Node::getIdentifier() const {
   if (auto *ND = ASTNode.get<NamedDecl>()) {
     if (ND->getDeclName().isIdentifier())
       return ND->getName();

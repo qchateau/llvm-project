@@ -17,10 +17,6 @@
 
 #include "Encoding.h"
 #include "FormatToken.h"
-#include "clang/Format/Format.h"
-#include "llvm/Support/Regex.h"
-#include <map>
-#include <tuple>
 
 namespace clang {
 class SourceManager;
@@ -41,9 +37,9 @@ struct RawStringFormatStyleManager {
 
   RawStringFormatStyleManager(const FormatStyle &CodeStyle);
 
-  llvm::Optional<FormatStyle> getDelimiterStyle(StringRef Delimiter) const;
+  std::optional<FormatStyle> getDelimiterStyle(StringRef Delimiter) const;
 
-  llvm::Optional<FormatStyle>
+  std::optional<FormatStyle>
   getEnclosingFunctionStyle(StringRef EnclosingFunction) const;
 };
 
@@ -103,7 +99,7 @@ private:
   /// Update 'State' according to the next token being one of ")>}]".
   void moveStatePastScopeCloser(LineState &State);
   /// Update 'State' with the next token opening a nested block.
-  void moveStateToNewBlock(LineState &State);
+  void moveStateToNewBlock(LineState &State, bool NewLine);
 
   /// Reformats a raw string literal.
   ///
@@ -120,8 +116,8 @@ private:
 
   /// If \p Current is a raw string that is configured to be reformatted,
   /// return the style to be used.
-  llvm::Optional<FormatStyle> getRawStringStyle(const FormatToken &Current,
-                                                const LineState &State);
+  std::optional<FormatStyle> getRawStringStyle(const FormatToken &Current,
+                                               const LineState &State);
 
   /// If the current token sticks out over the end of the line, break
   /// it if possible.
@@ -204,14 +200,15 @@ struct ParenState {
       : Tok(Tok), Indent(Indent), LastSpace(LastSpace),
         NestedBlockIndent(Indent), IsAligned(false),
         BreakBeforeClosingBrace(false), BreakBeforeClosingParen(false),
-        AvoidBinPacking(AvoidBinPacking), BreakBeforeParameter(false),
-        NoLineBreak(NoLineBreak), NoLineBreakInOperand(false),
-        LastOperatorWrapped(true), ContainsLineBreak(false),
-        ContainsUnwrappedBuilder(false), AlignColons(true),
-        ObjCSelectorNameFound(false), HasMultipleNestedBlocks(false),
-        NestedBlockInlined(false), IsInsideObjCArrayLiteral(false),
-        IsCSharpGenericTypeConstraint(false), IsChainedConditional(false),
-        IsWrappedConditional(false), UnindentOperator(false) {}
+        BreakBeforeClosingAngle(false), AvoidBinPacking(AvoidBinPacking),
+        BreakBeforeParameter(false), NoLineBreak(NoLineBreak),
+        NoLineBreakInOperand(false), LastOperatorWrapped(true),
+        ContainsLineBreak(false), ContainsUnwrappedBuilder(false),
+        AlignColons(true), ObjCSelectorNameFound(false),
+        HasMultipleNestedBlocks(false), NestedBlockInlined(false),
+        IsInsideObjCArrayLiteral(false), IsCSharpGenericTypeConstraint(false),
+        IsChainedConditional(false), IsWrappedConditional(false),
+        UnindentOperator(false) {}
 
   /// \brief The token opening this parenthesis level, or nullptr if this level
   /// is opened by fake parenthesis.
@@ -283,6 +280,9 @@ struct ParenState {
   /// We only want to insert a newline before the closing paren if there also
   /// was a newline after the beginning left paren.
   bool BreakBeforeClosingParen : 1;
+
+  /// Whether a newline needs to be inserted before a closing angle `>`.
+  bool BreakBeforeClosingAngle : 1;
 
   /// Avoid bin packing, i.e. multiple parameters/elements on multiple
   /// lines, in this context.
@@ -371,6 +371,8 @@ struct ParenState {
       return BreakBeforeClosingBrace;
     if (BreakBeforeClosingParen != Other.BreakBeforeClosingParen)
       return BreakBeforeClosingParen;
+    if (BreakBeforeClosingAngle != Other.BreakBeforeClosingAngle)
+      return BreakBeforeClosingAngle;
     if (QuestionColumn != Other.QuestionColumn)
       return QuestionColumn < Other.QuestionColumn;
     if (AvoidBinPacking != Other.AvoidBinPacking)
@@ -431,6 +433,9 @@ struct LineState {
   /// The start column of the string literal, if we're in a string
   /// literal sequence, 0 otherwise.
   unsigned StartOfStringLiteral;
+
+  /// Disallow line breaks for this line.
+  bool NoLineBreak;
 
   /// A stack keeping track of properties applying to parenthesis
   /// levels.

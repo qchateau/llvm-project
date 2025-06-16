@@ -16,6 +16,7 @@
 #define LLVM_ADT_APSINT_H
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
 
@@ -41,7 +42,7 @@ public:
   /// constructed APSInt is determined automatically.
   ///
   /// \param Str the string to be interpreted.
-  explicit APSInt(StringRef Str);
+  LLVM_ABI explicit APSInt(StringRef Str);
 
   /// Determine sign of this APSInt.
   ///
@@ -85,10 +86,24 @@ public:
   }
   using APInt::toString;
 
+  /// If this int is representable using an int64_t.
+  bool isRepresentableByInt64() const {
+    // For unsigned values with 64 active bits, they technically fit into a
+    // int64_t, but the user may get negative numbers and has to manually cast
+    // them to unsigned. Let's not bet the user has the sanity to do that and
+    // not give them a vague value at the first place.
+    return isSigned() ? isSignedIntN(64) : isIntN(63);
+  }
+
   /// Get the correctly-extended \c int64_t value.
   int64_t getExtValue() const {
-    assert(getMinSignedBits() <= 64 && "Too many bits for int64_t");
+    assert(isRepresentableByInt64() && "Too many bits for int64_t");
     return isSigned() ? getSExtValue() : getZExtValue();
+  }
+
+  std::optional<int64_t> tryExtValue() const {
+    return isRepresentableByInt64() ? std::optional<int64_t>(getExtValue())
+                                    : std::nullopt;
   }
 
   APSInt trunc(uint32_t width) const {
@@ -337,7 +352,7 @@ public:
 
   /// Used to insert APSInt objects, or objects that contain APSInt objects,
   /// into FoldingSets.
-  void Profile(FoldingSetNodeID &ID) const;
+  LLVM_ABI void Profile(FoldingSetNodeID &ID) const;
 };
 
 inline bool operator==(int64_t V1, const APSInt &V2) { return V2 == V1; }

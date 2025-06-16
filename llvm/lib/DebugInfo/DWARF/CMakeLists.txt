@@ -2,15 +2,14 @@ add_llvm_component_library(LLVMDebugInfoDWARF
   DWARFAbbreviationDeclaration.cpp
   DWARFAddressRange.cpp
   DWARFAcceleratorTable.cpp
+  DWARFCFIProgram.cpp
   DWARFCompileUnit.cpp
   DWARFContext.cpp
-  DWARFDataExtractor.cpp
   DWARFDebugAbbrev.cpp
   DWARFDebugAddr.cpp
   DWARFDebugArangeSet.cpp
   DWARFDebugAranges.cpp
   DWARFDebugFrame.cpp
-  DWARFTypePrinter.cpp
   DWARFDebugInfoEntry.cpp
   DWARFDebugLine.cpp
   DWARFDebugLoc.cpp
@@ -37,4 +36,5 @@ add_llvm_component_library(LLVMDebugInfoDWARF
   BinaryFormat
   Object
   Support
+  TargetParser
   )

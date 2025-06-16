@@ -14,7 +14,6 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Support/TimeProfiler.h"
 
 using namespace llvm;
 
@@ -59,7 +58,7 @@ void PassManager<Loop, LoopAnalysisManager, LoopStandardAnalysisResults &,
       P->printPipeline(OS, MapClassName2PassName);
     }
     if (Idx + 1 < Size)
-      OS << ",";
+      OS << ',';
   }
 }
 
@@ -193,7 +192,7 @@ void FunctionToLoopPassAdaptor::printPipeline(
     raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
   OS << (UseMemorySSA ? "loop-mssa(" : "loop(");
   Pass->printPipeline(OS, MapClassName2PassName);
-  OS << ")";
+  OS << ')';
 }
 PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
                                                  FunctionAnalysisManager &AM) {
@@ -269,10 +268,9 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
   PI.pushBeforeNonSkippedPassCallback([&LAR, &LI](StringRef PassID, Any IR) {
     if (isSpecialPass(PassID, {"PassManager"}))
       return;
-    assert(any_isa<const Loop *>(IR) || any_isa<const LoopNest *>(IR));
-    const Loop *L = any_isa<const Loop *>(IR)
-                        ? any_cast<const Loop *>(IR)
-                        : &any_cast<const LoopNest *>(IR)->getOutermostLoop();
+    assert(llvm::any_cast<const Loop *>(&IR));
+    const Loop **LPtr = llvm::any_cast<const Loop *>(&IR);
+    const Loop *L = LPtr ? *LPtr : nullptr;
     assert(L && "Loop should be valid for printing");
 
     // Verify the loop structure and LCSSA form before visiting the loop.
@@ -291,7 +289,7 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
     Updater.CurrentL = L;
     Updater.SkipCurrentLoop = false;
 
-#ifndef NDEBUG
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
     // Save a parent loop pointer for asserts.
     Updater.ParentL = L->getParentLoop();
 #endif
@@ -310,8 +308,8 @@ PreservedAnalyses FunctionToLoopPassAdaptor::run(Function &F,
       PI.runAfterPass<Loop>(*Pass, *L, PassPA);
 
     if (LAR.MSSA && !PassPA.getChecker<MemorySSAAnalysis>().preserved())
-      report_fatal_error("Loop pass manager using MemorySSA contains a pass "
-                         "that does not preserve MemorySSA");
+      reportFatalUsageError("Loop pass manager using MemorySSA contains a pass "
+                            "that does not preserve MemorySSA");
 
 #ifndef NDEBUG
     // LoopAnalysisResults should always be valid.

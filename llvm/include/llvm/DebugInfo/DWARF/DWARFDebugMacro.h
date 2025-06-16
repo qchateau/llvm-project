@@ -19,7 +19,16 @@ namespace llvm {
 
 class raw_ostream;
 
+namespace dwarf_linker {
+namespace classic {
+class DwarfStreamer;
+}
+} // namespace dwarf_linker
+
 class DWARFDebugMacro {
+  friend dwarf_linker::classic::DwarfStreamer;
+  friend dwarf_linker::parallel::CompileUnit;
+
   /// DWARFv5 section 6.3.1 Macro Information Header.
   enum HeaderFlagMask {
 #define HANDLE_MACRO_FLAG(ID, NAME) MACRO_##NAME = ID,
@@ -121,6 +130,14 @@ public:
 
   /// Return whether the section has any entries.
   bool empty() const { return MacroLists.empty(); }
+
+  bool hasEntryForOffset(uint64_t Offset) const {
+    for (const MacroList &List : MacroLists)
+      if (Offset == List.Offset)
+        return true;
+
+    return false;
+  }
 
 private:
   /// Parse the debug_macinfo/debug_macro section accessible via the 'MacroData'

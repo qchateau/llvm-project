@@ -32,15 +32,19 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
+#include <optional>
 
 namespace mlir {
+namespace affine {
 #define GEN_PASS_DEF_AFFINEDATACOPYGENERATION
 #include "mlir/Dialect/Affine/Passes.h.inc"
+} // namespace affine
 } // namespace mlir
 
 #define DEBUG_TYPE "affine-data-copy-generate"
 
 using namespace mlir;
+using namespace mlir::affine;
 
 namespace {
 
@@ -56,7 +60,8 @@ namespace {
 // TODO: We currently can't generate copies correctly when stores
 // are strided. Check for strided stores.
 struct AffineDataCopyGeneration
-    : public impl::AffineDataCopyGenerationBase<AffineDataCopyGeneration> {
+    : public affine::impl::AffineDataCopyGenerationBase<
+          AffineDataCopyGeneration> {
   AffineDataCopyGeneration() = default;
   explicit AffineDataCopyGeneration(unsigned slowMemorySpace,
                                     unsigned fastMemorySpace,
@@ -81,26 +86,23 @@ struct AffineDataCopyGeneration
 
 /// Generates copies for memref's living in 'slowMemorySpace' into newly created
 /// buffers in 'fastMemorySpace', and replaces memory operations to the former
-/// by the latter. Only load op's handled for now.
-/// TODO: extend this to store op's.
+/// by the latter.
 std::unique_ptr<OperationPass<func::FuncOp>>
-mlir::createAffineDataCopyGenerationPass(unsigned slowMemorySpace,
-                                         unsigned fastMemorySpace,
-                                         unsigned tagMemorySpace,
-                                         int minDmaTransferSize,
-                                         uint64_t fastMemCapacityBytes) {
+mlir::affine::createAffineDataCopyGenerationPass(
+    unsigned slowMemorySpace, unsigned fastMemorySpace, unsigned tagMemorySpace,
+    int minDmaTransferSize, uint64_t fastMemCapacityBytes) {
   return std::make_unique<AffineDataCopyGeneration>(
       slowMemorySpace, fastMemorySpace, tagMemorySpace, minDmaTransferSize,
       fastMemCapacityBytes);
 }
 std::unique_ptr<OperationPass<func::FuncOp>>
-mlir::createAffineDataCopyGenerationPass() {
+mlir::affine::createAffineDataCopyGenerationPass() {
   return std::make_unique<AffineDataCopyGeneration>();
 }
 
 /// Generate copies for this block. The block is partitioned into separate
 /// ranges: each range is either a sequence of one or more operations starting
-/// and ending with an affine load or store op, or just an affine.forop (which
+/// and ending with an affine load or store op, or just an affine.for op (which
 /// could have other affine for op's nested within).
 void AffineDataCopyGeneration::runOnBlock(Block *block,
                                           DenseSet<Operation *> &copyNests) {
@@ -122,16 +124,12 @@ void AffineDataCopyGeneration::runOnBlock(Block *block,
   // operations excluding AffineForOp's) are always assumed to not exhaust
   // memory. As a result, this approach is conservative in some cases at the
   // moment; we do a check later and report an error with location info.
-  // TODO: An 'affine.if' operation is being treated similar to an
-  // operation. 'affine.if''s could have 'affine.for's in them;
-  // treat them separately.
 
   // Get to the first load, store, or for op (that is not a copy nest itself).
-  auto curBegin =
-      std::find_if(block->begin(), block->end(), [&](Operation &op) {
-        return isa<AffineLoadOp, AffineStoreOp, AffineForOp>(op) &&
-               copyNests.count(&op) == 0;
-      });
+  auto curBegin = llvm::find_if(*block, [&](Operation &op) {
+    return isa<AffineLoadOp, AffineStoreOp, AffineForOp>(op) &&
+           copyNests.count(&op) == 0;
+  });
 
   // Create [begin, end) ranges.
   auto it = curBegin;
@@ -145,7 +143,7 @@ void AffineDataCopyGeneration::runOnBlock(Block *block,
 
       // Returns true if the footprint is known to exceed capacity.
       auto exceedsCapacity = [&](AffineForOp forOp) {
-        Optional<int64_t> footprint =
+        std::optional<int64_t> footprint =
             getMemoryFootprintBytes(forOp,
                                     /*memorySpace=*/0);
         return (footprint.has_value() &&
@@ -238,5 +236,8 @@ void AffineDataCopyGeneration::runOnOperation() {
   AffineLoadOp::getCanonicalizationPatterns(patterns, &getContext());
   AffineStoreOp::getCanonicalizationPatterns(patterns, &getContext());
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
-  (void)applyOpPatternsAndFold(copyOps, frozenPatterns, /*strict=*/true);
+  (void)applyOpPatternsGreedily(
+      copyOps, frozenPatterns,
+      GreedyRewriteConfig().setStrictness(
+          GreedyRewriteStrictness::ExistingAndNewOps));
 }

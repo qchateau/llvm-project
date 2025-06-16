@@ -7,14 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "CloexecDupCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace android {
+namespace clang::tidy::android {
 
 void CloexecDupCheck::registerMatchers(MatchFinder *Finder) {
   registerMatchersImpl(Finder,
@@ -32,6 +29,4 @@ void CloexecDupCheck::check(const MatchFinder::MatchResult &Result) {
               ReplacementText);
 }
 
-} // namespace android
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::android

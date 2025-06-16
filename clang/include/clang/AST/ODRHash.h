@@ -25,6 +25,7 @@
 
 namespace clang {
 
+class APValue;
 class Decl;
 class IdentifierInfo;
 class NestedNameSpecifier;
@@ -54,6 +55,14 @@ public:
   // Use this for ODR checking classes between modules.  This method compares
   // more information than the AddDecl class.
   void AddCXXRecordDecl(const CXXRecordDecl *Record);
+
+  // Use this for ODR checking records in C/Objective-C between modules. This
+  // method compares more information than the AddDecl class.
+  void AddRecordDecl(const RecordDecl *Record);
+
+  // Use this for ODR checking ObjC interfaces. This
+  // method compares more information than the AddDecl class.
+  void AddObjCInterfaceDecl(const ObjCInterfaceDecl *Record);
 
   // Use this for ODR checking functions between modules.  This method compares
   // more information than the AddDecl class.  SkipBody will process the
@@ -85,6 +94,7 @@ public:
   void AddStmt(const Stmt *S);
   void AddIdentifierInfo(const IdentifierInfo *II);
   void AddNestedNameSpecifier(const NestedNameSpecifier *NNS);
+  void AddDependentTemplateName(const DependentTemplateStorage &Name);
   void AddTemplateName(TemplateName Name);
   void AddDeclarationName(DeclarationName Name, bool TreatAsDecl = false);
   void AddTemplateArgument(TemplateArgument TA);
@@ -92,6 +102,8 @@ public:
 
   // Save booleans until the end to lower the size of data to process.
   void AddBoolean(bool value);
+
+  void AddStructuralValue(const APValue &);
 
   static bool isSubDeclToBeProcessed(const Decl *D, const DeclContext *Parent);
 

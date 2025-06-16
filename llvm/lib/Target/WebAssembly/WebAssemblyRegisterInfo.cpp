@@ -22,8 +22,6 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
-#include "llvm/IR/Function.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 using namespace llvm;
 
@@ -92,7 +90,7 @@ bool WebAssemblyRegisterInfo::eliminateFrameIndex(
     MachineOperand &OtherMO = MI.getOperand(3 - FIOperandNum);
     if (OtherMO.isReg()) {
       Register OtherMOReg = OtherMO.getReg();
-      if (Register::isVirtualRegister(OtherMOReg)) {
+      if (OtherMOReg.isVirtual()) {
         MachineInstr *Def = MF.getRegInfo().getUniqueVRegDef(OtherMOReg);
         // TODO: For now we just opportunistically do this in the case where
         // the CONST_I32/64 happens to have exactly one def and one use. We

@@ -1,5 +1,4 @@
-; RUN: opt %s -S -passes=inline -o - -experimental-assignment-tracking \
-; RUN: | FileCheck %s
+; RUN: opt %s -S -passes=inline -o - | FileCheck %s
 
 ;; Check that all DIAssignID metadata that are inlined are replaced with new
 ;; versions. Otherwise two inlined instances of an assignment will be considered
@@ -16,10 +15,10 @@
 ; CHECK-LABEL: _Z3funv
 ;
 ; CHECK: store i32 5, ptr %val.i, align 4{{.*}}, !DIAssignID [[ID_0:![0-9]+]]
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 5, metadata [[val:![0-9]+]], metadata !DIExpression(), metadata [[ID_0]], metadata ptr %val.i, metadata !DIExpression()), !dbg [[dl_inline_0:![0-9]+]]
+; CHECK-NEXT: #dbg_assign(i32 5, [[val:![0-9]+]], !DIExpression(), [[ID_0]], ptr %val.i, !DIExpression(), [[dl_inline_0:![0-9]+]]
 ;
 ; CHECK: store i32 5, ptr %val.i1, align 4{{.*}}, !DIAssignID [[ID_1:![0-9]+]]
-; CHECK-NEXT: call void @llvm.dbg.assign(metadata i32 5, metadata [[val]], metadata !DIExpression(), metadata [[ID_1]], metadata ptr %val.i1, metadata !DIExpression()), !dbg [[dl_inline_1:![0-9]+]]
+; CHECK-NEXT: #dbg_assign(i32 5, [[val]], !DIExpression(), [[ID_1]], ptr %val.i1, !DIExpression(), [[dl_inline_1:![0-9]+]]
 ;
 ; CHECK-DAG: [[val]] = !DILocalVariable(name: "val",
 ; CHECK-DAG: [[dl_inline_0]] = !DILocation({{.*}}inlinedAt
@@ -32,18 +31,18 @@ entry:
   %val = alloca i32, align 4, !DIAssignID !13
   call void @llvm.dbg.assign(metadata i1 undef, metadata !12, metadata !DIExpression(), metadata !13, metadata ptr %val, metadata !DIExpression()), !dbg !14
   %0 = bitcast ptr %val to ptr, !dbg !15
-  call void @llvm.lifetime.start.p0i8(i64 4, ptr %0), !dbg !15
+  call void @llvm.lifetime.start.p0(i64 4, ptr %0), !dbg !15
   store i32 5, ptr %val, align 4, !dbg !16, !DIAssignID !21
   call void @llvm.dbg.assign(metadata i32 5, metadata !12, metadata !DIExpression(), metadata !21, metadata ptr %val, metadata !DIExpression()), !dbg !14
   %1 = load i32, ptr %val, align 4, !dbg !22
   %2 = bitcast ptr %val to ptr, !dbg !23
-  call void @llvm.lifetime.end.p0i8(i64 4, ptr %2), !dbg !23
+  call void @llvm.lifetime.end.p0(i64 4, ptr %2), !dbg !23
   ret i32 %1, !dbg !24
 }
 
-declare void @llvm.lifetime.start.p0i8(i64 immarg, ptr nocapture)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
 declare void @llvm.dbg.declare(metadata, metadata, metadata)
-declare void @llvm.lifetime.end.p0i8(i64 immarg, ptr nocapture)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
 declare void @llvm.dbg.assign(metadata, metadata, metadata, metadata, metadata, metadata)
 
 ; Function Attrs: nounwind uwtable mustprogress
@@ -55,7 +54,7 @@ entry:
 }
 
 !llvm.dbg.cu = !{!0}
-!llvm.module.flags = !{!3, !4, !5}
+!llvm.module.flags = !{!3, !4, !5, !1000}
 !llvm.ident = !{!6}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 12.0.0", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, splitDebugInlining: false, nameTableKind: None)
@@ -85,3 +84,4 @@ entry:
 !28 = !DILocation(line: 4, column: 3, scope: !25)
 !29 = !DILocation(line: 5, column: 3, scope: !25)
 !30 = !DILocation(line: 6, column: 1, scope: !25)
+!1000 = !{i32 7, !"debug-info-assignment-tracking", i1 true}

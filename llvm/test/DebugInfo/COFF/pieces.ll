@@ -41,7 +41,7 @@
 ; ASM:         xorl    %edi, %edi
 ; ASM:         xorl    %esi, %esi
 ; ASM: [[oy_ox_start:\.Ltmp[0-9]+]]:
-; ASM:         .p2align        4, 0x90
+; ASM:         .p2align        4
 ; ASM: .LBB0_3:                                # %for.body
 ; ASM:        #DEBUG_VALUE: loop_csr:o <- [DW_OP_LLVM_fragment 0 32] $edi
 ; ASM:        #DEBUG_VALUE: loop_csr:o <- [DW_OP_LLVM_fragment 32 32] $esi
@@ -101,7 +101,7 @@
 ; ASM:         callq   g
 ; ASM:         movl    %eax, [[offset_o_x:[0-9]+]](%rsp)          # 4-byte Spill
 ; ASM: [[spill_o_x_start:\.Ltmp[0-9]+]]:
-; ASM:         #DEBUG_VALUE: bitpiece_spill:o <- [DW_OP_plus_uconst [[offset_o_x]], DW_OP_LLVM_fragment 32 32] [$rsp+0]
+; ASM:         #DEBUG_VALUE: bitpiece_spill:o <- [DW_OP_plus_uconst [[offset_o_x]], DW_OP_deref, DW_OP_LLVM_fragment 32 32] $rsp
 ; ASM:         #APP
 ; ASM:         #NO_APP
 ; ASM:         movl    [[offset_o_x]](%rsp), %eax          # 4-byte Reload

@@ -56,6 +56,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
@@ -64,14 +65,13 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "clang/Tooling/Refactoring/Extract/SourceExtraction.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/raw_os_ostream.h"
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -95,8 +95,8 @@ enum FunctionDeclKind {
   OutOfLineDefinition
 };
 
-// A RootStmt is a statement that's fully selected including all it's children
-// and it's parent is unselected.
+// A RootStmt is a statement that's fully selected including all its children
+// and its parent is unselected.
 // Check if a node is a root statement.
 bool isRootStmt(const Node *N) {
   if (!N->ASTNode.get<Stmt>())
@@ -104,9 +104,12 @@ bool isRootStmt(const Node *N) {
   // Root statement cannot be partially selected.
   if (N->Selected == SelectionTree::Partial)
     return false;
-  // Only DeclStmt can be an unselected RootStmt since VarDecls claim the entire
-  // selection range in selectionTree.
-  if (N->Selected == SelectionTree::Unselected && !N->ASTNode.get<DeclStmt>())
+  // A DeclStmt can be an unselected RootStmt since VarDecls claim the entire
+  // selection range in selectionTree. Additionally, a CXXOperatorCallExpr of a
+  // binary operation can be unselected because its children claim the entire
+  // selection range in the selection tree (e.g. <<).
+  if (N->Selected == SelectionTree::Unselected && !N->ASTNode.get<DeclStmt>() &&
+      !N->ASTNode.get<CXXOperatorCallExpr>())
     return false;
   return true;
 }
@@ -264,9 +267,9 @@ const FunctionDecl *findEnclosingFunction(const Node *CommonAnc) {
 
 // Zone Range is the union of SourceRanges of all child Nodes in Parent since
 // all child Nodes are RootStmts
-llvm::Optional<SourceRange> findZoneRange(const Node *Parent,
-                                          const SourceManager &SM,
-                                          const LangOptions &LangOpts) {
+std::optional<SourceRange> findZoneRange(const Node *Parent,
+                                         const SourceManager &SM,
+                                         const LangOptions &LangOpts) {
   SourceRange SR;
   if (auto BeginFileRange = toHalfOpenFileRange(
           SM, LangOpts, Parent->Children.front()->ASTNode.getSourceRange()))
@@ -285,7 +288,7 @@ llvm::Optional<SourceRange> findZoneRange(const Node *Parent,
 // FIXME: check if EnclosingFunction has any attributes as the AST doesn't
 // always store the source range of the attributes and thus we end up extracting
 // between the attributes and the EnclosingFunction.
-llvm::Optional<SourceRange>
+std::optional<SourceRange>
 computeEnclosingFuncRange(const FunctionDecl *EnclosingFunction,
                           const SourceManager &SM,
                           const LangOptions &LangOpts) {
@@ -310,9 +313,9 @@ bool validSingleChild(const Node *Child, const FunctionDecl *EnclosingFunc) {
 
 // FIXME: Check we're not extracting from the initializer/condition of a control
 // flow structure.
-llvm::Optional<ExtractionZone> findExtractionZone(const Node *CommonAnc,
-                                                  const SourceManager &SM,
-                                                  const LangOptions &LangOpts) {
+std::optional<ExtractionZone> findExtractionZone(const Node *CommonAnc,
+                                                 const SourceManager &SM,
+                                                 const LangOptions &LangOpts) {
   ExtractionZone ExtZone;
   ExtZone.Parent = getParentOfRootStmts(CommonAnc);
   if (!ExtZone.Parent || ExtZone.Parent->Children.empty())
@@ -357,7 +360,7 @@ struct NewFunction {
   std::vector<Parameter> Parameters;
   SourceRange BodyRange;
   SourceLocation DefinitionPoint;
-  llvm::Optional<SourceLocation> ForwardDeclarationPoint;
+  std::optional<SourceLocation> ForwardDeclarationPoint;
   const CXXRecordDecl *EnclosingClass = nullptr;
   const NestedNameSpecifier *DefinitionQualifier = nullptr;
   const DeclContext *SemanticDC = nullptr;
@@ -913,8 +916,8 @@ Expected<Tweak::Effect> ExtractFunction::apply(const Selection &Inputs) {
 
       tooling::Replacements OtherEdit(
           createForwardDeclaration(*ExtractedFunc, SM));
-      if (auto PathAndEdit = Tweak::Effect::fileEdit(SM, SM.getFileID(*FwdLoc),
-                                                 OtherEdit))
+      if (auto PathAndEdit =
+              Tweak::Effect::fileEdit(SM, SM.getFileID(*FwdLoc), OtherEdit))
         MultiFileEffect->ApplyEdits.try_emplace(PathAndEdit->first,
                                                 PathAndEdit->second);
       else

@@ -17,8 +17,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
+namespace clang::tidy {
 namespace altera {
 
 class AlteraModule : public ClangTidyModule {
@@ -44,7 +43,6 @@ static ClangTidyModuleRegistry::Add<altera::AlteraModule>
 
 // This anchor is used to force the linker to link in the generated object file
 // and thus register the AlteraModule.
-volatile int AlteraModuleAnchorSource = 0;
+volatile int AlteraModuleAnchorSource = 0; // NOLINT(misc-use-internal-linkage)
 
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy

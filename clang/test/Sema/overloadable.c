@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fsyntax-only -fdouble-square-bracket-attributes -verify %s -Wincompatible-pointer-types -Wno-strict-prototypes
+// RUN: %clang_cc1 -fsyntax-only -verify %s -Wincompatible-pointer-types -Wno-strict-prototypes
 
 int var __attribute__((overloadable)); // expected-error{{'overloadable' attribute only applies to functions}}
 void bad_attr_target(int) [[clang::overloadable]]; // expected-error{{'overloadable' attribute cannot be applied to types}}
@@ -155,7 +155,7 @@ void incompatible_pointer_type_conversions() {
 }
 
 void dropping_qualifiers_is_incompatible() {
-  const char ccharbuf[1];
+  const char ccharbuf[1] = {0};
   volatile char vcharbuf[1];
 
   void foo(char *c) __attribute__((overloadable));

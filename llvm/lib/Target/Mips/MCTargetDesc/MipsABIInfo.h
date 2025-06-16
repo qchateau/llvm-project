@@ -9,9 +9,9 @@
 #ifndef LLVM_LIB_TARGET_MIPS_MCTARGETDESC_MIPSABIINFO_H
 #define LLVM_LIB_TARGET_MIPS_MCTARGETDESC_MIPSABIINFO_H
 
-#include "llvm/ADT/Triple.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/TargetParser/Triple.h"
 
 namespace llvm {
 
@@ -46,7 +46,7 @@ public:
   ArrayRef<MCPhysReg> GetByValArgRegs() const;
 
   /// The registers to use for the variable argument list.
-  ArrayRef<MCPhysReg> GetVarArgRegs() const;
+  ArrayRef<MCPhysReg> getVarArgRegs(bool isGP64bit) const;
 
   /// Obtain the size of the area allocated by the callee for arguments.
   /// CallingConv::FastCall affects the value for O32.

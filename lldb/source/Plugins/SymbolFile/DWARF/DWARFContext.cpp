@@ -9,9 +9,11 @@
 #include "DWARFContext.h"
 
 #include "lldb/Core/Section.h"
+#include <optional>
 
 using namespace lldb;
 using namespace lldb_private;
+using namespace lldb_private::plugin::dwarf;
 
 static DWARFDataExtractor LoadSection(SectionList *section_list,
                                       SectionType section_type) {
@@ -28,8 +30,8 @@ static DWARFDataExtractor LoadSection(SectionList *section_list,
 }
 
 const DWARFDataExtractor &
-DWARFContext::LoadOrGetSection(llvm::Optional<SectionType> main_section_type,
-                               llvm::Optional<SectionType> dwo_section_type,
+DWARFContext::LoadOrGetSection(std::optional<SectionType> main_section_type,
+                               std::optional<SectionType> dwo_section_type,
                                SectionData &data) {
   llvm::call_once(data.flag, [&] {
     if (dwo_section_type && isDwo())
@@ -140,7 +142,10 @@ llvm::DWARFContext &DWARFContext::GetAsLLVM() {
     AddSection("debug_line_str", getOrLoadLineStrData());
     AddSection("debug_cu_index", getOrLoadCuIndexData());
     AddSection("debug_tu_index", getOrLoadTuIndexData());
-
+    if (isDwo()) {
+      AddSection("debug_info.dwo", getOrLoadDebugInfoData());
+      AddSection("debug_types.dwo", getOrLoadDebugTypesData());
+    }
     m_llvm_context = llvm::DWARFContext::create(section_map, addr_size);
   }
   return *m_llvm_context;

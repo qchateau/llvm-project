@@ -56,14 +56,6 @@ if (LLVM_ENABLE_DOXYGEN)
     set(llvm_doxygen_qhp_cust_filter_attrs "")
   endif()
 
-  option(LLVM_DOXYGEN_SVG
-    "Use svg instead of png files for doxygen graphs." OFF)
-  if (LLVM_DOXYGEN_SVG)
-    set(DOT_IMAGE_FORMAT "svg")
-  else()
-    set(DOT_IMAGE_FORMAT "png")
-  endif()
-
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/doxygen.cfg.in
     ${CMAKE_CURRENT_BINARY_DIR}/doxygen.cfg @ONLY)
 
@@ -81,12 +73,12 @@ if (LLVM_ENABLE_DOXYGEN)
   set(llvm_doxygen_qhelpgenerator_path)
   set(llvm_doxygen_qhp_cust_filter_name)
   set(llvm_doxygen_qhp_cust_filter_attrs)
-  set(DOT_IMAGE_FORMAT)
 
   add_custom_target(doxygen-llvm
     COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/doxygen.cfg
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Generating llvm doxygen documentation." VERBATIM)
+  set_target_properties(doxygen-llvm PROPERTIES FOLDER "LLVM/Docs")
 
   if (LLVM_BUILD_DOCS)
     add_dependencies(doxygen doxygen-llvm)
@@ -131,11 +123,7 @@ if( NOT uses_ocaml LESS 0 AND LLVM_ENABLE_OCAMLDOC )
         ocaml_llvm_irreader
         ocaml_llvm_linker
         ocaml_llvm_target
-        ocaml_llvm_ipo
-        ocaml_llvm_passmgr_builder
-        ocaml_llvm_scalar_opts
         ocaml_llvm_transform_utils
-        ocaml_llvm_vectorize
       )
 
   foreach(llvm_target ${LLVM_TARGETS_TO_BUILD})

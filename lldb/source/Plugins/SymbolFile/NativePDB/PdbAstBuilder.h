@@ -17,6 +17,7 @@
 
 #include "PdbIndex.h"
 #include "PdbSymUid.h"
+#include <optional>
 
 namespace clang {
 class TagDecl;
@@ -56,7 +57,7 @@ public:
 
   lldb_private::CompilerDeclContext GetTranslationUnitDecl();
 
-  llvm::Optional<lldb_private::CompilerDecl>
+  std::optional<lldb_private::CompilerDecl>
   GetOrCreateDeclForUid(PdbSymUid uid);
   clang::DeclContext *GetOrCreateDeclContextForUid(PdbSymUid uid);
   clang::DeclContext *GetParentDeclContext(PdbSymUid uid);
@@ -86,7 +87,7 @@ public:
   TypeSystemClang &clang() { return m_clang; }
   ClangASTImporter &GetClangASTImporter() { return m_importer; }
 
-  void Dump(Stream &stream);
+  void Dump(Stream &stream, llvm::StringRef filter);
 
 private:
   clang::Decl *TryGetDecl(PdbSymUid uid) const;

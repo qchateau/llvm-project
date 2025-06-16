@@ -16,7 +16,7 @@ using namespace llvm;
 TEST(AMDGPU, ExecMayBeModifiedBeforeAnyUse) {
   auto TM = createAMDGPUTargetMachine("amdgcn-amd-", "gfx906", "");
   if (!TM)
-    return;
+    GTEST_SKIP();
 
   GCNSubtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
                   std::string(TM->getTargetFeatureString()), *TM);
@@ -29,7 +29,8 @@ TEST(AMDGPU, ExecMayBeModifiedBeforeAnyUse) {
   auto *F = Function::Create(Type, GlobalValue::ExternalLinkage, "Test", &Mod);
 
   MachineModuleInfo MMI(TM.get());
-  auto MF = std::make_unique<MachineFunction>(*F, *TM, ST, 42, MMI);
+  auto MF =
+      std::make_unique<MachineFunction>(*F, *TM, ST, MMI.getContext(), 42);
   auto *BB = MF->CreateMachineBasicBlock();
   MF->push_back(BB);
 

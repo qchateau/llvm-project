@@ -29,8 +29,7 @@
 #include "TimeSubtractionCheck.h"
 #include "UpgradeDurationConversionsCheck.h"
 
-namespace clang {
-namespace tidy {
+namespace clang::tidy {
 namespace abseil {
 
 class AbseilModule : public ClangTidyModule {
@@ -60,14 +59,12 @@ public:
     CheckFactories.registerCheck<NoNamespaceCheck>("abseil-no-namespace");
     CheckFactories.registerCheck<RedundantStrcatCallsCheck>(
         "abseil-redundant-strcat-calls");
-    CheckFactories.registerCheck<StrCatAppendCheck>(
-        "abseil-str-cat-append");
+    CheckFactories.registerCheck<StrCatAppendCheck>("abseil-str-cat-append");
     CheckFactories.registerCheck<StringFindStartswithCheck>(
         "abseil-string-find-startswith");
     CheckFactories.registerCheck<StringFindStrContainsCheck>(
         "abseil-string-find-str-contains");
-    CheckFactories.registerCheck<TimeComparisonCheck>(
-        "abseil-time-comparison");
+    CheckFactories.registerCheck<TimeComparisonCheck>("abseil-time-comparison");
     CheckFactories.registerCheck<TimeSubtractionCheck>(
         "abseil-time-subtraction");
     CheckFactories.registerCheck<UpgradeDurationConversionsCheck>(
@@ -83,7 +80,6 @@ static ClangTidyModuleRegistry::Add<AbseilModule> X("abseil-module",
 
 // This anchor is used to force the linker to link in the generated object file
 // and thus register the AbseilModule.
-volatile int AbseilModuleAnchorSource = 0;
+volatile int AbseilModuleAnchorSource = 0; // NOLINT(misc-use-internal-linkage)
 
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy

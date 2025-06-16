@@ -7,14 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "UseTransparentFunctorsCheck.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace modernize {
+namespace clang::tidy::modernize {
 
 UseTransparentFunctorsCheck::UseTransparentFunctorsCheck(
     StringRef Name, ClangTidyContext *Context)
@@ -124,6 +121,4 @@ void UseTransparentFunctorsCheck::check(
                                   FunctorTypeLoc.getArgLoc(0).getSourceRange());
 }
 
-} // namespace modernize
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::modernize

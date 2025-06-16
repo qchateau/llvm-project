@@ -14,11 +14,10 @@
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/DenseSet.h"
 
-namespace clang {
-namespace tidy {
-namespace abseil {
+namespace clang::tidy::abseil {
 
-/// Finds deprecated uses of `absl::Duration` arithmetic operators and factories.
+/// Finds deprecated uses of `absl::Duration` arithmetic operators and
+/// factories.
 ///
 /// For the user-facing documentation see:
 /// http://clang.llvm.org/extra/clang-tidy/checks/abseil/upgrade-duration-conversions.html
@@ -36,8 +35,6 @@ private:
   llvm::DenseSet<SourceLocation> MatchedTemplateLocations;
 };
 
-} // namespace abseil
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::abseil
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_ABSEIL_UPGRADEDURATIONCONVERSIONSCHECK_H

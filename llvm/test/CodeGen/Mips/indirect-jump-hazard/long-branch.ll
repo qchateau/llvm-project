@@ -34,9 +34,9 @@ define void @test1(i32 signext %s) {
 ; O32-PIC-NEXT:  # %bb.1: # %entry
 ; O32-PIC-NEXT:    addiu $sp, $sp, -8
 ; O32-PIC-NEXT:    sw $ra, 0($sp)
-; O32-PIC-NEXT:    lui $1, %hi(($BB0_4)-($BB0_2))
+; O32-PIC-NEXT:    lui $1, %hi($BB0_4-$BB0_2)
 ; O32-PIC-NEXT:    bal $BB0_2
-; O32-PIC-NEXT:    addiu $1, $1, %lo(($BB0_4)-($BB0_2))
+; O32-PIC-NEXT:    addiu $1, $1, %lo($BB0_4-$BB0_2)
 ; O32-PIC-NEXT:  $BB0_2: # %entry
 ; O32-PIC-NEXT:    addu $1, $ra, $1
 ; O32-PIC-NEXT:    lw $ra, 0($sp)
@@ -59,8 +59,8 @@ define void @test1(i32 signext %s) {
 ; O32-R6-PIC-NEXT:  # %bb.1: # %entry
 ; O32-R6-PIC-NEXT:    addiu $sp, $sp, -8
 ; O32-R6-PIC-NEXT:    sw $ra, 0($sp)
-; O32-R6-PIC-NEXT:    lui $1, %hi(($BB0_4)-($BB0_2))
-; O32-R6-PIC-NEXT:    addiu $1, $1, %lo(($BB0_4)-($BB0_2))
+; O32-R6-PIC-NEXT:    lui $1, %hi($BB0_4-$BB0_2)
+; O32-R6-PIC-NEXT:    addiu $1, $1, %lo($BB0_4-$BB0_2)
 ; O32-R6-PIC-NEXT:    balc $BB0_2
 ; O32-R6-PIC-NEXT:  $BB0_2: # %entry
 ; O32-R6-PIC-NEXT:    addu $1, $ra, $1
@@ -129,7 +129,7 @@ entry:
   br i1 %cmp, label %end, label %then
 
 then:
-  store i32 1, i32* @x, align 4
+  store i32 1, ptr @x, align 4
   br label %end
 
 end:
